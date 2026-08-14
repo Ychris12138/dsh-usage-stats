@@ -25,6 +25,11 @@ try {
 	assert.equal([...patch.matchAll(/^\s+name:\s*dsh-usage-stats\s*$/gm)].length, 1, "installer must be idempotent");
 	const installed = JSON.parse(await readFile(join(home, "profiles", "node_modules", "dsh-usage-stats", "package.json"), "utf8"));
 	assert.equal(installed.name, "dsh-usage-stats");
+	assert.equal(installed.dsh?.bundle?.patch, "./cordis.patch.yml");
+	assert.match(
+		await readFile(join(home, "profiles", "node_modules", "dsh-usage-stats", "cordis.patch.yml"), "utf8"),
+		/^\s+name:\s*dsh-usage-stats\s*$/m
+	);
 	assert.equal(await readFile(join(home, "profiles", "node_modules", "dsh-usage-stats", "lib", "index.js"), "utf8").then((text) => text.length > 1000), true);
 	console.log("INSTALLER REGRESSION TESTS PASSED");
 } finally {

@@ -26,9 +26,28 @@ Token usage heatmap, provider/model breakdowns, account balances, and subscripti
 
 ## 安装 / Installation
 
-### 一条命令安装
+需要 DeepSeek Harness 的 `web` profile（面向 `@deepseek-ai/dsh >= 0.1.0-rc.6`）。
 
-需要 DeepSeek Harness 的 `web` profile（面向 `@deepseek-ai/dsh >= 0.1.0-rc.6`），以及随 Node.js 提供的 `npx`。
+### 推荐：DSH 插件命令
+
+通过 DSH 自带的插件命令安装并注册 bundle：
+
+```bash
+dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"
+```
+
+该命令会把插件安装到 `web` profile，并从包内声明的 `cordis.patch.yml` 挂载服务端插件。已经运行的 `dsh web` 需要重启，浏览器随后硬刷新。
+
+升级或卸载：
+
+```bash
+dsh plugin --profile web update dsh-usage-stats
+dsh plugin --profile web remove dsh-usage-stats
+```
+
+### 兼容安装器
+
+无法使用 `dsh plugin` 时，也可以使用随 Node.js 提供的 `npx` 安装器：
 
 在 PowerShell、命令提示符或 macOS/Linux 终端运行同一条命令：
 
@@ -37,6 +56,8 @@ npx --yes github:Ychris12138/dsh-usage-stats
 ```
 
 安装器会自动完成两件事：把运行文件复制到 `~/.dsh/profiles/node_modules/dsh-usage-stats`，并在 `profiles/web/cordis.patch.yml` 中幂等启用插件。重复运行同一命令即可更新，不会重复添加配置。
+
+`dsh plugin` 与 `npx` 是两条独立安装路径，请选择其中一种；不要在保留手工 Cordis patch 条目的同时再注册 bundle，否则会重复挂载插件。
 
 如设置了 `DSH_HOME`，安装器会使用该目录而不是 `~/.dsh`。可先预览或只检查现有安装：
 
@@ -140,11 +161,12 @@ Constraints:
 
 Procedure:
 1. Confirm node, npx, and dsh are available.
-2. Run: npx --yes github:Ychris12138/dsh-usage-stats
-3. Require the installer to report a verified package and exactly one Cordis patch entry.
-4. Report the resolved install and patch paths.
-5. Run the installer again with --check and require a zero exit code.
-6. If dsh web is already running, tell me a restart is needed and stop.
+2. Prefer: dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"
+3. If the dsh plugin command is unavailable, fall back to: npx --yes github:Ychris12138/dsh-usage-stats
+4. Do not combine the bundle installation with an existing manual dsh-usage-stats Cordis patch entry.
+5. For the npx fallback, require the installer to report a verified package and exactly one Cordis patch entry, then run it again with --check.
+6. Report which installation path was used and its resolved profile paths.
+7. If dsh web is already running, tell me a restart is needed and stop.
 
 Optional subscription setup (do not handle secrets yourself):
 - Tell me that OpenCode Go can reuse its local auth.json automatically, or I can add OPENCODE_GO_API_KEY to the Harness credentials file myself.

@@ -1,0 +1,5 @@
+# Mount the usage-stats server plugin when this package is registered as a
+# DeepSeek Harness profile bundle.
+- insert:
+    - id: usage-stats
+      name: dsh-usage-stats

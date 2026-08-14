@@ -82,7 +82,7 @@ if (args.has("--check")) {
 }
 
 await mkdir(target, { recursive: true });
-for (const entry of ["lib", "package.json", "README.md", "LICENSE", "SECURITY.md"]) {
+for (const entry of ["lib", "cordis.patch.yml", "package.json", "README.md", "LICENSE", "SECURITY.md"]) {
 	await cp(join(sourceRoot, entry), join(target, entry), { recursive: true, force: true });
 }
 await mkdir(join(target, "scripts"), { recursive: true });

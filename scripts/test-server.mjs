@@ -46,7 +46,7 @@ async function testRouteFence(root) {
 	const routes = new Map();
 	const empty = { list: () => [] };
 	const persistence = { listSnapshots: async () => [], list: async () => [] };
-	plugin.apply(makeContext({ sessions: empty, persistence, routes }));
+	plugin.apply(makeContext({ sessions: empty, persistence, routes }), { backgroundRefresh: false });
 	const handler = routes.get(plugin.USAGE_PATH);
 	assert.equal(typeof handler, "function");
 
@@ -66,6 +66,41 @@ async function testRouteFence(root) {
 	await routes.get(plugin.SUBSCRIPTIONS_PATH)({ method: "GET", url: plugin.SUBSCRIPTIONS_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, subscriptions);
 	assert.equal(subscriptions.status, 200);
 	assert.deepEqual(JSON.parse(subscriptions.body).subscriptions.map((provider) => provider.status), ["not-configured", "not-configured"]);
+
+	const account = makeResponse();
+	await routes.get(plugin.ACCOUNT_PATH)({ method: "GET", url: `${plugin.ACCOUNT_PATH}?provider=deepseek-official`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, account);
+	assert.equal(account.status, 200);
+	assert.equal(JSON.parse(account.body).account.status, "not-configured");
+}
+
+async function testBackgroundRefresh(root) {
+	const plugin = await freshModule("background", join(root, "background"));
+	let refreshes = 0;
+	let interval = null;
+	let tick = null;
+	let cleared = false;
+	const ctx = makeContext({
+		sessions: { list: () => [] },
+		persistence: { listSnapshots: async () => [], list: async () => [] }
+	});
+	const cleanup = plugin.startBackgroundRefresh(ctx, {
+		refreshAll: async () => { refreshes += 1; }
+	}, {
+		setInterval: (callback, ms) => {
+			tick = callback;
+			interval = ms;
+			return { unref: () => {} };
+		},
+		clearInterval: () => { cleared = true; }
+	});
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(interval, 300000);
+	assert.equal(refreshes, 1, "background refresh must run immediately at startup");
+	assert.equal(typeof tick, "function");
+	await cleanup.refreshNow();
+	assert.equal(refreshes, 2, "the five-minute timer must refresh accounts again");
+	await cleanup();
+	assert.equal(cleared, true);
 }
 
 async function testPersistedToLive(root) {
@@ -111,6 +146,7 @@ async function testRevisionRewrite(root) {
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
+	await testBackgroundRefresh(root);
 	await testPersistedToLive(root);
 	await testRevisionRewrite(root);
 	console.log("SERVER REGRESSION TESTS PASSED");

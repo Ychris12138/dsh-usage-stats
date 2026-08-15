@@ -1,7 +1,7 @@
 {
   "name": "dsh-usage-stats",
   "description": "Token usage heatmap, provider balances, and subscription quotas for the dsh web GUI",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "repository": {
     "type": "git",
@@ -49,14 +49,15 @@
     }
   },
   "scripts": {
-    "check": "node --check lib/index.js && node --check lib/usage.js && node --check lib/balance.js && node --check lib/subscriptions.js && node --check lib/client.js && node --check scripts/install.mjs && node --check scripts/smoke-client.mjs && node --check scripts/test-bundle.mjs && node --check scripts/test-install.mjs && node --check scripts/test-server.mjs && node --check scripts/test-balance.mjs && node --check scripts/test-subscriptions.mjs && node --check scripts/validate-fold.mjs && node --check scripts/verify-raw.mjs && node --check scripts/check-balance.mjs",
-    "test": "npm run test:bundle && npm run test:client && npm run test:server && npm run test:balance && npm run test:subscriptions && npm run test:install",
+    "check": "node --check lib/index.js && node --check lib/usage.js && node --check lib/balance.js && node --check lib/subscriptions.js && node --check lib/accounts.js && node --check lib/client.js && node --check scripts/install.mjs && node --check scripts/smoke-client.mjs && node --check scripts/test-bundle.mjs && node --check scripts/test-install.mjs && node --check scripts/test-server.mjs && node --check scripts/test-balance.mjs && node --check scripts/test-subscriptions.mjs && node --check scripts/test-accounts.mjs && node --check scripts/validate-fold.mjs && node --check scripts/verify-raw.mjs && node --check scripts/check-balance.mjs",
+    "test": "npm run test:bundle && npm run test:client && npm run test:server && npm run test:balance && npm run test:subscriptions && npm run test:accounts && npm run test:install",
     "test:bundle": "node scripts/test-bundle.mjs",
     "test:client": "node scripts/smoke-client.mjs",
     "test:install": "node scripts/test-install.mjs",
     "test:server": "node scripts/test-server.mjs",
     "test:balance": "node scripts/test-balance.mjs",
     "test:subscriptions": "node scripts/test-subscriptions.mjs",
+    "test:accounts": "node scripts/test-accounts.mjs",
     "validate:live": "node scripts/validate-fold.mjs && node scripts/verify-raw.mjs"
   },
   "devDependencies": {

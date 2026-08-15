@@ -1,7 +1,7 @@
 # dsh-usage-stats
 
 [![CI](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml)
-[![version](https://img.shields.io/badge/version-0.1.2-1f6feb)](https://github.com/Ychris12138/dsh-usage-stats/releases)
+[![version](https://img.shields.io/badge/version-0.2.0-1f6feb)](https://github.com/Ychris12138/dsh-usage-stats/releases)
 [![license](https://img.shields.io/badge/license-MIT-2da44e)](LICENSE)
 
 为 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness) 网页端提供 Token 用量热图、多供应商余额与订阅额度。
@@ -15,14 +15,16 @@ Token usage heatmap, provider/model breakdowns, account balances, and subscripti
 | 功能 | 说明 |
 | --- | --- |
 | 统一供应商账户卡 | 一次只显示当前选择的供应商；DeepSeek 等展示余额，OpenCode Go、Z.ai 展示订阅额度 |
-| 订阅额度 | OpenCode Go 显示 5 小时/每周/每月窗口；Z.ai Coding Plan 显示会话、周额度与 MCP 月度额度 |
+| 订阅额度 | OpenCode Go、Z.ai、Kimi For Coding、MiniMax Coding Plan 显示标准化额度窗口与重置时间 |
+| 可扩展账户监测 | 支持 New API、通用余额模板，以及声明式 JSON Pointer 自定义余额/订阅查询 |
+| 后台刷新 | 服务端启动即刷新账户与 Token 聚合，之后每五分钟刷新，不依赖面板是否打开 |
 | 用量概览 | 今日、本月、累计 Token，以及今日缓存命中率 |
 | 月历热图 | 按月浏览；颜色越深表示用量越高 |
 | 日期下钻 | 点击日期查看分供应商/分模型 Token、占比和输入/输出/缓存明细 |
 | 增量聚合 | 只折叠新增事件；检测到日志截断或重写时自动从头计算 |
 | 本机边界 | API 同时校验 peer socket 与 Host；浏览器永远拿不到 API key |
 
-界面支持中文和英文。余额与订阅共用同一套供应商卡片框架：余额型供应商在卡内显示金额，订阅型供应商显示分窗口进度条；选择器切换后只渲染当前供应商。各类请求独立刷新，打开面板后立即加载，之后 Token 用量每分钟刷新、余额和订阅额度每五分钟刷新。
+界面支持中文和英文。余额与订阅共用同一套供应商卡片框架：余额型供应商在卡内显示金额，订阅型供应商显示分窗口进度条；选择器切换后只渲染并请求当前供应商。服务端在插件启动时立即刷新一次，之后每五分钟后台刷新所有已配置账户与本地 Token 聚合；面板打开时读取缓存，手动刷新才强制请求当前供应商。
 
 ## 安装 / Installation
 
@@ -114,6 +116,66 @@ OpenCode Go 按以下顺序寻找凭据：
 
 Z.ai 使用 Coding Plan 的 quota/subscription 接口；全球区请求 `api.z.ai`，中国区请求 `open.bigmodel.cn`。选择 Z.ai 时优先展示更适合订阅计划的比例窗口，不会同时再堆叠一张余额卡。
 
+Kimi For Coding 和 MiniMax Coding Plan 默认使用当前官方套餐接口。可在对应 Harness provider 中沿用其 `apiKeyEnv`，也可以在下面的 monitor 配置中显式指定 `credentialRef`。默认凭据名分别为 `KIMI_API_KEY` 和 `MINIMAX_API_KEY`；MiniMax 中国区可额外配置 `MINIMAX_API_REGION: cn`。
+
+### 可选：New API 与自定义监测
+
+插件从 Cordis entry 的 `config.monitors` 读取账户监测配置。monitor 的键必须是 Harness 中已经存在的 provider id；普通配置只保存 credential ref，真实密钥仍由 `~/.dsh/.credentials.yaml` 管理。
+
+请在现有 `name: dsh-usage-stats` entry 下合并 `config`，不要在文件末尾追加第二个插件 entry。下面展示的是该 entry 的完整形状。
+
+New API 默认复用该 provider 的推理 Token 调用 `/api/usage/token/`，并从 `/api/status` 读取实例自己的 `quota_per_unit`：
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- insert:
+    - id: usage-stats
+      name: dsh-usage-stats
+      config:
+        monitors:
+          relay-a:                 # Harness provider id
+            adapter: new-api
+            # 只有旧实例需要管理 PAT 回退：
+            fallbackCredentialRef: RELAY_A_MANAGEMENT_PAT
+```
+
+如果 `/api/usage/token/` 返回 404/405，且配置了 `fallbackCredentialRef`，插件才会使用该管理 PAT 请求 `/api/user/self`；不会把推理 Token 当管理凭据盲试。旧实例如仍需要 User ID，可再配置 `fallbackUserIdRef`。
+
+CC Switch 风格的通用余额接口 `{baseURL}/user/balance` 可直接配置：
+
+```yaml
+        monitors:
+          relay-a:
+            adapter: general
+            warning:
+              warnBelow: 5
+              criticalBelow: 1
+```
+
+自定义接口使用声明式 GET + JSON Pointer，不执行 JavaScript：
+
+```yaml
+        monitors:
+          private-model:
+            adapter: declarative
+            mode: balance
+            request:
+              path: /account/balance
+              auth:
+                type: bearer
+                credentialRef: PRIVATE_MODEL_API_KEY
+            extract:
+              root: /data
+              remaining: /available_balance
+              used: /used_balance
+              total: /total_balance
+              currency: /currency
+```
+
+支持的内置 adapter：`new-api`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`，以及已有的 DeepSeek/OpenRouter/Moonshot 余额适配器。声明式请求默认要求 HTTPS、同源相对路径、手动处理重定向，并限制 JSON 响应为 1 MiB；跨域、HTTP 或私网地址必须分别显式启用 `allowCrossOrigin`、`allowInsecure`、`allowPrivateNetwork`。
+
+`warning.warnBelow` 和 `warning.criticalBelow` 为余额绝对值阈值。具有总额度的 API 和 Token Plan 会自动产生基于剩余百分比的 `normal / warning / critical` 状态（默认 30%/10%），为后续 UI 预警展示预留。
+
 ### 重启
 
 ```bash
@@ -137,11 +199,11 @@ node scripts/install.mjs
 
 - 点击侧边栏入口打开面板。
 - 使用“当前供应商”选择器切换账户视图；面板一次只显示一个供应商。
-- DeepSeek、OpenRouter、Moonshot/Kimi 等余额型供应商显示金额；OpenCode Go 与 Z.ai 显示订阅比例、窗口和重置时间。
+- DeepSeek、OpenRouter、Moonshot/Kimi 等余额型供应商显示金额；OpenCode Go、Z.ai、Kimi For Coding 与 MiniMax Coding Plan 显示订阅比例、窗口和重置时间。
 - 未配置、凭据失效、限流和接口不可用会在同一张供应商卡片中显示不同状态。
 - 使用 `‹`、`›` 切换月份，点击“今天”返回当前月份。
 - 点击热图日期或最近 14 个日历日列表，查看当天的分供应商/分模型明细（同一模型来自不同供应商会分开显示，如 `deepseek-official · deepseek-v4-flash` 与 `ark · deepseek-v4-flash`）。
-- 标题栏刷新按钮会同时重新请求用量、供应商列表、当前供应商余额和订阅额度。
+- 标题栏刷新按钮会更新用量、供应商列表，并强制刷新当前供应商账户；不会批量请求其他供应商。
 
 “最近 14 天”按本地日历计算，只显示窗口内存在用量的日期；未来时间戳不会计入该列表。
 
@@ -172,6 +234,13 @@ Optional subscription setup (do not handle secrets yourself):
 - Tell me that OpenCode Go can reuse its local auth.json automatically, or I can add OPENCODE_GO_API_KEY to the Harness credentials file myself.
 - Tell me that Z.ai requires ZAI_API_KEY; China-region accounts may also set ZAI_API_REGION=bigmodel-cn.
 - Never ask me to paste a key or browser cookie into chat.
+
+Optional New API/custom monitor setup:
+- Read the configured Harness provider ids and ask me which id should receive a monitor.
+- Add only non-secret config under the dsh-usage-stats Cordis entry.
+- Store credential reference names in config, never credential values.
+- Validate that request.path is relative and that JSON Pointer fields begin with /.
+- Do not enable cross-origin, insecure HTTP, or private-network access unless I explicitly request it.
 ```
 
 安装器本身提供清晰的退出码：未知参数返回 `2`；文件、版本或配置验证失败返回非零；成功时输出已验证版本、安装路径和 patch 路径。因此 Agent 不需要自行解析或重写 YAML。
@@ -185,10 +254,9 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 ## 隐私与安全 / Privacy & security
 
 - API key、OpenCode auth.json 内容与兼容 Cookie 不会发送到浏览器、写入插件缓存或日志。服务端只通过 HTTPS 把相应凭据发往对应供应商域名。
-- 余额响应只包含 `isAvailable`、`currency`、`total`、`granted`、`toppedUp` 和 `fetchedAt`，不包含 key。
-- 订阅响应只包含供应商、计划、状态、额度窗口百分比和重置时间，不包含 key、Cookie 或 workspace 页面正文。
+- 统一账户响应只包含供应商、模式、状态、余额/额度窗口、预警级别和获取时间，不包含 key、Cookie、管理 PAT 或上游原始正文。
 - 用量缓存在 `~/.dsh/storages/usage-stats-cache.json`，只保存按日期/供应商/模型聚合的 Token、会话 id、不透明修订号与折叠游标，不保存提示词、回复正文或文件路径。
-- 四个端点仅接受 GET，并同时校验 `req.socket.remoteAddress` 与 Host；支持 IPv4、IPv4-mapped IPv6 和 `[::1]:port`。
+- 五个端点仅接受 GET，并同时校验 `req.socket.remoteAddress` 与 Host；支持 IPv4、IPv4-mapped IPv6 和 `[::1]:port`。
 
 本机反向代理会让插件看到代理自身的回环地址。请勿把这些端点经反向代理暴露到局域网或公网；如确需代理，请在代理层增加可靠的认证与访问控制。
 
@@ -234,9 +302,12 @@ node scripts/check-balance.mjs
 | Method | Path | Response |
 | --- | --- | --- |
 | `GET` | `/api/usage-stats/usage` | 按日期/供应商/模型统计的 Token、缓存命中率与更新时间 |
-| `GET` | `/api/usage-stats/providers` | 已配置的供应商列表（含余额方案与凭据是否已配置） |
+| `GET` | `/api/usage-stats/providers` | 已配置的供应商列表（含 account mode、adapter、状态与预警摘要） |
+| `GET` | `/api/usage-stats/account?provider=<id>` | 当前供应商的统一余额或 Token Plan 快照；`refresh=1` 强制刷新 |
 | `GET` | `/api/usage-stats/balance?provider=<id>` | 所选供应商的脱敏余额与获取时间；省略 `provider` 时默认官方 DeepSeek 路由 |
-| `GET` | `/api/usage-stats/subscriptions` | OpenCode Go 与 Z.ai 的脱敏订阅状态、百分比窗口和重置时间 |
+| `GET` | `/api/usage-stats/subscriptions` | 兼容路由：所有已配置 Token Plan 的脱敏状态与额度窗口 |
+
+`/balance` 与 `/subscriptions` 是 `0.1.x` 客户端兼容路由；`0.2.0` 客户端只使用 `/account`，且一次只查询当前选择的 provider。
 
 其他方法返回 `405`，非回环请求返回 `403`。响应均为 JSON，并带 `Cache-Control: no-cache`。
 
@@ -246,7 +317,8 @@ node scripts/check-balance.mjs
 lib/index.js              server routes, incremental cache, provider-aware balance
 lib/usage.js              pure token-usage aggregation (provider/model keys)
 lib/balance.js            provider balance schemes (deepseek/openrouter/moonshot/zai)
-lib/subscriptions.js      normalized OpenCode Go and Z.ai quota adapters
+lib/subscriptions.js      normalized OpenCode Go/Z.ai/Kimi/MiniMax token-plan adapters
+lib/accounts.js           account registry, New API/custom adapters, alerts and cache
 lib/client.js             balance and subscription UIs, provider picker, heatmap
 scripts/smoke-client.mjs  offline client regressions
 scripts/install.mjs       cross-platform idempotent installer
@@ -254,13 +326,14 @@ scripts/test-install.mjs  installer regression and idempotency test
 scripts/test-server.mjs   offline server regressions
 scripts/test-balance.mjs  offline balance-scheme unit tests
 scripts/test-subscriptions.mjs offline subscription-adapter tests
+scripts/test-accounts.mjs offline account-registry, New API, custom and cache tests
 scripts/validate-fold.mjs live projection comparison
 scripts/verify-raw.mjs    four-path raw-data verification
 ```
 
 ## 兼容性说明
 
-当前版本为 `0.1.2`。插件依赖 DeepSeek Harness 的客户端模块加载器、Cordis 服务和 session persistence 接口；Harness 预发布版本升级后如这些内部接口变化，可能需要同步适配。
+当前版本为 `0.2.0`。插件依赖 DeepSeek Harness 的客户端模块加载器、Cordis 服务和 session persistence 接口；Harness 预发布版本升级后如这些内部接口变化，可能需要同步适配。
 
 ## 参考与致谢 / References
 

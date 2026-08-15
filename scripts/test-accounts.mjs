@@ -28,6 +28,13 @@ const relay = {
 	baseURL: "https://relay.example.com/v1"
 };
 
+const passion = {
+	id: "passion",
+	displayName: "Passion",
+	apiKeyEnv: "PASSION_API_KEY",
+	baseURL: "https://api.passionapi.com"
+};
+
 assert.equal(isPrivateAddress("127.0.0.1"), true);
 assert.equal(isPrivateAddress("::ffff:127.0.0.1"), true);
 assert.equal(isPrivateAddress("::ffff:7f00:1"), true);
@@ -39,6 +46,13 @@ assert.equal(isPrivateAddress("2001:2::1"), true);
 assert.equal(isPrivateAddress("2002:7f00:1::"), true);
 assert.equal(isPrivateAddress("2606:4700:4700::1111"), false);
 console.log("IPv4/IPv6 private-address classification ok");
+
+{
+	const spec = resolveAccountSpec(passion, validateAccountConfig());
+	assert.equal(spec.adapter, "sub2api");
+	assert.equal(spec.mode, "balance");
+	console.log("Passion Sub2API auto-detection ok");
+}
 
 {
 	const config = validateAccountConfig({ monitors: {
@@ -102,6 +116,78 @@ console.log("IPv4/IPv6 private-address classification ok");
 	assert.equal(account.balance.remaining, 4);
 	assert.deepEqual(account.alert, { level: "warning", metric: "balance", value: 4, threshold: 5 });
 	console.log("general balance template ok");
+}
+
+{
+	const spec = resolveAccountSpec(passion, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ PASSION_API_KEY: "sk-passion" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			assert.equal(String(url), "https://api.passionapi.com/v1/usage");
+			assert.equal(init.headers.authorization, "Bearer sk-passion");
+			return jsonResponse({ mode: "unrestricted", isValid: true, planName: "Wallet", remaining: 28.5, unit: "USD", balance: 28.5 });
+		}
+	});
+	assert.equal(account.mode, "balance");
+	assert.equal(account.plan, "Wallet");
+	assert.deepEqual(account.balance, { remaining: 28.5, currency: "USD", unlimited: false, expiresAt: null });
+	console.log("Sub2API wallet balance normalization ok");
+}
+
+{
+	const spec = resolveAccountSpec({ ...relay, id: "sub2" }, validateAccountConfig({ monitors: {
+		sub2: { adapter: "sub2api" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-sub2" }), {
+		now: () => now,
+		fetch: async () => jsonResponse({
+			mode: "quota_limited",
+			isValid: true,
+			status: "active",
+			planName: "Quota Plan",
+			quota: { limit: 100, used: 25, remaining: 75, unit: "USD" },
+			rate_limits: [{ window: "5h", limit: 20, used: 18, remaining: 2, reset_at: "2026-08-15T05:00:00Z" }]
+		})
+	});
+	assert.equal(account.mode, "subscription");
+	assert.equal(account.plan, "Quota Plan");
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["quota", 25, 75],
+		["session", 90, 10]
+	]);
+	assert.deepEqual(account.alert, { level: "critical", metric: "remaining-percent", value: 10 });
+	console.log("Sub2API quota-plan normalization ok");
+}
+
+{
+	const spec = resolveAccountSpec({ ...relay, id: "sub2" }, validateAccountConfig({ monitors: {
+		sub2: { adapter: "sub2api" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-sub2" }), {
+		now: () => now,
+		fetch: async () => jsonResponse({
+			mode: "unrestricted",
+			isValid: true,
+			planName: "Pro Plan",
+			remaining: 15,
+			subscription: {
+				daily_usage_usd: 2,
+				daily_limit_usd: 5,
+				weekly_usage_usd: 10,
+				weekly_limit_usd: 20,
+				monthly_usage_usd: 60,
+				monthly_limit_usd: 100
+			}
+		})
+	});
+	assert.equal(account.mode, "subscription");
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["daily", 40, 60],
+		["weekly", 50, 50],
+		["monthly", 60, 40]
+	]);
+	assert.deepEqual(account.alert, { level: "normal", metric: "remaining-percent", value: 40 });
+	console.log("Sub2API subscription-window normalization ok");
 }
 
 {

@@ -16,7 +16,7 @@ Token usage heatmap, provider/model breakdowns, account balances, and subscripti
 | --- | --- |
 | 统一供应商账户卡 | 一次只显示当前选择的供应商；DeepSeek 等展示余额，OpenCode Go、Z.ai 展示订阅额度 |
 | 订阅额度 | OpenCode Go、Z.ai、Kimi For Coding、MiniMax Coding Plan 显示标准化额度窗口与重置时间 |
-| 可扩展账户监测 | 支持 New API、通用余额模板，以及声明式 JSON Pointer 自定义余额/订阅查询 |
+| 可扩展账户监测 | 支持 New API、Sub2API `/v1/usage`、通用余额模板，以及声明式 JSON Pointer 自定义余额/订阅查询 |
 | 后台刷新 | 服务端启动即刷新账户与 Token 聚合，之后每五分钟刷新，不依赖面板是否打开 |
 | 用量概览 | 今日、本月、累计 Token，以及今日缓存命中率 |
 | 月历热图 | 按月浏览；颜色越深表示用量越高 |
@@ -152,6 +152,19 @@ CC Switch 风格的通用余额接口 `{baseURL}/user/balance` 可直接配置�
               criticalBelow: 1
 ```
 
+Sub2API 风格的 `GET {baseURL}/v1/usage` 同时支持钱包余额、独立额度和订阅周期。Passion（provider id 为 `passion`，或域名为 `*.passionapi.com`）会自动识别；其他兼容供应商可显式绑定：
+
+```yaml
+        monitors:
+          relay-a:
+            adapter: sub2api
+            warning:
+              warnBelow: 5
+              criticalBelow: 1
+```
+
+该适配器使用 provider 的推理 API Key 发出 Bearer GET 请求：钱包模式显示 `balance`/`remaining`；`quota_limited` 和含 `subscription` 的响应自动切换为剩余比例窗口。无需登录 Cookie 或管理令牌。
+
 自定义接口使用声明式 GET + JSON Pointer，不执行 JavaScript：
 
 ```yaml
@@ -172,7 +185,7 @@ CC Switch 风格的通用余额接口 `{baseURL}/user/balance` 可直接配置�
               currency: /currency
 ```
 
-支持的内置 adapter：`new-api`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`，以及已有的 DeepSeek/OpenRouter/Moonshot 余额适配器。声明式请求默认要求 HTTPS、同源相对路径、手动处理重定向，并限制 JSON 响应为 1 MiB；跨域、HTTP 或私网地址必须分别显式启用 `allowCrossOrigin`、`allowInsecure`、`allowPrivateNetwork`。发送凭据前会校验域名的全部 IPv4/IPv6 解析结果，并把连接固定到已校验地址，避免 DNS 重绑定绕过私网限制。
+支持的内置 adapter：`new-api`、`sub2api`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`，以及已有的 DeepSeek/OpenRouter/Moonshot 余额适配器。声明式请求默认要求 HTTPS、同源相对路径、手动处理重定向，并限制 JSON 响应为 1 MiB；跨域、HTTP 或私网地址必须分别显式启用 `allowCrossOrigin`、`allowInsecure`、`allowPrivateNetwork`。发送凭据前会校验域名的全部 IPv4/IPv6 解析结果，并把连接固定到已校验地址，避免 DNS 重绑定绕过私网限制。
 
 `warning.warnBelow` 和 `warning.criticalBelow` 为余额绝对值阈值。具有总额度的 API 和 Token Plan 会自动产生基于剩余百分比的 `normal / warning / critical` 状态（默认 30%/10%），为后续 UI 预警展示预留。
 

@@ -46,7 +46,7 @@ async function testRouteFence(root) {
 	const routes = new Map();
 	const empty = { list: () => [] };
 	const persistence = { listSnapshots: async () => [], list: async () => [] };
-	plugin.apply(makeContext({ sessions: empty, persistence, routes }), { backgroundRefresh: false });
+	plugin.apply(makeContext({ sessions: empty, persistence, routes }), {}, { disableBackgroundRefresh: true });
 	const handler = routes.get(plugin.USAGE_PATH);
 	assert.equal(typeof handler, "function");
 

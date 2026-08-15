@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
 	createAccountService,
+	isPrivateAddress,
 	queryAccount,
 	resolveAccountSpec,
 	validateAccountConfig
@@ -26,6 +27,14 @@ const relay = {
 	apiKeyEnv: "RELAY_A_KEY",
 	baseURL: "https://relay.example.com/v1"
 };
+
+assert.equal(isPrivateAddress("127.0.0.1"), true);
+assert.equal(isPrivateAddress("::ffff:127.0.0.1"), true);
+assert.equal(isPrivateAddress("::ffff:7f00:1"), true);
+assert.equal(isPrivateAddress("fc00::1"), true);
+assert.equal(isPrivateAddress("fe80::1"), true);
+assert.equal(isPrivateAddress("2606:4700:4700::1111"), false);
+console.log("IPv4/IPv6 private-address classification ok");
 
 {
 	const config = validateAccountConfig({ monitors: {
@@ -257,6 +266,33 @@ const relay = {
 	assert.equal(noFallback.status, "unsupported");
 	assert.equal(noFallback.balance, null);
 	console.log("New API refuses implicit credential fallback ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "new-api" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => String(url).endsWith("/api/status")
+			? jsonResponse({}, 503)
+			: jsonResponse({ code: true, data: { total_granted: 10, total_used: 2, total_available: 8 } })
+	});
+	assert.equal(account.status, "unavailable", "status transport failures must not use the historical quota unit");
+	assert.equal(account.balance, null);
+	console.log("New API status failures do not silently change quota units");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		lookup: async () => [{ address: "127.0.0.1", family: 4 }]
+	});
+	assert.equal(account.status, "unsupported", "DNS answers pointing at private networks must be rejected before connecting");
+	console.log("DNS-to-private-network rejection ok");
 }
 
 {

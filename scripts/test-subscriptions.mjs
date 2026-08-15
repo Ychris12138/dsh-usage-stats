@@ -234,4 +234,18 @@ const noLocalAuth = {
 	console.log("MiniMax endpoint compatibility fallback ok");
 }
 
+{
+	const minimax = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async () => ({
+			ok: true,
+			status: 200,
+			json: async () => ({ model_remains: [{ model_name: "text-01", current_interval_remaining_percent: 99 }] })
+		})
+	});
+	assert.equal(minimax.status, "unavailable");
+	assert.deepEqual(minimax.windows, []);
+	console.log("MiniMax ignores non-general model quotas ok");
+}
+
 console.log("SUBSCRIPTION TESTS PASSED");

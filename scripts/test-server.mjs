@@ -31,13 +31,13 @@ function makeResponse() {
 	};
 }
 
-function makeContext({ sessions, persistence, routes } = {}) {
+function makeContext({ sessions, persistence, routes, settings } = {}) {
 	return {
 		logger: { warn: () => {} },
 		credentials: { resolve: async () => void 0 },
 		webServer: { register: (entry) => { routes?.set(entry.path, entry.handler); return () => {}; } },
 		effect: (register) => register(),
-		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : void 0
+		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : name === "settings" ? settings : void 0
 	};
 }
 
@@ -46,7 +46,7 @@ async function testRouteFence(root) {
 	const routes = new Map();
 	const empty = { list: () => [] };
 	const persistence = { listSnapshots: async () => [], list: async () => [] };
-	plugin.apply(makeContext({ sessions: empty, persistence, routes }), {}, { disableBackgroundRefresh: true });
+	await plugin.apply(makeContext({ sessions: empty, persistence, routes }), {}, { disableBackgroundRefresh: true });
 	const handler = routes.get(plugin.USAGE_PATH);
 	assert.equal(typeof handler, "function");
 
@@ -71,6 +71,24 @@ async function testRouteFence(root) {
 	await routes.get(plugin.ACCOUNT_PATH)({ method: "GET", url: `${plugin.ACCOUNT_PATH}?provider=deepseek-official`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, account);
 	assert.equal(account.status, 200);
 	assert.equal(JSON.parse(account.body).account.status, "not-configured");
+}
+
+async function testConfigValidation(root) {
+	const plugin = await freshModule("config", join(root, "config"));
+	assert.deepEqual(plugin.Config["~standard"].validate({ monitors: {} }).issues, void 0);
+	assert.match(plugin.Config["~standard"].validate({ monitors: { relay: { adapter: "missing" } } }).issues[0].message, /adapter is unsupported/);
+	const routes = new Map();
+	const context = makeContext({
+		sessions: { list: () => [] },
+		persistence: { listSnapshots: async () => [], list: async () => [] },
+		routes,
+		settings: { get: () => void 0 }
+	});
+	await assert.rejects(
+		() => plugin.apply(context, { monitors: { missing: { adapter: "general" } } }, { disableBackgroundRefresh: true }),
+		/unknown provider: missing/
+	);
+	assert.equal(routes.size, 0, "invalid provider config must fail before routes are registered");
 }
 
 async function testBackgroundRefresh(root) {
@@ -146,6 +164,7 @@ async function testRevisionRewrite(root) {
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
+	await testConfigValidation(root);
 	await testBackgroundRefresh(root);
 	await testPersistedToLive(root);
 	await testRevisionRewrite(root);

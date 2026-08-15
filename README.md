@@ -120,7 +120,7 @@ Kimi For Coding 和 MiniMax Coding Plan 默认使用当前官方套餐接口。�
 
 ### 可选：New API 与自定义监测
 
-插件从 Cordis entry 的 `config.monitors` 读取账户监测配置。monitor 的键必须是 Harness 中已经存在的 provider id；普通配置只保存 credential ref，真实密钥仍由 `~/.dsh/.credentials.yaml` 管理。
+插件从 Cordis entry 的 `config.monitors` 读取账户监测配置，并导出 Cordis `Config` schema 在启动前验证配置形状。monitor 的键必须是 Harness 中已经存在的 provider id；未知 provider、adapter 或非法声明式映射会阻止插件启动并给出明确错误。普通配置只保存 credential ref，真实密钥仍由 `~/.dsh/.credentials.yaml` 管理。
 
 请在现有 `name: dsh-usage-stats` entry 下合并 `config`，不要在文件末尾追加第二个插件 entry。下面展示的是该 entry 的完整形状。
 

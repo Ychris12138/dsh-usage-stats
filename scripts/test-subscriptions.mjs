@@ -243,9 +243,23 @@ const noLocalAuth = {
 			json: async () => ({ model_remains: [{ model_name: "text-01", current_interval_remaining_percent: 99 }] })
 		})
 	});
-	assert.equal(minimax.status, "unavailable");
+	assert.equal(minimax.status, "invalid-response");
 	assert.deepEqual(minimax.windows, []);
 	console.log("MiniMax ignores non-general model quotas ok");
+}
+
+{
+	const kimi = await collectSubscription("kimi", credentials({ KIMI_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async () => ({
+			ok: true,
+			status: 200,
+			json: async () => { throw new SyntaxError("bad json"); }
+		})
+	});
+	assert.equal(kimi.status, "invalid-response");
+	assert.deepEqual(kimi.windows, []);
+	console.log("Token-plan invalid JSON classification ok");
 }
 
 console.log("SUBSCRIPTION TESTS PASSED");

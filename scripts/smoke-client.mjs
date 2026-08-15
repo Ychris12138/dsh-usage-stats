@@ -189,10 +189,11 @@ if (!goMarkup.includes("data-account-mode=\"subscription\"") || !goMarkup.includ
 if ((goMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !goMarkup.includes("width:12%")) throw new Error("OpenCode Go must render three quota meters");
 
 const choices = buildProviderChoices([
-	{ id: "deepseek-official", displayName: "DeepSeek", scheme: "deepseek", configured: true },
-	{ id: "zai-coding-cn", displayName: "Z.ai CN", scheme: "zai", configured: true }
-], [goSubscription, { id: "zai", displayName: "Z.ai", status: "ok", windows: [] }]);
-if (choices.length !== 3) throw new Error(`provider merge must collapse Z.ai aliases, got ${choices.length}`);
+	{ id: "deepseek-official", displayName: "DeepSeek", adapter: "deepseek-balance", accountMode: "balance", configured: true },
+	{ id: "zai-coding-cn", displayName: "Z.ai CN", adapter: "zai-token-plan", accountMode: "subscription", configured: true },
+	{ id: "opencode-go", displayName: "OpenCode Go", adapter: "opencode-go", accountMode: "subscription", configured: true }
+]);
+if (choices.length !== 3) throw new Error(`provider metadata must remain one row per provider, got ${choices.length}`);
 if (choices.find((provider) => provider.id === "zai-coding-cn")?.accountMode !== "subscription") throw new Error("Z.ai must prefer its subscription presentation");
 const selectedMarkup = goMarkup;
 if (selectedMarkup.includes("DeepSeek") || selectedMarkup.includes("Z.ai")) throw new Error("the account area must render only the selected provider");

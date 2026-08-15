@@ -72,14 +72,14 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 
 ### 可选：配置余额查询
 
-余额查询会**自动读取 Harness 中已配置的供应商**：官方 DeepSeek 路由（`llm-deepseek`）以及每个 pi-ai 供应商 profile（`llm-pi-ai`，如 `opencode`、`opencode-go`、`openrouter`、`ark` 等）。每个供应商的 API key 由 Harness 的凭据服务按需解析，插件不存储任何 key。用量统计无需 key。
+余额查询会**自动读取 Harness 中已配置的供应商**：官方 DeepSeek 路由（`llm-deepseek`）以及每个 pi-ai 供应商 profile（`llm-pi-ai`，如 `opencode`、`opencode-go`、`openrouter`、`ark` 等）。除下述 OpenRouter 例外外，每个供应商的 API key 由 Harness 的凭据服务按需解析，插件不存储任何 key。用量统计无需 key。
 
 内置的余额查询方案：
 
 | 供应商 id | 余额接口 |
 | --- | --- |
 | `deepseek` / `deepseek-official` | `{baseURL}/user/balance` |
-| `openrouter` | `{baseURL}/api/v1/credits` |
+| `openrouter` | `{baseURL}/api/v1/credits`；要求独立 Management Key |
 | `moonshotai` / `moonshotai-cn` / `kimi` | `{baseURL}/v1/users/me/balance` |
 | `zai` / `zai-coding-cn` | `{baseURL}/api/paas/v4/balance` |
 
@@ -93,6 +93,15 @@ DEEPSEEK_API_KEY: sk-your-key-here
 ```
 
 pi-ai 供应商（如 ark）的凭据按其 profile 里的 `apiKeyEnv` 保存（例如 `ARK_API_KEY`）。安装器不会读取、创建或修改凭据文件。不要把真实 key 提交到 Git，也不要把它粘贴给编码 Agent。
+
+OpenRouter 是例外：官方账户 credits 接口只接受 **Management Key**，不能复用推理请求使用的普通 `OPENROUTER_API_KEY`。插件默认从独立 credential ref `OPENROUTER_MANAGEMENT_KEY` 读取；未配置时显示“未配置”，不会用普通推理 key 试探接口：
+
+```yaml
+# ~/.dsh/.credentials.yaml
+OPENROUTER_MANAGEMENT_KEY: sk-or-v1-your-management-key
+```
+
+如需使用其他凭据名，可在 Cordis monitor 中为 `openrouter` 显式设置 `adapter: openrouter-balance` 和 `credentialRef`。`/api/v1/credits` 返回账户累计购入与已用 credits，插件显示余额 `total_credits - total_usage`，并同时展示总额和已用额。普通 key 可访问的 `/api/v1/key` 仅描述单个 key 的限额，不会被当作账户余额。
 
 ### 可选：配置订阅额度
 

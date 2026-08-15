@@ -37,10 +37,11 @@ async function stubFetchOnce(payload, status = 200) {
 }
 
 {
-	const calls = await stubFetchOnce({ credits: 12.34, total_usage: 56.78 });
-	const balance = await queryBalance("openrouter", "https://openrouter.ai/api/v1", "sk-test");
+	const calls = await stubFetchOnce({ data: { total_credits: 100.5, total_usage: 25.75 } });
+	const balance = await queryBalance("openrouter", "https://openrouter.ai/api/v1", "management-key");
 	assert.equal(calls[0].url, "https://openrouter.ai/api/v1/credits");
-	assert.deepEqual(balance, { isAvailable: true, currency: "USD", total: 12.34, granted: void 0, toppedUp: void 0 });
+	assert.equal(calls[0].init.headers.authorization, "Bearer management-key");
+	assert.deepEqual(balance, { isAvailable: true, currency: "USD", total: 74.75, used: 25.75, limit: 100.5, granted: void 0, toppedUp: void 0 });
 	console.log("openrouter scheme ok:", calls[0].url);
 }
 

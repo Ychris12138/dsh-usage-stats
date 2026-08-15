@@ -251,6 +251,8 @@ declarative
 
 每个 adapter 只处理凭据解析、上游请求和归一化，不包含 UI 文案。现有 `balance.js` 与 `subscriptions.js` 可逐步成为 registry 的内部实现，而不是继续扩展两个平行入口。
 
+OpenRouter 的账户 credits adapter 是特殊凭据边界：当前官方 `GET /api/v1/credits` 返回 `data.total_credits` 与 `data.total_usage`，且明确要求 Management Key。它默认使用独立 credential ref `OPENROUTER_MANAGEMENT_KEY`，不得复用 provider 的普通推理 API key；余额按 `total_credits - total_usage` 计算。普通 key 的 `/api/v1/key` 只反映单 key spending limit，不等同账户余额。[OpenRouter credits API](https://openrouter.ai/docs/api/api-reference/credits/get-credits) [当前 key API](https://openrouter.ai/docs/api/api-reference/api-keys/get-current-key)
+
 ### 3. 使用 Cordis config 绑定自定义 provider
 
 Harness 官方支持 Cordis entry 的 `config`，并把配置作为 `apply(ctx, config)` 的第二参数传入；插件可导出 Standard Schema 做启动前验证。[Harness 配置教程](https://github.com/deepseek-ai/deepseek-harness/blob/47f943859bef60e4160492346772ded9b24f765a/docs/cordis-tutorial/05-config.md)
@@ -374,11 +376,11 @@ CC Switch 也区分瞬时传输失败和确定性失败：前者交给查询层�
 | New API | token endpoint 200/401/429/404；404 且有 PAT 时 fallback；无 PAT 不 fallback；非默认 `quota_per_unit`；unlimited；expiry。 |
 | Kimi | 单/多 `limits`；字符串数字；`limit=0`；缺 reset；401 与 5xx。 |
 | Z.ai | 国内/全球 host；Authorization 无 Bearer；`unit=3/6`；旧套餐单窗口；缺失/异常 percentage。 |
-| MiniMax | CN/global host；只取 `general`；有/无周额度；remaining-percent 反转；业务错误。 |
+| MiniMax | CN/global host；只取 `general`；有/无周额度；remaining-percent 反转；绝对 reset 字段及毫秒倒计时 `remains_time/weekly_remains_time`；业务错误。 |
 | Declarative | JSON Pointer 成功/缺字段/类型错误；divisor；相对 URL；跨域、redirect、私网、超大响应和非 JSON 拒绝。 |
 | Cache/error | config hash 隔离；瞬时错误保留 stale；401/403 清除正常态；并发切换时旧响应不能覆盖新 provider。 |
 | Client | picker 只渲染当前 provider；balance/subscription union 两分支；∞、到期时间、进度条、各状态文案；切换只触发一个目标请求。 |
-| Compatibility | 原 DeepSeek/OpenRouter/Moonshot/OpenCode Go/Z.ai fixture 与 API 保持通过；未配置 `monitors` 时行为不变。 |
+| Compatibility | 原 DeepSeek/Moonshot/OpenCode Go/Z.ai fixture 与 API 保持通过；OpenRouter 按当前官方 Management Key + credits 响应契约迁移。 |
 
 ### 版本建议
 
@@ -402,7 +404,7 @@ CC Switch 也区分瞬时传输失败和确定性失败：前者交给查询层�
 
 ## 建议的验收标准
 
-1. 未配置新 monitor 时，DeepSeek、OpenRouter、Moonshot、OpenCode Go、Z.ai 现有行为不变。
+1. 未配置新 monitor 时，DeepSeek、Moonshot、OpenCode Go、Z.ai 现有行为不变；OpenRouter 未提供独立 Management Key 时必须为 `not-configured`，不得发送普通推理 key。
 2. 浏览器选择 provider A 时只调用 A 的 `/account`；服务端后台任务仍按启动即刷新、每五分钟全量刷新的监测契约查询所有已配置账户。
 3. New API 默认只需现有推理 Token；非默认 `quota_per_unit` 的金额换算正确。
 4. 所有浏览器响应、日志、错误和缓存均不含 API Key、PAT、Cookie 或原始上游正文。

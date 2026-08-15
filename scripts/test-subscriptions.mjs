@@ -195,8 +195,10 @@ const noLocalAuth = {
 					model_remains: [{
 						model_name: "general",
 						current_interval_remaining_percent: 82,
+						remains_time: 3600000,
 						current_weekly_status: 1,
-						current_weekly_remaining_percent: 45
+						current_weekly_remaining_percent: 45,
+						weekly_remains_time: 604800000
 					}]
 				})
 			};
@@ -207,6 +209,10 @@ const noLocalAuth = {
 	assert.deepEqual(minimax.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
 		["session", 18, 82],
 		["weekly", 55, 45]
+	]);
+	assert.deepEqual(minimax.windows.map((window) => window.resetsAt), [
+		"2026-08-14T01:00:00.000Z",
+		"2026-08-21T00:00:00.000Z"
 	]);
 	assert.equal(JSON.stringify(minimax).includes(secret), false);
 	console.log("MiniMax token plan normalization ok");

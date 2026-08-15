@@ -156,13 +156,25 @@ console.log("IPv4/IPv6 private-address classification ok");
 {
 	const provider = { id: "openrouter", displayName: "OpenRouter", apiKeyEnv: "OPENROUTER_API_KEY", baseURL: "https://openrouter.ai/api/v1" };
 	const spec = resolveAccountSpec(provider, validateAccountConfig());
-	const account = await queryAccount(spec, credentials({ OPENROUTER_API_KEY: "sk-test" }), {
+	assert.equal(spec.apiKeyRef, "OPENROUTER_MANAGEMENT_KEY");
+	const inferenceOnly = await queryAccount(spec, credentials({ OPENROUTER_API_KEY: "inference-key" }), {
 		now: () => now,
-		fetch: async () => jsonResponse({ credits: 0 })
+		fetch: async () => { throw new Error("must not use the inference key"); }
+	});
+	assert.equal(inferenceOnly.status, "not-configured");
+	assert.deepEqual(inferenceOnly.missingCredentials, ["OPENROUTER_MANAGEMENT_KEY"]);
+	const account = await queryAccount(spec, credentials({ OPENROUTER_MANAGEMENT_KEY: "management-key" }), {
+		now: () => now,
+		fetch: async (_url, init) => {
+			assert.equal(init.headers.authorization, "Bearer management-key");
+			return jsonResponse({ data: { total_credits: 25.75, total_usage: 25.75 } });
+		}
 	});
 	assert.equal(account.status, "ok", "a valid zero balance is not a transport/account availability failure");
 	assert.equal(account.balance.remaining, 0);
-	console.log("built-in zero balance remains a successful response");
+	assert.equal(account.balance.used, 25.75);
+	assert.equal(account.balance.total, 25.75);
+	console.log("OpenRouter management credential and zero balance contract ok");
 }
 
 {

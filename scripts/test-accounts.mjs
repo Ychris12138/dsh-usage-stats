@@ -33,6 +33,10 @@ assert.equal(isPrivateAddress("::ffff:127.0.0.1"), true);
 assert.equal(isPrivateAddress("::ffff:7f00:1"), true);
 assert.equal(isPrivateAddress("fc00::1"), true);
 assert.equal(isPrivateAddress("fe80::1"), true);
+assert.equal(isPrivateAddress("fec0::1"), true);
+assert.equal(isPrivateAddress("100::1"), true);
+assert.equal(isPrivateAddress("2001:2::1"), true);
+assert.equal(isPrivateAddress("2002:7f00:1::"), true);
 assert.equal(isPrivateAddress("2606:4700:4700::1111"), false);
 console.log("IPv4/IPv6 private-address classification ok");
 

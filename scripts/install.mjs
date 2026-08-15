@@ -41,6 +41,47 @@ const patchBlock = `# dsh-usage-stats: token usage heatmap + DeepSeek balance
     - id: usage-stats
       name: dsh-usage-stats
 `;
+const emptySequenceRoot = /^\[\](?:[ \t]+#.*)?$/;
+
+function meaningfulPatchLines(text) {
+	return String(text).split(/\r?\n/).map((line, index) => ({
+		index,
+		indent: line.match(/^[ \t]*/)?.[0].length ?? 0,
+		content: line.trim()
+	})).filter(({ content }) => content !== "" && !content.startsWith("#") && content !== "---" && content !== "...");
+}
+
+/** Remove a YAML document whose only value is the empty root sequence `[]`. */
+function withoutEmptySequenceRoot(text) {
+	const meaningful = meaningfulPatchLines(text);
+	if (meaningful.length === 0) return text;
+	const rootIndent = Math.min(...meaningful.map(({ indent }) => indent));
+	const emptyRoot = meaningful.find(({ indent, content }) => indent === rootIndent && emptySequenceRoot.test(content));
+	if (emptyRoot === void 0) return text;
+	const lines = String(text).split(/\r?\n/);
+	const inlineComment = lines[emptyRoot.index].match(/^([ \t]*)\[\][ \t]+(#.*)$/);
+	if (inlineComment === null) lines.splice(emptyRoot.index, 1);
+	else lines[emptyRoot.index] = `${inlineComment[1]}${inlineComment[2]}`;
+	return lines.filter((line) => line.trim() !== "...").join("\n").trimEnd();
+}
+
+/** Detect the exact invalid shape produced by older installers: `[]` plus list entries. */
+function assertNoEmptyRootConflict(text) {
+	const meaningful = meaningfulPatchLines(text);
+	if (meaningful.length < 2) return;
+	const rootIndent = Math.min(...meaningful.map(({ indent }) => indent));
+	const roots = meaningful.filter(({ indent }) => indent === rootIndent);
+	if (roots.some(({ content }) => emptySequenceRoot.test(content)) && roots.length > 1) {
+		throw new Error(`invalid YAML in ${patchPath}: empty root sequence [] cannot be combined with patch entries; rerun the installer to repair it`);
+	}
+}
+
+/** Preserve existing YAML/comments while adding exactly one plugin patch entry. */
+function enablePluginInPatch(text) {
+	const base = withoutEmptySequenceRoot(text);
+	if ([...base.matchAll(pluginLine)].length > 0) return base;
+	return base.trim() === "" ? patchBlock : `${base.trimEnd()}\n\n${patchBlock}`;
+}
 
 async function readOptional(path) {
 	try {
@@ -62,6 +103,7 @@ async function verify(expectEnabled) {
 		const patch = await readOptional(patchPath);
 		const count = patch === null ? 0 : [...patch.matchAll(pluginLine)].length;
 		if (count !== 1) throw new Error(`expected exactly one dsh-usage-stats entry in ${patchPath}; found ${count}`);
+		assertNoEmptyRootConflict(patch);
 	}
 	console.log(`Verified ${sourcePackage.name}@${sourcePackage.version}`);
 	console.log(`  package: ${target}`);
@@ -91,11 +133,8 @@ await cp(fileURLToPath(import.meta.url), join(target, "scripts", "install.mjs"),
 if (enable) {
 	await mkdir(dirname(patchPath), { recursive: true });
 	const current = await readOptional(patchPath) ?? "";
-	if (![...current.matchAll(pluginLine)].length) {
-		const separator = current === "" || current.endsWith("\n") ? "" : "\n";
-		const leading = current === "" ? "" : "\n";
-		await writeFile(patchPath, `${current}${separator}${leading}${patchBlock}`, "utf8");
-	}
+	const enabledPatch = enablePluginInPatch(current);
+	if (enabledPatch !== current) await writeFile(patchPath, enabledPatch, "utf8");
 }
 
 await verify(enable);

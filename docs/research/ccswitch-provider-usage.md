@@ -126,7 +126,7 @@ CC Switch 为 Token Plan 使用原生 adapter，而不是通用 JS。所有 adap
 | --- | --- | --- |
 | Kimi For Coding | `GET https://api.kimi.com/coding/v1/usages`；`Authorization: Bearer` | `limits[].detail.limit/remaining/resetTime` 为 5 小时窗口；`usage.limit/remaining/resetTime` 为周窗口；已用率 `(limit-remaining)/limit*100`。[源码](https://github.com/farion1231/cc-switch/blob/40d747c009bff6a6097d5094e57d205420d9b24c/src-tauri/src/services/coding_plan.rs#L103-L208) |
 | Z.ai / 智谱个人版 | 全球 `https://api.z.ai/api/monitor/usage/quota/limit`，国内 `https://open.bigmodel.cn/...`；`Authorization: {apiKey}`，不加 Bearer | `data.limits[]` 的 `TOKENS_LIMIT/CREDIT_LIMIT`；`percentage` 是已用率，`nextResetTime` 是重置时间，`unit=3` 为 5 小时，`unit=6` 为周；`data.level` 为套餐标签。[源码](https://github.com/farion1231/cc-switch/blob/40d747c009bff6a6097d5094e57d205420d9b24c/src-tauri/src/services/coding_plan.rs#L211-L410) |
-| MiniMax | 中国 `https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains`，国际 `https://api.minimax.io/...`；Bearer | 仅取 `model_remains[].model_name === "general"`；`100-current_interval_remaining_percent` 为 5 小时已用率；仅 `current_weekly_status===1` 时显示周窗口，周已用率为 `100-current_weekly_remaining_percent`。[源码](https://github.com/farion1231/cc-switch/blob/40d747c009bff6a6097d5094e57d205420d9b24c/src-tauri/src/services/coding_plan.rs#L413-L496) [解析](https://github.com/farion1231/cc-switch/blob/40d747c009bff6a6097d5094e57d205420d9b24c/src-tauri/src/services/coding_plan.rs#L636-L700) |
+| MiniMax | 当前官方地址：中国 `https://www.minimaxi.com/v1/token_plan/remains`，国际 `https://www.minimax.io/v1/token_plan/remains`；Bearer。CC Switch 使用的旧 `api.* /v1/api/openplatform/coding_plan/remains` 仅作 404/405 兼容回退 | 仅取 `model_remains[].model_name === "general"`；`100-current_interval_remaining_percent` 为 5 小时已用率；仅 `current_weekly_status===1` 时显示周窗口，周已用率为 `100-current_weekly_remaining_percent`。[MiniMax 中国区文档](https://platform.minimaxi.com/docs/token-plan/faq) [MiniMax 国际区文档](https://platform.minimax.io/docs/token-plan/faq) [CC Switch 源码](https://github.com/farion1231/cc-switch/blob/40d747c009bff6a6097d5094e57d205420d9b24c/src-tauri/src/services/coding_plan.rs#L413-L496) [解析](https://github.com/farion1231/cc-switch/blob/40d747c009bff6a6097d5094e57d205420d9b24c/src-tauri/src/services/coding_plan.rs#L636-L700) |
 
 智谱官方当前说明个人套餐同时具有 5 小时动态窗口和 7 天周期窗口，与上述归一化相符。[GLM Coding Plan 套餐说明](https://docs.bigmodel.cn/cn/coding-plan/overview)
 
@@ -140,7 +140,7 @@ MiniMax 的 endpoint 存在版本漂移风险，不能只用硬编码 URL 判定
 - [`lib/subscriptions.js`](../../lib/subscriptions.js) 已把 OpenCode Go 和 Z.ai 归一化成 `mode: subscription` + `windows[]`，这一 wire shape 可继续用于 Kimi/MiniMax。
 - [`lib/index.js`](../../lib/index.js) 的 `configuredProviders()` 能读取官方 DeepSeek 与所有 `llm-pi-ai` provider 的 `id/displayName/apiKeyEnv/baseURL`，但会丢弃额外的 account-monitor 配置。
 - [`lib/client.js`](../../lib/client.js) 已有统一 `ProviderAccountCard`，内部可切换余额与订阅窗口；但 `subscriptionIdFor()` 只硬编码 OpenCode Go/Z.ai。
-- `/subscriptions` 当前一次查询所有订阅 adapter，客户端每五分钟刷新。供应商增加后会产生不必要的上游请求，也不符合“只查询当前选择供应商”的目标。
+- `/subscriptions` 是 `0.1.x` 兼容路由；`0.2.0` 客户端改用按 provider 的 `/account`，一次只请求当前选择项。服务端则按产品要求在启动时及每五分钟主动刷新所有已配置账户，以便面板读取缓存并在关闭时继续预警。
 
 这里需要区分两类“自定义模型监测”：Harness 已产生的调用事件仍由现有本地统计按 `provider/model` 自动聚合，不需要为每个模型新增 adapter；本方案新增的是自定义 provider 或中转站的远端账户监测，例如余额、套餐窗口和重置时间。远端监测绑定在 `providerId`，不会改变已有的逐模型 token 统计口径。
 
@@ -324,7 +324,7 @@ Harness 官方支持 Cordis entry 的 `config`，并把配置作为 `apply(ctx, 
 
 - 凭据通过 Harness `credentials.resolve(ref)` 在发送请求前作为数据注入，不写入脚本、配置回显、缓存或日志。
 - 默认要求 HTTPS；仅显式 opt-in 才允许 localhost/private network。
-- 默认同源；`path` 必须相对 `usageBaseURL`。不允许用户覆盖 `Host`、`Cookie`、`Proxy-Authorization` 等敏感 hop/auth headers。
+- 默认同源；`path` 必须相对 `usageBaseURL`。不允许用户覆盖 `Host`、`Cookie`、`Authorization`、`Proxy-Authorization`、`X-API-Key`、`API-Key` 等敏感 hop/auth headers，也不接受在 URL 的 username/password 中内嵌凭据。
 - `redirect: "manual"`，避免 30x 把 Authorization 带到未经校验的新 origin。
 - 15 秒超时，限制响应体大小（建议 1 MiB），只接受 JSON；错误中不回显原始响应正文。
 - `401/403` → `unauthorized`，`429` → `rate-limited`，超时/连接/5xx → `unavailable`，JSON/字段不符 → `invalid-response`。
@@ -340,7 +340,7 @@ CC Switch 也区分瞬时传输失败和确定性失败：前者交给查询层�
 - Kimi/Z.ai/MiniMax：复用订阅进度条，分别显示 5 小时和周窗口及重置时间。
 - 颜色语义继续按已用率：低于 70% 正常、70–89% 警告、90% 及以上危险；这是 CC Switch 的现有规则。[百分比配色](https://github.com/farion1231/cc-switch/blob/40d747c009bff6a6097d5094e57d205420d9b24c/src/components/SubscriptionQuotaFooter.tsx#L46-L68)
 - Provider picker 的每个选项携带 `accountMode/adapter` 元数据，不再由前端 `subscriptionIdFor()` 推断。
-- 打开面板或切换选项时只请求 `/account?provider=<selected>`；五分钟定时器也只刷新当前选择。配置测试可先用命令行诊断脚本实现，后续再考虑只读预览 UI。
+- 打开面板或切换选项时，浏览器只请求 `/account?provider=<selected>`。服务端独立在启动时及每五分钟刷新所有已配置账户与本地 Token 聚合；配置测试可先用命令行诊断脚本实现，后续再考虑只读预览 UI。
 
 ## 实施里程碑
 
@@ -385,7 +385,7 @@ CC Switch 也区分瞬时传输失败和确定性失败：前者交给查询层�
 这不是简单增加一个 provider ID，而是新增公共 account protocol、Cordis config schema 和查询调度方式。建议作为 `0.2.0` 开发，不塞入安装修复版 `0.1.3`：
 
 - `0.1.3`：只包含已完成的安装器 YAML 修复，便于用户安全升级。
-- `0.2.0-alpha.1`：M1（统一协议、New API、只查当前 provider），先用真实但脱敏的 New API fixture/实例验证。
+- `0.2.0-alpha.1`：M1（统一协议、New API、客户端只查当前 provider、服务端后台全量缓存），先用真实但脱敏的 New API fixture/实例验证。
 - `0.2.0-beta.1`：M2 + M3（Kimi/MiniMax、声明式 Custom 与 Config schema）。
 - `0.2.0`：完成兼容回归、安全测试和文档后发布；旧 `/balance`、`/subscriptions` 暂保留并标记 deprecated。
 
@@ -397,13 +397,13 @@ CC Switch 也区分瞬时传输失败和确定性失败：前者交给查询层�
 | New API 部署自定义换算 | 从 `/api/status` 读取 `quota_per_unit`，500000 只作旧实例 fallback，并在诊断结果中标记 fallback。 |
 | 同一 provider 同时有余额和套餐 | 配置显式选择 adapter/mode，不以 Base URL 猜测用户意图。 |
 | 自定义请求造成 SSRF/密钥泄露 | 不执行 JS；默认 HTTPS+同源；手动 redirect；密钥只由 credential ref 注入。 |
-| provider 数量增加导致后台请求膨胀 | 后端 endpoint 按 provider 查询，客户端只刷新当前选择项。 |
+| provider 数量增加导致后台请求膨胀 | 浏览器 endpoint 按 provider 查询；服务端按明确的后台监测契约每五分钟刷新所有已配置账户。上游限流会归类并使用 stale 缓存，不缩短刷新周期。 |
 | 管理 PAT 与推理 Token 混淆 | New API 先用 token-scoped endpoint；管理 PAT 只作为显式 fallback，字段名和文档都标明用途。 |
 
 ## 建议的验收标准
 
 1. 未配置新 monitor 时，DeepSeek、OpenRouter、Moonshot、OpenCode Go、Z.ai 现有行为不变。
-2. 选择 provider A 时不会向 provider B/C 发出余额或套餐请求。
+2. 浏览器选择 provider A 时只调用 A 的 `/account`；服务端后台任务仍按启动即刷新、每五分钟全量刷新的监测契约查询所有已配置账户。
 3. New API 默认只需现有推理 Token；非默认 `quota_per_unit` 的金额换算正确。
 4. 所有浏览器响应、日志、错误和缓存均不含 API Key、PAT、Cookie 或原始上游正文。
 5. 自定义模板无法跨 origin、跟随未验证 redirect 或访问私网，除非配置明确 opt-in。

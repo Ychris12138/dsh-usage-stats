@@ -185,7 +185,7 @@ const noLocalAuth = {
 	const minimax = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: secret, MINIMAX_API_REGION: "cn" }), {}, {
 		now: () => now,
 		fetch: async (url, init) => {
-			assert.equal(String(url), "https://api.minimaxi.com/v1/api/openplatform/coding_plan/remains");
+			assert.equal(String(url), "https://www.minimaxi.com/v1/token_plan/remains");
 			assert.equal(init.headers.authorization, `Bearer ${secret}`);
 			return {
 				ok: true,
@@ -228,10 +228,10 @@ const noLocalAuth = {
 	});
 	assert.equal(minimax.status, "ok");
 	assert.deepEqual(calls, [
-		"https://api.minimax.io/v1/api/openplatform/coding_plan/remains",
-		"https://api.minimax.io/v1/token_plan/remains"
+		"https://www.minimax.io/v1/token_plan/remains",
+		"https://api.minimax.io/v1/api/openplatform/coding_plan/remains"
 	]);
-	console.log("MiniMax endpoint compatibility fallback ok");
+	console.log("MiniMax official endpoint and legacy fallback ok");
 }
 
 {

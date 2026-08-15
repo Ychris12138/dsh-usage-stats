@@ -185,7 +185,7 @@ Sub2API 风格的 `GET {baseURL}/v1/usage` 同时支持钱包余额、独立额�
               currency: /currency
 ```
 
-支持的内置 adapter：`new-api`、`sub2api`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`，以及已有的 DeepSeek/OpenRouter/Moonshot 余额适配器。声明式请求默认要求 HTTPS、同源相对路径、手动处理重定向，并限制 JSON 响应为 1 MiB；跨域、HTTP 或私网地址必须分别显式启用 `allowCrossOrigin`、`allowInsecure`、`allowPrivateNetwork`。发送凭据前会校验域名的全部 IPv4/IPv6 解析结果，并把连接固定到已校验地址，避免 DNS 重绑定绕过私网限制。
+支持的内置 adapter：`new-api`、`sub2api`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`，以及已有的 DeepSeek/OpenRouter/Moonshot 余额适配器。声明式请求默认要求 HTTPS、同源相对路径、手动处理重定向，并限制 JSON 响应为 1 MiB；跨域、HTTP 或私网地址必须分别显式启用 `allowCrossOrigin`、`allowInsecure`、`allowPrivateNetwork`。发送凭据前会校验域名的全部 IPv4/IPv6 解析结果，并把连接固定到已校验地址，避免 DNS 重绑定绕过私网限制。`usageBaseURL` 不得内嵌 username/password，`Authorization`、`X-API-Key`、`API-Key` 等鉴权 header 也不能写入 literal `request.headers`，必须通过 `credentialRef` 注入。
 
 `warning.warnBelow` 和 `warning.criticalBelow` 为余额绝对值阈值。具有总额度的 API 和 Token Plan 会自动产生基于剩余百分比的 `normal / warning / critical` 状态（默认 30%/10%），为后续 UI 预警展示预留。
 

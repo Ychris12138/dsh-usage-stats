@@ -63,9 +63,21 @@ async function stubFetchOnce(payload, status = 200) {
 // Upstream HTTP errors surface as throws.
 {
 	const calls = await stubFetchOnce({}, 429);
-	await assert.rejects(() => queryBalance("deepseek", "https://api.deepseek.com", "sk-test"), /HTTP 429/);
+	await assert.rejects(
+		() => queryBalance("deepseek", "https://api.deepseek.com", "sk-test"),
+		(error) => error.providerStatus === "rate-limited" && error.httpStatus === 429
+	);
 	assert.equal(calls.length, 1);
-	console.log("upstream error propagation ok");
+	console.log("upstream HTTP status classification ok");
+}
+
+{
+	globalThis.fetch = async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("bad JSON"); } });
+	await assert.rejects(
+		() => queryBalance("deepseek", "https://api.deepseek.com", "sk-test"),
+		(error) => error.providerStatus === "invalid-response"
+	);
+	console.log("upstream JSON error classification ok");
 }
 
 delete globalThis.fetch;

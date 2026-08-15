@@ -91,6 +91,35 @@ async function testConfigValidation(root) {
 	assert.equal(routes.size, 0, "invalid provider config must fail before routes are registered");
 }
 
+async function testLegacyZaiSubscriptionId(root) {
+	const plugin = await freshModule("legacy-zai", join(root, "legacy-zai"));
+	const routes = new Map();
+	const account = {
+		id: "zai-coding-cn",
+		displayName: "Z.ai CN",
+		mode: "subscription",
+		adapter: "zai-token-plan",
+		status: "ok",
+		windows: []
+	};
+	const accounts = {
+		validate: async () => {},
+		subscriptionAccounts: async () => [account],
+		providerViews: async () => [],
+		get: async () => null,
+		refreshAll: async () => []
+	};
+	await plugin.apply(makeContext({ sessions: { list: () => [] }, persistence: { listSnapshots: async () => [], list: async () => [] }, routes }), {}, {
+		disableBackgroundRefresh: true,
+		accounts
+	});
+	const response = makeResponse();
+	await routes.get(plugin.SUBSCRIPTIONS_PATH)({ method: "GET", url: plugin.SUBSCRIPTIONS_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, response);
+	const legacy = JSON.parse(response.body).subscriptions[0];
+	assert.equal(legacy.id, "zai", "0.1.x clients require the canonical Z.ai subscription id");
+	assert.equal(account.id, "zai-coding-cn", "legacy canonicalization must not mutate the account protocol");
+}
+
 async function testBackgroundRefresh(root) {
 	const plugin = await freshModule("background", join(root, "background"));
 	let refreshes = 0;
@@ -165,6 +194,7 @@ const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
 	await testConfigValidation(root);
+	await testLegacyZaiSubscriptionId(root);
 	await testBackgroundRefresh(root);
 	await testPersistedToLive(root);
 	await testRevisionRewrite(root);

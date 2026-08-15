@@ -35,6 +35,13 @@ const passion = {
 	baseURL: "https://api.passionapi.com"
 };
 
+const deepseek = {
+	id: "deepseek-official",
+	displayName: "DeepSeek",
+	apiKeyEnv: "DEEPSEEK_API_KEY",
+	baseURL: "https://api.deepseek.com"
+};
+
 assert.equal(isPrivateAddress("127.0.0.1"), true);
 assert.equal(isPrivateAddress("::ffff:127.0.0.1"), true);
 assert.equal(isPrivateAddress("::ffff:7f00:1"), true);
@@ -98,6 +105,64 @@ console.log("IPv4/IPv6 private-address classification ok");
 	assert.equal(calls[0].init.headers.authorization, "Bearer sk-relay");
 	assert.equal(JSON.stringify(account).includes("sk-relay"), false);
 	console.log("New API token-scoped normalization ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "new-api" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => String(url).endsWith("/api/status")
+			? jsonResponse({ data: { quota_per_unit: 500000 } })
+			: jsonResponse({ code: true, data: { total_granted: 1, total_used: 0, total_available: 1, expires_at: 0 } })
+	});
+	assert.equal(account.balance.expiresAt, null, "expires_at=0 means no expiry, not the Unix epoch");
+	console.log("New API zero expiry normalization ok");
+}
+
+{
+	const spec = resolveAccountSpec(deepseek, validateAccountConfig());
+	for (const [httpStatus, providerStatus] of [[401, "unauthorized"], [403, "unauthorized"], [429, "rate-limited"], [503, "unavailable"]]) {
+		const account = await queryAccount(spec, credentials({ DEEPSEEK_API_KEY: "sk-test" }), {
+			now: () => now,
+			fetch: async () => jsonResponse({}, httpStatus)
+		});
+		assert.equal(account.status, providerStatus, `HTTP ${httpStatus} should map to ${providerStatus}`);
+	}
+	const malformed = await queryAccount(spec, credentials({ DEEPSEEK_API_KEY: "sk-test" }), {
+		now: () => now,
+		fetch: async () => ({ ok: true, status: 200, json: async () => { throw new SyntaxError("bad JSON"); } })
+	});
+	assert.equal(malformed.status, "invalid-response");
+	console.log("built-in balance account status classification ok");
+}
+
+{
+	const spec = resolveAccountSpec(deepseek, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ DEEPSEEK_API_KEY: "sk-test" }), {
+		now: () => now,
+		fetch: async () => jsonResponse({
+			is_available: false,
+			balance_infos: [{ currency: "CNY", total_balance: "12.50", granted_balance: "0", topped_up_balance: "12.50" }]
+		})
+	});
+	assert.equal(account.status, "unavailable");
+	assert.equal(account.balance.available, false);
+	assert.equal(account.balance.remaining, 12.5);
+	console.log("DeepSeek provider-reported unavailable state ok");
+}
+
+{
+	const provider = { id: "openrouter", displayName: "OpenRouter", apiKeyEnv: "OPENROUTER_API_KEY", baseURL: "https://openrouter.ai/api/v1" };
+	const spec = resolveAccountSpec(provider, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ OPENROUTER_API_KEY: "sk-test" }), {
+		now: () => now,
+		fetch: async () => jsonResponse({ credits: 0 })
+	});
+	assert.equal(account.status, "ok", "a valid zero balance is not a transport/account availability failure");
+	assert.equal(account.balance.remaining, 0);
+	console.log("built-in zero balance remains a successful response");
 }
 
 {
@@ -258,6 +323,23 @@ console.log("IPv4/IPv6 private-address classification ok");
 		}
 	} }), /relative path/i);
 	console.log("declarative absolute URL rejection ok");
+}
+
+{
+	for (const header of ["x-api-key", "api-key"]) {
+		assert.throws(() => validateAccountConfig({ monitors: {
+			"relay-a": {
+				adapter: "declarative",
+				mode: "balance",
+				request: { path: "/balance", headers: { [header]: "literal-secret" } },
+				extract: { remaining: "/balance" }
+			}
+		} }), /cannot override/i);
+	}
+	assert.throws(() => validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "new-api", usageBaseURL: "https://user:password@relay.example.com" }
+	} }), /must not contain credentials/i);
+	console.log("literal auth header and URL credential rejection ok");
 }
 
 {

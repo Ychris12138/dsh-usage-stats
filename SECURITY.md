@@ -14,4 +14,4 @@ Never include DeepSeek API keys, credentials files, session contents, raw logs, 
 
 Security fixes target the latest version on the default branch. The five HTTP endpoints are designed for direct loopback use only; exposing them through a reverse proxy is outside the supported security model unless the proxy adds authentication and access control.
 
-Declarative account monitors are trusted local configuration, but they still default to HTTPS, same-origin relative paths, manual redirects, JSON-only responses, and a 1 MiB response limit. Enabling cross-origin, insecure HTTP, or private-network access expands the trust boundary and should be done only for an endpoint you control.
+Declarative account monitors are trusted local configuration, but they still default to HTTPS, same-origin relative paths, manual redirects, JSON-only responses, and a 1 MiB response limit. Before sending credentials, the plugin rejects non-public IPv4/IPv6 DNS answers and pins the validated address for the connection. Enabling cross-origin, insecure HTTP, or private-network access expands the trust boundary and should be done only for an endpoint you control.

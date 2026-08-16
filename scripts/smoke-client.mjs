@@ -29,6 +29,13 @@ const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", 
 if (!source.includes("/api/usage-stats/account")) throw new Error("client must use the unified account endpoint");
 if (source.includes('fetchJson("/api/usage-stats/subscriptions")')) throw new Error("client must not bulk-fetch every subscription provider");
 if (!source.includes('host.style.flexDirection = "column"')) throw new Error("client must stack the host footer-actions container vertically (#21)");
+// Badge layout regression: the collapsed badge must keep the 「用量/余额」label,
+// render the account value as a separate middle element, and keep today's token
+// count on the right — the label must never be replaced by the amount.
+if (!source.includes('translate("panel.badge")')) throw new Error("badge must keep the label text");
+if (!source.includes("badgeAmountText !== null &&")) throw new Error("badge amount must be a separate middle element");
+if (!source.includes("S.badgeAmount")) throw new Error("badge amount element is missing its class");
+if (!source.includes("badgeCount !== null && react_jsx_runtime.jsx(\"span\", { className: S.badgeCount")) throw new Error("badge must keep the today token count on the right");
 new Function(source)(); // executes the window.__ModuleLoader__.load call
 
 if (captured === null) throw new Error("loader did not capture the bundle");

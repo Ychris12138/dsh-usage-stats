@@ -233,11 +233,35 @@ const noLocalAuth = {
 		}
 	});
 	assert.equal(minimax.status, "ok");
+	assert.deepEqual(minimax.windows.map((window) => [window.kind, window.remainingPercent]), [["session", 90]]);
 	assert.deepEqual(calls, [
 		"https://www.minimax.io/v1/token_plan/remains",
+		"https://api.minimax.io/v1/token_plan/remains"
+	]);
+	console.log("MiniMax official endpoint and api-host fallback ok");
+}
+
+{
+	const calls = [];
+	const minimax = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			if (calls.length < 3) return { ok: false, status: 404, json: async () => ({}) };
+			return {
+				ok: true,
+				status: 200,
+				json: async () => ({ model_remains: [{ model_name: "general", current_interval_remaining_percent: 88 }] })
+			};
+		}
+	});
+	assert.equal(minimax.status, "ok");
+	assert.deepEqual(calls, [
+		"https://www.minimax.io/v1/token_plan/remains",
+		"https://api.minimax.io/v1/token_plan/remains",
 		"https://api.minimax.io/v1/api/openplatform/coding_plan/remains"
 	]);
-	console.log("MiniMax official endpoint and legacy fallback ok");
+	console.log("MiniMax legacy coding-plan fallback ok");
 }
 
 {
@@ -246,12 +270,114 @@ const noLocalAuth = {
 		fetch: async () => ({
 			ok: true,
 			status: 200,
-			json: async () => ({ model_remains: [{ model_name: "text-01", current_interval_remaining_percent: 99 }] })
+			json: async () => ({ model_remains: [{ model_name: "video", current_interval_remaining_percent: 99 }] })
 		})
 	});
 	assert.equal(minimax.status, "invalid-response");
 	assert.deepEqual(minimax.windows, []);
-	console.log("MiniMax ignores non-general model quotas ok");
+	assert.equal(minimax.reason, "model_remains has no general/chat-model entry");
+	console.log("MiniMax ignores non-chat model quotas ok");
+}
+
+{
+	// Newer payload versions name the chat entry after the model itself
+	// (e.g. "MiniMax-M3") instead of the "general" resource group (#14).
+	const minimax = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async () => ({
+			ok: true,
+			status: 200,
+			json: async () => ({
+				base_resp: { status_code: 0, status_msg: "success" },
+				model_remains: [
+					{ model_name: "video", current_interval_remaining_percent: 66, current_weekly_remaining_percent: 95 },
+					{
+						model_name: "MiniMax-M3",
+						current_interval_remaining_percent: 80,
+						remains_time: 3600000,
+						current_weekly_remaining_percent: 45,
+						weekly_remains_time: 604800000
+					}
+				]
+			})
+		})
+	});
+	assert.equal(minimax.status, "ok");
+	assert.deepEqual(minimax.windows.map((window) => [window.kind, window.remainingPercent]), [
+		["session", 80],
+		["weekly", 45]
+	]);
+	console.log("MiniMax model-named chat entry ok");
+}
+
+{
+	// Window status semantics: 1 = normal, 2 = exhausted, 3 = unlimited.
+	// Exhausted/unlimited windows must still render instead of disappearing (#14).
+	const fetchFor = (entry) => async () => ({ ok: true, status: 200, json: async () => ({ model_remains: [{ model_name: "general", ...entry }] }) });
+	const exhausted = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: fetchFor({ current_interval_remaining_percent: 12, current_weekly_status: 2 })
+	});
+	assert.deepEqual(exhausted.windows.map((window) => [window.kind, window.remainingPercent]), [
+		["session", 12],
+		["weekly", 0]
+	]);
+	const unlimited = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: fetchFor({ current_interval_status: 3, current_weekly_status: 1, current_weekly_remaining_percent: 64 })
+	});
+	assert.deepEqual(unlimited.windows.map((window) => [window.kind, window.remainingPercent]), [
+		["session", 100],
+		["weekly", 64]
+	]);
+	const legacyCounters = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: fetchFor({ current_interval_total_count: 1500, current_interval_usage_count: 300, current_weekly_remaining_percent: 70 })
+	});
+	assert.deepEqual(legacyCounters.windows.map((window) => [window.kind, window.remainingPercent]), [
+		["session", 80],
+		["weekly", 70]
+	]);
+	console.log("MiniMax window status and counter fallbacks ok");
+}
+
+{
+	// Upstream business errors surface as invalid-response with a safe reason.
+	const minimax = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async () => ({
+			ok: true,
+			status: 200,
+			json: async () => ({ base_resp: { status_code: 2057, status_msg: "not a coding plan key" } })
+		})
+	});
+	assert.equal(minimax.status, "invalid-response");
+	assert.deepEqual(minimax.windows, []);
+	assert.equal(minimax.reason, "base_resp status_code 2057: not a coding plan key");
+	console.log("MiniMax base_resp error reason ok");
+}
+
+{
+	// A non-JSON (HTML) reply from the www host falls through to the api host.
+	const calls = [];
+	const minimax = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			if (calls.length === 1) return { ok: true, status: 200, json: async () => { throw new SyntaxError("Unexpected token <"); } };
+			return {
+				ok: true,
+				status: 200,
+				json: async () => ({ model_remains: [{ model_name: "general", current_interval_remaining_percent: 77, current_weekly_remaining_percent: 55 }] })
+			};
+		}
+	});
+	assert.equal(minimax.status, "ok");
+	assert.deepEqual(calls, [
+		"https://www.minimax.io/v1/token_plan/remains",
+		"https://api.minimax.io/v1/token_plan/remains"
+	]);
+	console.log("MiniMax non-JSON host fallback ok");
 }
 
 {

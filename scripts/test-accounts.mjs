@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import {
 	createAccountService,
+	isFakeIpAddress,
 	isPrivateAddress,
 	queryAccount,
 	resolveAccountSpec,
+	resolvePublicAddress,
 	validateAccountConfig
 } from "../lib/accounts.js";
 
@@ -53,6 +55,13 @@ assert.equal(isPrivateAddress("2001:2::1"), true);
 assert.equal(isPrivateAddress("2002:7f00:1::"), true);
 assert.equal(isPrivateAddress("2606:4700:4700::1111"), false);
 console.log("IPv4/IPv6 private-address classification ok");
+
+assert.equal(isFakeIpAddress("198.18.0.1"), true);
+assert.equal(isFakeIpAddress("198.19.255.255"), true);
+assert.equal(isFakeIpAddress("198.17.0.1"), false);
+assert.equal(isFakeIpAddress("192.168.1.1"), false);
+assert.equal(isFakeIpAddress("::ffff:198.18.1.68"), true);
+console.log("proxy fake-ip range classification ok");
 
 {
 	const spec = resolveAccountSpec(passion, validateAccountConfig());
@@ -477,6 +486,36 @@ console.log("IPv4/IPv6 private-address classification ok");
 	});
 	assert.equal(account.status, "unsupported", "DNS answers pointing at private networks must be rejected before connecting");
 	console.log("DNS-to-private-network rejection ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general" }
+	} }));
+	// Fake-ip DNS is a proxy artifact (Clash/Surge fake-ip mode): the answer
+	// is routed locally back to the requested hostname, so the pinned
+	// connection is allowed instead of being mistaken for an SSRF signal.
+	const target = await resolvePublicAddress(new URL(spec.baseURL), spec, {
+		lookup: async () => [{ address: "198.18.1.68", family: 4 }]
+	});
+	assert.equal(target.address, "198.18.1.68", "proxy fake-ip answers must be pinned, not rejected");
+	console.log("proxy fake-ip DNS answers are pinned, not rejected");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general" }
+	} }));
+	// Genuine private answers keep the hard block even when the DNS runs
+	// through a proxy that also emits fake-ip ranges.
+	await assert.rejects(
+		resolvePublicAddress(new URL(spec.baseURL), spec, {
+			lookup: async () => [{ address: "10.0.0.5", family: 4 }]
+		}),
+		/private network/,
+		"genuine private answers must stay rejected"
+	);
+	console.log("genuine private answers stay rejected");
 }
 
 {

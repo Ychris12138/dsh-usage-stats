@@ -197,6 +197,31 @@ const invalidMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCa
 }));
 if (!invalidMarkup.includes("account.status.invalidResponse") || !invalidMarkup.includes("account.invalidResponse")) throw new Error("invalid account responses need a distinct status and explanation");
 
+// Local security-policy rejections must render a distinct blocked state, not
+// the "provider has no balance interface" unsupported message.
+const blockedMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "relay-a", displayName: "Relay A", accountMode: "balance" },
+	account: { id: "relay-a", displayName: "Relay A", mode: "balance", status: "blocked", balance: null },
+	accountLoading: false,
+	accountError: null,
+	translate: translateAccount,
+	onRetry: () => {}
+}));
+const blockedSubMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "opencode-go", displayName: "OpenCode Go", accountMode: "subscription" },
+	account: { id: "opencode-go", displayName: "OpenCode Go", mode: "subscription", status: "blocked", windows: [] },
+	accountLoading: false,
+	accountError: null,
+	translate: translateAccount,
+	onRetry: () => {}
+}));
+if (!blockedMarkup.includes("account.status.blocked") || !blockedMarkup.includes("account.blocked")) throw new Error("blocked balance queries need a distinct status and neutral explanation");
+if (!blockedSubMarkup.includes("account.status.blocked") || !blockedSubMarkup.includes("account.blocked")) throw new Error("blocked subscription queries need a distinct status and neutral explanation");
+if (blockedMarkup.includes("balance.unsupported")) throw new Error("blocked must not reuse the unsupported explanation");
+if (blockedMarkup.includes("balance.blocked") || blockedSubMarkup.includes("balance.blocked")) throw new Error("blocked must not reuse the balance-specific explanation");
+if (!source.includes('"account.status.blocked"') || !source.includes('"account.blocked"')) throw new Error("blocked status keys missing from client locales");
+if (source.includes('"balance.blocked"')) throw new Error("balance-specific blocked copy must not be reintroduced");
+
 const choices = buildProviderChoices([
 	{ id: "deepseek-official", displayName: "DeepSeek", adapter: "deepseek-balance", accountMode: "balance", configured: true },
 	{ id: "zai-coding-cn", displayName: "Z.ai CN", adapter: "zai-token-plan", accountMode: "subscription", configured: true },

@@ -405,7 +405,7 @@ console.log("IPv4/IPv6 private-address classification ok");
 		}
 	} }));
 	const account = await queryAccount(spec, credentials({}), { now: () => now, fetch: async () => { throw new Error("must not fetch"); } });
-	assert.equal(account.status, "unsupported");
+	assert.equal(account.status, "blocked", "cross-origin policy rejection must surface as blocked");
 	console.log("declarative cross-origin default deny ok");
 }
 
@@ -422,7 +422,7 @@ console.log("IPv4/IPv6 private-address classification ok");
 		}
 	} }));
 	const account = await queryAccount(spec, credentials({}), { now: () => now, fetch: async () => { throw new Error("must not fetch"); } });
-	assert.equal(account.status, "unsupported", "private network access needs its own opt-in");
+	assert.equal(account.status, "blocked", "private-network policy rejection must surface as blocked, not unsupported");
 	console.log("declarative private-network default deny ok");
 }
 
@@ -479,7 +479,7 @@ console.log("IPv4/IPv6 private-address classification ok");
 		now: () => now,
 		lookup: async () => [{ address: "127.0.0.1", family: 4 }]
 	});
-	assert.equal(account.status, "unsupported", "DNS answers pointing at private networks must be rejected before connecting");
+	assert.equal(account.status, "blocked", "DNS answers pointing at private networks must surface as blocked, not unsupported");
 	console.log("DNS-to-private-network rejection ok");
 }
 
@@ -533,7 +533,7 @@ console.log("IPv4/IPv6 private-address classification ok");
 		now: () => now,
 		lookup: async () => { throw new Error("literal targets must be blocked before DNS lookup"); }
 	});
-	assert.equal(account.status, "unsupported", "literal 198.18/15 targets must remain blocked without allowPrivateNetwork");
+	assert.equal(account.status, "blocked", "literal 198.18/15 targets must surface as blocked without allowPrivateNetwork");
 	console.log("literal benchmarking-range target rejection ok");
 }
 
@@ -562,6 +562,43 @@ console.log("IPv4/IPv6 private-address classification ok");
 		await new Promise((resolve) => server.close(resolve));
 	}
 	console.log("allowPrivateNetwork opt-in preserves private network access ok");
+}
+
+{
+	// No adapter: the provider genuinely has no balance/subscription interface.
+	const bare = resolveAccountSpec(relay, validateAccountConfig());
+	assert.equal(bare.adapter, null);
+	const account = await queryAccount(bare, credentials({}), { now: () => now, fetch: async () => { throw new Error("must not fetch"); } });
+	assert.equal(account.status, "unsupported", "a provider without any adapter must stay unsupported");
+	console.log("missing adapter stays unsupported ok");
+}
+
+{
+	// HTTP 404/405: the upstream itself has no such account API.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async () => jsonResponse({}, 404)
+	});
+	assert.equal(account.status, "unsupported", "HTTP 404 must stay unsupported, not blocked");
+	console.log("upstream 404 stays unsupported ok");
+}
+
+{
+	// HTTPS policy: local security policy rejects the plain-HTTP target before
+	// any DNS resolution or connection attempt.
+	const insecureProvider = { ...relay, baseURL: "http://relay.example.com/v1" };
+	const spec = resolveAccountSpec(insecureProvider, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		lookup: async () => { throw new Error("must not resolve before the HTTPS policy check"); }
+	});
+	assert.equal(account.status, "blocked", "non-HTTPS targets must surface as blocked without allowInsecure");
+	console.log("non-HTTPS policy rejection ok");
 }
 
 {

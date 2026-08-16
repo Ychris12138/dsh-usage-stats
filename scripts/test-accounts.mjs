@@ -4,6 +4,7 @@ import {
 	isPrivateAddress,
 	queryAccount,
 	resolveAccountSpec,
+	selectResolvedAddress,
 	validateAccountConfig
 } from "../lib/accounts.js";
 
@@ -52,6 +53,9 @@ assert.equal(isPrivateAddress("100::1"), true);
 assert.equal(isPrivateAddress("2001:2::1"), true);
 assert.equal(isPrivateAddress("2002:7f00:1::"), true);
 assert.equal(isPrivateAddress("2606:4700:4700::1111"), false);
+// RFC 2544 benchmarking (198.18.0.0/15) stays non-public; Clash/Mihomo
+// fake-IP answers are only accepted later through the HTTPS-hostname rule.
+assert.equal(isPrivateAddress("198.18.0.50"), true);
 console.log("IPv4/IPv6 private-address classification ok");
 
 {
@@ -477,6 +481,87 @@ console.log("IPv4/IPv6 private-address classification ok");
 	});
 	assert.equal(account.status, "unsupported", "DNS answers pointing at private networks must be rejected before connecting");
 	console.log("DNS-to-private-network rejection ok");
+}
+
+{
+	const httpsTarget = new URL("https://api.deepseek.com/user/balance");
+	const fakeIpv4 = { address: "198.18.0.50", family: 4 };
+	const fakeUla = { address: "fdfe:dcba:9876::1c", family: 6 };
+	const publicIpv4 = { address: "1.1.1.1", family: 4 };
+
+	assert.deepEqual(
+		selectResolvedAddress(httpsTarget, [fakeUla, fakeIpv4]),
+		fakeIpv4,
+		"HTTPS hostname should accept the IPv4 benchmarking fake-IP when all normal answers are blocked"
+	);
+	assert.deepEqual(
+		selectResolvedAddress(httpsTarget, [fakeIpv4, publicIpv4]),
+		publicIpv4,
+		"a real public address must be preferred over a proxy fake-IP"
+	);
+	assert.equal(
+		selectResolvedAddress(httpsTarget, [
+			{ address: "127.0.0.1", family: 4 },
+			{ address: "10.0.0.1", family: 4 },
+			fakeUla
+		]),
+		null,
+		"ordinary private and ULA answers must remain blocked"
+	);
+	assert.equal(
+		selectResolvedAddress(new URL("http://api.deepseek.com/user/balance"), [fakeIpv4]),
+		null,
+		"the fake-IP exception must not weaken insecure HTTP targets"
+	);
+	assert.equal(
+		selectResolvedAddress(httpsTarget, []),
+		null,
+		"an empty answer set must select nothing"
+	);
+	console.log("resolved-address selection policy ok");
+}
+
+{
+	const literalProvider = {
+		...relay,
+		baseURL: "https://198.18.0.50/v1"
+	};
+	const spec = resolveAccountSpec(literalProvider, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		lookup: async () => { throw new Error("literal targets must be blocked before DNS lookup"); }
+	});
+	assert.equal(account.status, "unsupported", "literal 198.18/15 targets must remain blocked without allowPrivateNetwork");
+	console.log("literal benchmarking-range target rejection ok");
+}
+
+{
+	const { createServer } = await import("node:http");
+	const server = createServer((req, res) => {
+		assert.equal(req.url, "/user/balance");
+		res.writeHead(200, { "content-type": "application/json" });
+		res.end(JSON.stringify({ balance: 9, currency: "USD" }));
+	});
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const { port } = server.address();
+	try {
+		const localProvider = { ...relay, baseURL: `http://127.0.0.1:${port}/v1` };
+		const spec = resolveAccountSpec(localProvider, validateAccountConfig({ monitors: {
+			"relay-a": {
+				adapter: "general",
+				allowPrivateNetwork: true,
+				allowInsecure: true
+			}
+		} }));
+		const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), { now: () => now });
+		assert.equal(account.status, "ok", "explicit allowPrivateNetwork must preserve private network access");
+		assert.equal(account.balance.remaining, 9);
+	} finally {
+		await new Promise((resolve) => server.close(resolve));
+	}
+	console.log("allowPrivateNetwork opt-in preserves private network access ok");
 }
 
 {

@@ -258,4 +258,26 @@ if (!cny.includes("36.44")) throw new Error(`unexpected CNY format: ${cny}`);
 if (fmtCurrency(void 0, "CNY") !== "—") throw new Error("missing amount must render em dash");
 if (fmtCurrency("9.9", "USD").includes("¥")) throw new Error("USD must not render as ¥");
 console.log("currency formatting ok:", cny);
+
+// Collapsed-badge account value + warning policy (v0.2.0 unified account model).
+const { badgeAccountValue, badgeWarnOf } = exports_;
+// balance just above the threshold => normal, no warning
+const balanceOk = badgeAccountValue({ mode: "balance", status: "ok", balance: { remaining: 6, currency: "USD" } });
+if (balanceOk === null || balanceOk.kind !== "balance" || balanceOk.value !== 6) throw new Error(`balance 6 must render amount, got ${JSON.stringify(balanceOk)}`);
+if (!balanceOk.display.includes("6")) throw new Error("balance display must include the amount");
+if (badgeWarnOf({ mode: "balance", status: "ok", balance: { remaining: 6, currency: "USD" } }) !== false) throw new Error("balance 6 must NOT warn");
+// balance at/below threshold => warning (red)
+if (badgeWarnOf({ mode: "balance", status: "ok", balance: { remaining: 5, currency: "USD" } }) !== true) throw new Error("balance 5 must warn");
+if (badgeWarnOf({ mode: "balance", status: "ok", balance: { remaining: 0, currency: "USD" } }) !== true) throw new Error("balance 0 must warn");
+// subscription: lowest remaining percent wins
+const subLow = badgeAccountValue({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 4 }] });
+if (subLow === null || subLow.kind !== "percent" || subLow.value !== 4 || subLow.display !== "4%") throw new Error(`subscription must warn on the lowest window, got ${JSON.stringify(subLow)}`);
+if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 4 }] }) !== true) throw new Error("subscription with a 4% window must warn");
+if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 55 }] }) !== false) throw new Error("subscription all above 5% must NOT warn");
+// not-configured / unavailable / empty => no misleading numeric value, no warning
+if (badgeAccountValue({ mode: "balance", status: "not-configured" }) !== null) throw new Error("not-configured balance must not show a numeric badge");
+if (badgeAccountValue({ mode: "subscription", status: "unavailable", windows: [] }) !== null) throw new Error("unavailable subscription must not show a numeric badge");
+if (badgeWarnOf({ mode: "balance", status: "not-configured" }) !== false) throw new Error("not-configured must never warn");
+if (badgeWarnOf(null) !== false) throw new Error("null account must never warn");
+console.log("collapsed-badge account value + warning policy ok");
 console.log("SMOKE TEST PASSED");

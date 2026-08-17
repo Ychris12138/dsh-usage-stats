@@ -36,6 +36,9 @@ if (captured.id !== "dsh-usage-stats") throw new Error(`unexpected id ${captured
 const exports_ = captured.factory((spec) => {
 	if (spec === "react") return react;
 	if (spec === "react/jsx-runtime") return jsxRuntime;
+	// react-dom/server cannot render portals; the panel portals to document.body
+	// only for theme-token scoping, so the smoke harness inlines it instead.
+	if (spec === "react-dom") return { createPortal: (node) => node };
 	if (spec === "@deepseek-ai/dsh-client-ui-primitives") return primitives;
 	throw new Error(`unexpected require: ${spec}`);
 });

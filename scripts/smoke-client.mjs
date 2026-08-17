@@ -286,5 +286,16 @@ if (badgeAccountValue({ mode: "balance", status: "not-configured" }) !== null) t
 if (badgeAccountValue({ mode: "subscription", status: "unavailable", windows: [] }) !== null) throw new Error("unavailable subscription must not show a numeric badge");
 if (badgeWarnOf({ mode: "balance", status: "not-configured" }) !== false) throw new Error("not-configured must never warn");
 if (badgeWarnOf(null) !== false) throw new Error("null account must never warn");
+// stale/unavailable snapshots that still carry PREVIOUS data must NOT render a
+// colored value (the badge must not show an outdated balance/quota as current)
+const staleBalance = { mode: "balance", status: "unavailable", stale: true, balance: { remaining: 2, currency: "CNY" } };
+if (badgeAccountValue(staleBalance) !== null) throw new Error("stale balance snapshot must not render a numeric badge");
+if (badgeWarnOf(staleBalance) !== false) throw new Error("stale balance snapshot must never warn");
+const staleSubscription = { mode: "subscription", status: "unavailable", stale: true, windows: [{ remainingPercent: 3 }] };
+if (badgeAccountValue(staleSubscription) !== null) throw new Error("stale subscription snapshot must not render a numeric badge");
+if (badgeWarnOf(staleSubscription) !== false) throw new Error("stale subscription snapshot must never warn");
+// a stale flag on an otherwise ok snapshot is also a no-render condition
+const okButStale = { mode: "balance", status: "ok", stale: true, balance: { remaining: 100, currency: "USD" } };
+if (badgeAccountValue(okButStale) !== null) throw new Error("ok-but-stale snapshot must not render a numeric badge");
 console.log("collapsed-badge account value + warning policy ok");
 console.log("SMOKE TEST PASSED");

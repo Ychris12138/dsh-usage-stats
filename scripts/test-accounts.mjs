@@ -671,4 +671,32 @@ console.log("IPv4/IPv6 private-address classification ok");
 	console.log("unknown monitor provider rejection ok");
 }
 
+{
+	const service = createAccountService({
+		credentials: credentials({ LATE_PROVIDER_API_KEY: "sk-late-provider" }),
+		getProviders: async () => [],
+		config: validateAccountConfig({ monitors: {
+			"late-provider": {
+				adapter: "sub2api",
+				usageBaseURL: "https://late-provider.example.com",
+				credentialRef: "LATE_PROVIDER_API_KEY"
+			}
+		} }),
+		deps: {
+			includeLegacyProviders: false,
+			fetch: async (url, init) => {
+				assert.equal(String(url), "https://late-provider.example.com/v1/usage");
+				assert.equal(init.headers.authorization, "Bearer sk-late-provider");
+				return jsonResponse({ mode: "unrestricted", isValid: true, remaining: 12.5, unit: "USD", balance: 12.5 });
+			}
+		}
+	});
+	const view = (await service.providerViews()).find((entry) => entry.id === "late-provider");
+	assert.equal(view?.adapter, "sub2api");
+	const account = await service.get("late-provider");
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 12.5);
+	console.log("explicit dynamic provider monitor fallback ok");
+}
+
 console.log("ACCOUNT TESTS PASSED");

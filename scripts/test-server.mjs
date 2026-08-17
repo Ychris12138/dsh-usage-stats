@@ -190,6 +190,48 @@ async function testRevisionRewrite(root) {
 	assert.equal(reads, 3, "rewrite detection must retry from seq 0");
 }
 
+async function testLiveLogShrink(root) {
+	const plugin = await freshModule("shrink", join(root, "shrink"));
+	const id = "shrink-session";
+	const persistence = { listSnapshots: async () => [], list: async () => [] };
+	// Pre-restart: the full live log is folded positionally.
+	let events = [usageEvent(1, 5), usageEvent(2, 7), usageEvent(3, 11)];
+	const sessions = { list: () => [{ id, events }] };
+	const ctx = makeContext({ sessions, persistence });
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 23);
+	// DSH restart restores the session as a SHORTER compressed summary while
+	// the folded cursor still points past the summary's end (#23): the session
+	// must refold from the summary instead of freezing its stats forever.
+	events = [usageEvent(1, 5), usageEvent(3, 11)];
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 16, "a shrunk live log must refold instead of freezing");
+	events = [...events, usageEvent(4, 13)];
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 29, "new events after a restored summary must keep counting");
+}
+
+async function testZeroUsageRowsFiltered(root) {
+	const plugin = await freshModule("zero-rows", join(root, "zero-rows"));
+	// Warmup requests report an all-zero usage sample; the model bucket they
+	// create must not render as an empty "0 tokens" row (#23).
+	const zero = {
+		seq: 1,
+		time: Date.UTC(2026, 7, 13),
+		type: "assistant/message",
+		data: {
+			turn: "turn-1",
+			step: 0,
+			usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+			message: { source: { model: "modlens-opencode/deepseek-v4-flash-free" } }
+		}
+	};
+	const sessions = { list: () => [{ id: "zero-session", events: [zero, usageEvent(2, 9)] }] };
+	const ctx = makeContext({ sessions, persistence: { listSnapshots: async () => [], list: async () => [] } });
+	const usage = await plugin.collectUsage(ctx);
+	assert.equal(usage.total.tokens, 9);
+	const day = usage.days.find((entry) => entry.date === "2026-08-13");
+	assert.equal(day.models.length, 1, "all-zero model buckets must not render as rows");
+	assert.equal(day.models[0].model, "unknown/deepseek-chat");
+}
+
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
@@ -198,6 +240,8 @@ try {
 	await testBackgroundRefresh(root);
 	await testPersistedToLive(root);
 	await testRevisionRewrite(root);
+	await testLiveLogShrink(root);
+	await testZeroUsageRowsFiltered(root);
 	console.log("SERVER REGRESSION TESTS PASSED");
 } finally {
 	delete process.env.DSH_HOME;

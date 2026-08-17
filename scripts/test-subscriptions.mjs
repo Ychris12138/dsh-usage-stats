@@ -85,6 +85,55 @@ const noLocalAuth = {
 
 {
 	const calls = [];
+	const secret = "command-code-secret";
+	const commandCode = await collectSubscription("command-code", credentials({ COMMAND_CODE_API_KEY: secret }), {}, {
+		...noLocalAuth,
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), init });
+			if (String(url).endsWith("/alpha/whoami")) return { ok: true, status: 200, json: async () => ({ org: { id: "org_test" } }) };
+			if (String(url).includes("/alpha/billing/subscriptions")) return { ok: true, status: 200, json: async () => ({ planId: "individual-pro" }) };
+			if (String(url).includes("/alpha/billing/credits")) return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 10, purchasedCredits: 2, freeCredits: 1 }, windowLimits: { fiveHour: { used: 2, cap: 10, resetAt: "2026-08-14T05:00:00Z" }, weekly: { used: 3, cap: 20 } } }) };
+			return { ok: true, status: 200, json: async () => ({ totalCost: 4 }) };
+		}
+	});
+	assert.equal(commandCode.status, "ok");
+	assert.equal(commandCode.plan, "Pro");
+	assert.deepEqual(commandCode.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["credits", 23.5, 76.5],
+		["session", 20, 80],
+		["weekly", 15, 85]
+	]);
+	assert.deepEqual(calls.map((call) => call.url), [
+		"https://api.commandcode.ai/alpha/whoami",
+		"https://api.commandcode.ai/alpha/billing/credits?orgId=org_test",
+		"https://api.commandcode.ai/alpha/usage/summary?orgId=org_test",
+		"https://api.commandcode.ai/alpha/billing/subscriptions?orgId=org_test"
+	]);
+	assert.ok(calls.every((call) => call.init.headers.authorization === `Bearer ${secret}`));
+	assert.equal(JSON.stringify(commandCode).includes(secret), false);
+	console.log("Command Code subscription normalization ok");
+}
+
+{
+	const commandCode = await collectSubscription("command-code", credentials({ COMMAND_CODE_API_KEY: "command-code-secret" }), {}, {
+		...noLocalAuth,
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/whoami")) return { ok: true, status: 200, json: async () => ({ org: null }) };
+			if (String(url).includes("/alpha/billing/credits")) return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 0, purchasedCredits: 0, freeCredits: 0 }, windowLimits: { limited: false, fiveHour: null, weekly: null } }) };
+			if (String(url).includes("/alpha/usage/summary")) return { ok: true, status: 200, json: async () => ({ totalCost: 0 }) };
+			return { ok: true, status: 200, json: async () => ({ success: true, data: null }) };
+		}
+	});
+	assert.equal(commandCode.status, "ok");
+	assert.equal(commandCode.plan, "No active plan");
+	assert.deepEqual(commandCode.windows, []);
+	console.log("Command Code zero-credit account normalization ok");
+}
+
+{
+	const calls = [];
 	const providers = await collectSubscriptions(credentials({}), {}, {
 		homedir: () => "/users/demo",
 		readFile: async (path) => {

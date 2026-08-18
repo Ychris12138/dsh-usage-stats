@@ -20,202 +20,179 @@ jobs:
         with:
           node-version: 24
           cache: npm
-      - name: Apply focused client patch
+      - name: Apply focused patch
         shell: bash
         run: |
           python3 <<'PY'
           from pathlib import Path
 
-          def replace_once(text, old, new, label):
-              count = text.count(old)
-              if count != 1:
-                  raise SystemExit(f"{label}: expected 1 match, got {count}")
+          def once(text, old, new, label):
+              n = text.count(old)
+              if n != 1:
+                  raise SystemExit(f"{label}: expected one match, found {n}")
               return text.replace(old, new, 1)
 
-          path = Path('lib/client.js')
-          text = path.read_text()
+          client = Path("lib/client.js")
+          text = client.read_text()
 
-          marker = '''\n\t\t/**
-\t\t * Normalize server-provided account metadata for the single selector.
+          helper_marker = "\n\t\t/**\n\t\t * Normalize server-provided account metadata for the single selector."
+          helpers = r'''
+
+		/** True when a pointer event happened outside both the portaled panel and its sidebar badge. */
+		function shouldDismissPanel(path, target, layer, panel) {
+			const eventPath = Array.isArray(path) ? path : [];
+			const inside = (root) => root !== null && root !== void 0 && (
+				eventPath.includes(root)
+				|| (target !== null && target !== void 0 && typeof root.contains === "function" && root.contains(target))
+			);
+			return !inside(layer) && !inside(panel);
+		}
+
+		/** Defense-in-depth filter for server-provided, secret-free diagnostic reasons. */
+		function safeDiagnosticReason(reason) {
+			if (typeof reason !== "string") return null;
+			const value = reason.trim();
+			if (value === "" || value.length > 160) return null;
+			if (/(authorization|bearer\s|api[_-]?key|cookie|token\s*[=:]|sk-[a-z0-9])/i.test(value)) return null;
+			return value;
+		}
+
+		function diagnosticReasonText(reason, translate) {
+			const value = safeDiagnosticReason(reason);
+			if (value === null) return null;
+			if (value === "dns-resolution-failed") return translate("account.reason.dnsResolutionFailed");
+			if (value === "all-addresses-unreachable") return translate("account.reason.allAddressesUnreachable");
+			return value;
+		}
 '''
-          helpers = '''
+          if helper_marker not in text:
+              raise SystemExit("helper marker missing")
+          text = text.replace(helper_marker, helpers + helper_marker, 1)
 
-\t\t/** Return true when a pointer event happened outside both the portaled panel and its sidebar badge. */
-\t\tfunction shouldDismissPanel(path, target, layer, panel) {
-\t\t\tconst eventPath = Array.isArray(path) ? path : [];
-\t\t\tconst inside = (root) => root !== null && root !== void 0 && (
-\t\t\t\teventPath.includes(root)
-\t\t\t\t|| (target !== null && target !== void 0 && typeof root.contains === "function" && root.contains(target))
-\t\t\t);
-\t\t\treturn !inside(layer) && !inside(panel);
-\t\t}
-
-\t\t/** Defense-in-depth filter before a server-provided diagnostic reason is rendered in the UI. */
-\t\tfunction safeDiagnosticReason(reason) {
-\t\t\tif (typeof reason !== "string") return null;
-\t\t\tconst value = reason.trim();
-\t\t\tif (value === "" || value.length > 160) return null;
-\t\t\tif (/(authorization|bearer\\s|api[_-]?key|cookie|token\\s*[=:]|sk-[a-z0-9])/i.test(value)) return null;
-\t\t\treturn value;
-\t\t}
-
-\t\tfunction diagnosticReasonText(reason, translate) {
-\t\t\tconst value = safeDiagnosticReason(reason);
-\t\t\tif (value === null) return null;
-\t\t\tif (value === "dns-resolution-failed") return translate("account.reason.dnsResolutionFailed");
-\t\t\tif (value === "all-addresses-unreachable") return translate("account.reason.allAddressesUnreachable");
-\t\t\treturn value;
-\t\t}
-'''
-          if marker not in text:
-              raise SystemExit('helper insertion marker not found')
-          text = text.replace(marker, helpers + marker, 1)
-
-          text = replace_once(
+          text = once(
               text,
-              '\t\t\tconst layerRef = react.useRef(null);\n',
-              '\t\t\tconst layerRef = react.useRef(null);\n\t\t\tconst panelRef = react.useRef(null);\n',
-              'panel ref'
+              "\t\t\tconst layerRef = react.useRef(null);\n",
+              "\t\t\tconst layerRef = react.useRef(null);\n\t\t\tconst panelRef = react.useRef(null);\n",
+              "panel ref"
           )
 
-          effect_marker = '''
-\t\t\t// Keep exactly one valid provider selected across independent provider
-'''
-          dismiss_effect = '''
-\n\t\t\t// Behave like a utility popover: clicks inside the portaled panel or
-\t\t\t// sidebar badge keep it open; clicking anywhere else or pressing Escape
-\t\t\t// dismisses it. Capture-phase pointerdown avoids depending on host event
-\t\t\t// bubbling and composedPath handles the document.body portal correctly.
-\t\t\treact.useEffect(() => {
-\t\t\t\tif (!open) return void 0;
-\t\t\t\tconst onPointerDown = (event) => {
-\t\t\t\t\tconst path = typeof event.composedPath === "function" ? event.composedPath() : [];
-\t\t\t\t\tif (shouldDismissPanel(path, event.target, layerRef.current, panelRef.current)) setOpen(false);
-\t\t\t\t};
-\t\t\t\tconst onKeyDown = (event) => {
-\t\t\t\t\tif (event.key === "Escape") setOpen(false);
-\t\t\t\t};
-\t\t\t\tdocument.addEventListener("pointerdown", onPointerDown, true);
-\t\t\t\tdocument.addEventListener("keydown", onKeyDown, true);
-\t\t\t\treturn () => {
-\t\t\t\t\tdocument.removeEventListener("pointerdown", onPointerDown, true);
-\t\t\t\t\tdocument.removeEventListener("keydown", onKeyDown, true);
-\t\t\t\t};
-\t\t\t}, [open]);
+          effect_marker = "\n\t\t\t// Keep exactly one valid provider selected across independent provider"
+          effect = r'''
+
+			// Utility-popover dismissal: the panel is portaled to document.body, so
+			// use capture-phase pointerdown + composedPath rather than DOM ancestry.
+			react.useEffect(() => {
+				if (!open) return void 0;
+				const onPointerDown = (event) => {
+					const path = typeof event.composedPath === "function" ? event.composedPath() : [];
+					if (shouldDismissPanel(path, event.target, layerRef.current, panelRef.current)) setOpen(false);
+				};
+				const onKeyDown = (event) => {
+					if (event.key === "Escape") setOpen(false);
+				};
+				document.addEventListener("pointerdown", onPointerDown, true);
+				document.addEventListener("keydown", onKeyDown, true);
+				return () => {
+					document.removeEventListener("pointerdown", onPointerDown, true);
+					document.removeEventListener("keydown", onKeyDown, true);
+				};
+			}, [open]);
 '''
           if effect_marker not in text:
-              raise SystemExit('dismiss effect marker not found')
-          text = text.replace(effect_marker, dismiss_effect + effect_marker, 1)
+              raise SystemExit("effect marker missing")
+          text = text.replace(effect_marker, effect + effect_marker, 1)
 
-          text = replace_once(
+          text = once(
               text,
-              '\t\t\t\t\topen && react_dom.createPortal(react_jsx_runtime.jsxs("section", {\n\t\t\t\t\t\tclassName: S.panel,',
-              '\t\t\t\t\topen && react_dom.createPortal(react_jsx_runtime.jsxs("section", {\n\t\t\t\t\t\tref: panelRef,\n\t\t\t\t\t\tclassName: S.panel,',
-              'portal panel ref'
+              'open && react_dom.createPortal(react_jsx_runtime.jsxs("section", {\n\t\t\t\t\t\tclassName: S.panel,',
+              'open && react_dom.createPortal(react_jsx_runtime.jsxs("section", {\n\t\t\t\t\t\tref: panelRef,\n\t\t\t\t\t\tclassName: S.panel,',
+              "panel ref attachment"
           )
 
-          text = replace_once(
+          text = once(
               text,
               '\t\t\tconst balanceMessage = accountError ?? account?.missingCredentials?.[0] ?? status;\n',
               '\t\t\tconst balanceMessage = accountError ?? account?.missingCredentials?.[0] ?? status;\n\t\t\tconst reasonText = diagnosticReasonText(account?.reason, translate);\n',
-              'diagnostic reason calculation'
+              "reason calculation"
           )
 
-          old = '''\t\t\t\t\tsubscriptionMode
-\t\t\t\t\t\t? accountError !== null ? react_jsx_runtime.jsxs("div", {
-\t\t\t\t\t\t\tclassName: S.error,
-\t\t\t\t\t\t\tchildren: [
-\t\t\t\t\t\t\t\treact_jsx_runtime.jsx("span", { children: translate("subscription.error", { message: accountError }) }),
-\t\t\t\t\t\t\t\treact_jsx_runtime.jsx("button", { type: "button", className: S.retry, onClick: onRetry, children: translate("action.retry") })
-\t\t\t\t\t\t\t]
-\t\t\t\t\t\t}) : accountLoading && account === null
-\t\t\t\t\t\t\t? react_jsx_runtime.jsx("p", { className: S.quotaEmpty, children: translate("subscription.loading") })
-\t\t\t\t\t\t\t: react_jsx_runtime.jsx(SubscriptionContent, { provider: account ?? { status: "unavailable", windows: [] }, translate })
-\t\t\t\t\t\t: react_jsx_runtime.jsx(BalanceContent, { balance: account?.balance ?? null, state: balanceState, message: balanceMessage, translate, onRetry })
-\t\t\t\t]
-'''
-          new = '''\t\t\t\t\tsubscriptionMode
-\t\t\t\t\t\t? accountError !== null ? react_jsx_runtime.jsxs("div", {
-\t\t\t\t\t\t\tclassName: S.error,
-\t\t\t\t\t\t\tchildren: [
-\t\t\t\t\t\t\t\treact_jsx_runtime.jsx("span", { children: translate("subscription.error", { message: accountError }) }),
-\t\t\t\t\t\t\t\treact_jsx_runtime.jsx("button", { type: "button", className: S.retry, onClick: onRetry, children: translate("action.retry") })
-\t\t\t\t\t\t\t]
-\t\t\t\t\t\t}) : accountLoading && account === null
-\t\t\t\t\t\t\t? react_jsx_runtime.jsx("p", { className: S.quotaEmpty, children: translate("subscription.loading") })
-\t\t\t\t\t\t\t: react_jsx_runtime.jsx(SubscriptionContent, { provider: account ?? { status: "unavailable", windows: [] }, translate })
-\t\t\t\t\t\t: react_jsx_runtime.jsx(BalanceContent, { balance: account?.balance ?? null, state: balanceState, message: balanceMessage, translate, onRetry }),
-\t\t\t\t\treasonText !== null && status !== "ok" ? react_jsx_runtime.jsx("p", { className: S.note, children: reasonText }) : null
-\t\t\t\t]
-'''
-          text = replace_once(text, old, new, 'ProviderAccountCard body')
-
-          text = replace_once(
+          body_line = '\t\t\t\t\t\t: react_jsx_runtime.jsx(BalanceContent, { balance: account?.balance ?? null, state: balanceState, message: balanceMessage, translate, onRetry })\n'
+          text = once(
               text,
-              '\t\t\t"account.invalidResponse": "供应商返回了无法识别的额度数据。",\n\t\t\t"account.blocked":',
-              '\t\t\t"account.invalidResponse": "供应商返回了无法识别的额度数据。",\n\t\t\t"account.reason.dnsResolutionFailed": "无法解析供应商域名。",\n\t\t\t"account.reason.allAddressesUnreachable": "已验证的网络地址均无法连接。",\n\t\t\t"account.blocked":',
-              'zh diagnostics i18n'
-          )
-          text = replace_once(
-              text,
-              '\t\t\t"account.invalidResponse": "The provider returned unrecognized quota data.",\n\t\t\t"account.blocked":',
-              '\t\t\t"account.invalidResponse": "The provider returned unrecognized quota data.",\n\t\t\t"account.reason.dnsResolutionFailed": "The provider hostname could not be resolved.",\n\t\t\t"account.reason.allAddressesUnreachable": "None of the validated network addresses could be reached.",\n\t\t\t"account.blocked":',
-              'en diagnostics i18n'
+              body_line,
+              body_line.rstrip("\n") + ',\n\t\t\t\t\treasonText !== null && status !== "ok" ? react_jsx_runtime.jsx("p", { className: S.note, children: reasonText }) : null\n',
+              "reason render"
           )
 
-          text = replace_once(
+          text = once(
+              text,
+              '\t\t\t"account.invalidResponse": "供应商返回了无法识别的额度数据。",\n',
+              '\t\t\t"account.invalidResponse": "供应商返回了无法识别的额度数据。",\n\t\t\t"account.reason.dnsResolutionFailed": "无法解析供应商域名。",\n\t\t\t"account.reason.allAddressesUnreachable": "已验证的网络地址均无法连接。",\n',
+              "zh reason strings"
+          )
+          text = once(
+              text,
+              '\t\t\t"account.invalidResponse": "The provider returned unrecognized quota data.",\n',
+              '\t\t\t"account.invalidResponse": "The provider returned unrecognized quota data.",\n\t\t\t"account.reason.dnsResolutionFailed": "The provider hostname could not be resolved.",\n\t\t\t"account.reason.allAddressesUnreachable": "None of the validated network addresses could be reached.",\n',
+              "en reason strings"
+          )
+
+          text = once(
               text,
               '\t\texports.badgeWarnOf = badgeWarnOf;\n',
               '\t\texports.badgeWarnOf = badgeWarnOf;\n\t\texports.shouldDismissPanel = shouldDismissPanel;\n\t\texports.safeDiagnosticReason = safeDiagnosticReason;\n',
-              'helper exports'
+              "helper exports"
           )
-          path.write_text(text)
+          client.write_text(text)
 
-          path = Path('scripts/smoke-client.mjs')
-          text = path.read_text()
-          text = replace_once(
+          smoke = Path("scripts/smoke-client.mjs")
+          text = smoke.read_text()
+          anchor = 'if (!source.includes(\'host.style.flexDirection = "column"\')) throw new Error("client must stack the host footer-actions container vertically (#21)");\n'
+          text = once(
               text,
-              'if (!source.includes(\'host.style.flexDirection = "column"\')) throw new Error("client must stack the host footer-actions container vertically (#21)");\n',
-              'if (!source.includes(\'host.style.flexDirection = "column"\')) throw new Error("client must stack the host footer-actions container vertically (#21)");\nif (!source.includes(\'document.addEventListener("pointerdown"\')) throw new Error("open panel must listen for outside pointerdown");\nif (!source.includes(\'event.key === "Escape"\')) throw new Error("open panel must dismiss on Escape");\nif (!source.includes("ref: panelRef")) throw new Error("portaled panel must expose a ref for outside-click detection");\n',
-              'source dismissal assertions'
+              anchor,
+              anchor + 'if (!source.includes(\'document.addEventListener("pointerdown"\')) throw new Error("open panel must listen for outside pointerdown");\nif (!source.includes(\'event.key === "Escape"\')) throw new Error("open panel must dismiss on Escape");\nif (!source.includes("ref: panelRef")) throw new Error("portaled panel must expose a ref for outside-click detection");\n',
+              "source UX assertions"
           )
 
-          marker = 'if (typeof exports_.apply !== "function") throw new Error("missing apply export");\n'
-          helper_tests = '''if (typeof exports_.apply !== "function") throw new Error("missing apply export");
+          anchor = 'if (typeof exports_.apply !== "function") throw new Error("missing apply export");\n'
+          tests = '''if (typeof exports_.apply !== "function") throw new Error("missing apply export");
 
 const { shouldDismissPanel, safeDiagnosticReason } = exports_;
 const panelNode = { contains: (target) => target === "panel-child" };
 const layerNode = { contains: (target) => target === "badge-child" };
-if (shouldDismissPanel([panelNode], "panel-child", layerNode, panelNode)) throw new Error("panel clicks must not dismiss the panel");
-if (shouldDismissPanel([layerNode], "badge-child", layerNode, panelNode)) throw new Error("badge clicks must not be treated as outside clicks");
-if (!shouldDismissPanel([], "page-content", layerNode, panelNode)) throw new Error("page clicks must dismiss the open panel");
-if (!shouldDismissPanel([], "page-content", null, null)) throw new Error("missing refs must fail safe as an outside click");
-if (safeDiagnosticReason("all-addresses-unreachable") !== "all-addresses-unreachable") throw new Error("safe diagnostics should pass through");
-if (safeDiagnosticReason("Authorization: Bearer secret") !== null) throw new Error("credential-like diagnostics must never be rendered");
-if (safeDiagnosticReason("x".repeat(161)) !== null) throw new Error("oversized diagnostics must not be rendered");
+if (shouldDismissPanel([panelNode], "panel-child", layerNode, panelNode)) throw new Error("panel click must stay open");
+if (shouldDismissPanel([layerNode], "badge-child", layerNode, panelNode)) throw new Error("badge click must stay inside");
+if (!shouldDismissPanel([], "page-content", layerNode, panelNode)) throw new Error("outside click must dismiss");
+if (!shouldDismissPanel([], "page-content", null, null)) throw new Error("missing refs must fail safe as outside");
+if (safeDiagnosticReason("all-addresses-unreachable") !== "all-addresses-unreachable") throw new Error("safe reason should pass");
+if (safeDiagnosticReason("Authorization: Bearer secret") !== null) throw new Error("secret-like reason must be rejected");
+if (safeDiagnosticReason("x".repeat(161)) !== null) throw new Error("oversized reason must be rejected");
 console.log("panel dismissal and diagnostic guards ok");
 '''
-          text = replace_once(text, marker, helper_tests, 'helper smoke tests')
+          text = once(text, anchor, tests, "pure helper tests")
 
-          text = replace_once(
+          fixture = 'account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [] },'
+          text = once(
               text,
-              'account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [] },',
+              fixture,
               'account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [], reason: "all-addresses-unreachable" },',
-              'diagnostic render fixture'
+              "reason fixture"
           )
-          text = replace_once(
+          assertion = 'if (!invalidMarkup.includes("account.status.invalidResponse") || !invalidMarkup.includes("account.invalidResponse")) throw new Error("invalid account responses need a distinct status and explanation");\n'
+          text = once(
               text,
-              'if (!invalidMarkup.includes("account.status.invalidResponse") || !invalidMarkup.includes("account.invalidResponse")) throw new Error("invalid account responses need a distinct status and explanation");\n',
-              'if (!invalidMarkup.includes("account.status.invalidResponse") || !invalidMarkup.includes("account.invalidResponse")) throw new Error("invalid account responses need a distinct status and explanation");\nif (!invalidMarkup.includes("account.reason.allAddressesUnreachable")) throw new Error("sanitized account diagnostic reason must be visible in the shared account card");\n',
-              'diagnostic render assertion'
+              assertion,
+              assertion + 'if (!invalidMarkup.includes("account.reason.allAddressesUnreachable")) throw new Error("safe diagnostic reason must render in account card");\n',
+              "reason render assertion"
           )
-          path.write_text(text)
+          smoke.write_text(text)
           PY
       - name: Install dependencies
         run: npm ci
       - name: Validate
         run: npm run check && npm test
-      - name: Commit validated patch and remove bootstrap workflow
+      - name: Commit validated patch
         shell: bash
         run: |
           rm .github/workflows/apply-panel-dismiss-and-diagnostics.yml

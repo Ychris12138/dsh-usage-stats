@@ -5,6 +5,7 @@ import {
 	queryAccount,
 	resolveAccountSpec,
 	selectResolvedAddress,
+	selectResolvedAddresses,
 	validateAccountConfig
 } from "../lib/accounts.js";
 
@@ -697,6 +698,132 @@ console.log("IPv4/IPv6 private-address classification ok");
 	assert.equal(account.status, "ok");
 	assert.equal(account.balance.remaining, 12.5);
 	console.log("explicit dynamic provider monitor fallback ok");
+}
+
+
+{
+	const target = new URL("https://api.deepseek.com/user/balance");
+	const ipv6 = { address: "2606:4700:4700::1111", family: 6 };
+	const ipv4 = { address: "1.1.1.1", family: 4 };
+	assert.deepEqual(
+		selectResolvedAddresses(target, [ipv6, ipv4]),
+		[ipv6, ipv4],
+		"all validated public DNS answers must remain available for connection fallback"
+	);
+	console.log("multi-address DNS policy preserves validated candidates ok");
+}
+
+{
+	const attempts = [];
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		lookup: async () => [
+			{ address: "2606:4700:4700::1111", family: 6 },
+			{ address: "1.1.1.1", family: 4 }
+		],
+		requestPinned: async (_url, address) => {
+			attempts.push(address.address);
+			if (address.family === 6) {
+				const error = new Error("IPv6 route unavailable");
+				error.code = "ENETUNREACH";
+				throw error;
+			}
+			return jsonResponse({ balance: 7, currency: "USD" });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 7);
+	assert.deepEqual(attempts, ["2606:4700:4700::1111", "1.1.1.1"]);
+	console.log("IPv6-unreachable falls back to validated IPv4 ok");
+}
+
+{
+	const attempts = [];
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		lookup: async () => [
+			{ address: "1.1.1.1", family: 4 },
+			{ address: "2606:4700:4700::1111", family: 6 }
+		],
+		requestPinned: async (_url, address) => {
+			attempts.push(address.address);
+			if (address.family === 4) {
+				const error = new Error("IPv4 route unavailable");
+				error.code = "EHOSTUNREACH";
+				throw error;
+			}
+			return jsonResponse({ balance: 8, currency: "USD" });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 8);
+	assert.deepEqual(attempts, ["1.1.1.1", "2606:4700:4700::1111"]);
+	console.log("IPv4-unreachable falls back to validated IPv6 ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		lookup: async () => [
+			{ address: "2606:4700:4700::1111", family: 6 },
+			{ address: "1.1.1.1", family: 4 }
+		],
+		requestPinned: async () => {
+			const error = new Error("no usable local route");
+			error.code = "EADDRNOTAVAIL";
+			throw error;
+		}
+	});
+	assert.equal(account.status, "unavailable");
+	assert.equal(account.reason, "all-addresses-unreachable");
+	assert.equal(account.balance, null);
+	console.log("all validated addresses unreachable degrades to safe unavailable snapshot ok");
+}
+
+{
+	let attempts = 0;
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		lookup: async () => [
+			{ address: "2606:4700:4700::1111", family: 6 },
+			{ address: "1.1.1.1", family: 4 }
+		],
+		requestPinned: async () => {
+			attempts += 1;
+			const error = new Error("certificate expired");
+			error.code = "CERT_HAS_EXPIRED";
+			throw error;
+		}
+	});
+	assert.equal(account.status, "unavailable");
+	assert.equal(account.reason, void 0, "TLS failures must not trigger address fallback or expose raw diagnostics");
+	assert.equal(attempts, 1, "non-connection failures must not retry another IP");
+	console.log("TLS failure does not bypass validation via address fallback ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		lookup: async () => { throw new Error("resolver offline"); }
+	});
+	assert.equal(account.status, "unavailable");
+	assert.equal(account.reason, "dns-resolution-failed");
+	console.log("DNS failure exposes only sanitized diagnostic reason ok");
 }
 
 console.log("ACCOUNT TESTS PASSED");

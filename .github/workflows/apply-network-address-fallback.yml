@@ -1,0 +1,377 @@
+name: Apply network address fallback
+
+on:
+  push:
+    branches:
+      - fix/network-address-fallback
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: fix/network-address-fallback
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - name: Apply focused patch
+        shell: bash
+        run: |
+          python3 <<'PY'
+          from pathlib import Path
+
+          def replace_once(text, old, new, label):
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected 1 match, got {count}")
+              return text.replace(old, new, 1)
+
+          path = Path('lib/accounts.js')
+          text = path.read_text()
+
+          old = '''function statusError(status, message, httpStatus) {
+          \tconst error = new Error(message);
+          \terror.providerStatus = status;
+          \tif (httpStatus !== void 0) error.httpStatus = httpStatus;
+          \treturn error;
+          }
+
+          function statusOf(error) {
+          \tif (ACCOUNT_STATUSES.has(error?.providerStatus)) return error.providerStatus;
+          \tif (error?.name === "TimeoutError" || error?.name === "AbortError") return "unavailable";
+          \treturn "unavailable";
+          }
+          '''
+          new = '''function statusError(status, message, httpStatus, safeReason) {
+          \tconst error = new Error(message);
+          \terror.providerStatus = status;
+          \tif (httpStatus !== void 0) error.httpStatus = httpStatus;
+          \tif (safeReason !== void 0) error.safeReason = safeReason;
+          \treturn error;
+          }
+
+          function statusOf(error) {
+          \tif (ACCOUNT_STATUSES.has(error?.providerStatus)) return error.providerStatus;
+          \tif (error?.name === "TimeoutError" || error?.name === "AbortError") return "unavailable";
+          \treturn "unavailable";
+          }
+
+          function safeReasonOf(error) {
+          \tconst reason = nonEmptyString(error?.safeReason);
+          \treturn reason === null ? null : reason.slice(0, 120);
+          }
+          '''
+          text = replace_once(text, old, new, 'status helper block')
+
+          start = text.index('export function selectResolvedAddress(')
+          end = text.index('\nfunction crossOriginSensitive', start)
+          new_region = '''export function selectResolvedAddresses(url, rawAddresses, allowPrivateNetwork = false) {
+          \tconst addresses = (
+          \t\tArray.isArray(rawAddresses)
+          \t\t\t? rawAddresses
+          \t\t\t: [rawAddresses]
+          \t).filter(
+          \t\t(entry) =>
+          \t\t\ttypeof entry?.address === "string"
+          \t\t\t&& isIP(entry.address) !== 0
+          \t).map((entry) => ({
+          \t\taddress: entry.address,
+          \t\tfamily: entry.family ?? isIP(entry.address)
+          \t}));
+
+          \tif (addresses.length === 0) return [];
+          \tif (allowPrivateNetwork) return addresses;
+
+          \tconst publicAddresses = addresses.filter(
+          \t\t(entry) => !isPrivateAddress(entry.address)
+          \t);
+          \tif (publicAddresses.length > 0) return publicAddresses;
+
+          \treturn addresses.filter(
+          \t\t(entry) => isHttpsProxySyntheticAddress(url, entry.address)
+          \t);
+          }
+
+          /** Backward-compatible single-address policy helper used by existing tests/callers. */
+          export function selectResolvedAddress(url, rawAddresses, allowPrivateNetwork = false) {
+          \treturn selectResolvedAddresses(url, rawAddresses, allowPrivateNetwork)[0] ?? null;
+          }
+
+          async function resolvePublicAddresses(url, spec, deps) {
+          \tconst hostname = url.hostname.replace(/^\\[|\\]$/g, "");
+          \tif (privateHostname(hostname) && spec.monitor.allowPrivateNetwork !== true) throw statusError("blocked", "account monitor private-network access requires allowPrivateNetwork");
+          \tif (isIP(hostname) !== 0) return [{ address: hostname, family: isIP(hostname) }];
+          \tlet addresses;
+          \ttry {
+          \t\taddresses = await (deps.lookup ?? dnsLookup)(hostname, { all: true, verbatim: true });
+          \t} catch {
+          \t\tthrow statusError("unavailable", "account monitor hostname could not be resolved", void 0, "dns-resolution-failed");
+          \t}
+          \tif (!Array.isArray(addresses)) addresses = [addresses];
+          \tif (addresses.length === 0) throw statusError("unavailable", "account monitor hostname resolved to no addresses", void 0, "dns-resolution-failed");
+          \tconst selected = selectResolvedAddresses(
+          \t\turl,
+          \t\taddresses,
+          \t\tspec.monitor.allowPrivateNetwork === true
+          \t);
+          \tif (selected.length === 0) {
+          \t\tthrow statusError("blocked", "account monitor hostname resolves only to blocked network addresses");
+          \t}
+          \treturn selected;
+          }
+          '''
+          text = text[:start] + new_region + text[end:]
+
+          old = '''\tconst resolved = await resolvePublicAddress(url, spec, deps);
+          \treturn { url, ...resolved };
+          '''
+          new = '''\tconst addresses = await resolvePublicAddresses(url, spec, deps);
+          \treturn { url, addresses };
+          '''
+          text = replace_once(text, old, new, 'assertTargetPolicy result')
+
+          start = text.index('/** HTTPS/HTTP transport that pins the DNS answer checked by the policy layer. */')
+          end = text.index('\nfunction customURL', start)
+          new_region = '''const RETRYABLE_CONNECTION_CODES = new Set([
+          \t"ENETUNREACH",
+          \t"EHOSTUNREACH",
+          \t"EADDRNOTAVAIL",
+          \t"ETIMEDOUT",
+          \t"ECONNREFUSED",
+          \t"ECONNRESET"
+          ]);
+
+          function retryableConnectionError(error) {
+          \treturn RETRYABLE_CONNECTION_CODES.has(error?.code);
+          }
+
+          function pinnedRequest(url, address, init, deps, signal) {
+          \treturn new Promise((resolve, reject) => {
+          \t\tconst transport = url.protocol === "https:" ? httpsRequest : httpRequest;
+          \t\tconst request = transport(url, {
+          \t\t\tmethod: init?.method ?? "GET",
+          \t\t\theaders: init?.headers,
+          \t\t\tsignal,
+          \t\t\tservername: isIP(url.hostname.replace(/^\\[|\\]$/g, "")) === 0 ? url.hostname : void 0,
+          \t\t\tlookup: (_hostname, options, callback) => {
+          \t\t\t\tif (options?.all) callback(null, [address]);
+          \t\t\t\telse callback(null, address.address, address.family);
+          \t\t\t}
+          \t\t}, (response) => {
+          \t\t\tconst chunks = [];
+          \t\t\tlet size = 0;
+          \t\t\tresponse.on("data", (chunk) => {
+          \t\t\t\tsize += chunk.length;
+          \t\t\t\tif (size > (deps.maxResponseBytes ?? MAX_RESPONSE_BYTES)) request.destroy(statusError("invalid-response", "upstream response exceeds the size limit"));
+          \t\t\t\telse chunks.push(chunk);
+          \t\t\t});
+          \t\t\tresponse.on("end", () => {
+          \t\t\t\tconst body = Buffer.concat(chunks);
+          \t\t\t\tresolve({
+          \t\t\t\t\tok: response.statusCode >= 200 && response.statusCode < 300,
+          \t\t\t\t\tstatus: response.statusCode,
+          \t\t\t\t\theaders: responseHeaders(response.headers),
+          \t\t\t\t\tarrayBuffer: async () => body.buffer.slice(body.byteOffset, body.byteOffset + body.byteLength),
+          \t\t\t\t\tjson: async () => JSON.parse(body.toString("utf8")),
+          \t\t\t\t\ttext: async () => body.toString("utf8")
+          \t\t\t\t});
+          \t\t\t});
+          \t\t});
+          \t\trequest.on("error", reject);
+          \t\trequest.end();
+          \t});
+          }
+
+          /** HTTPS/HTTP transport that pins every attempted connection to an address already approved by the policy layer. */
+          async function pinnedFetch(rawUrl, init, spec, deps) {
+          \tconst target = await assertTargetPolicy(rawUrl, spec, deps);
+          \tconst signal = init?.signal ?? AbortSignal.timeout(deps.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+          \tconst requestOne = deps.requestPinned ?? ((url, address, requestInit) => pinnedRequest(url, address, requestInit, deps, signal));
+          \tlet lastRetryable = null;
+          \tfor (const address of target.addresses) {
+          \t\ttry {
+          \t\t\treturn await requestOne(target.url, address, init, signal);
+          \t\t} catch (error) {
+          \t\t\tif (!retryableConnectionError(error)) throw error;
+          \t\t\tlastRetryable = error;
+          \t\t}
+          \t}
+          \tif (lastRetryable !== null) {
+          \t\tthrow statusError("unavailable", "account monitor could not connect to any validated address", void 0, "all-addresses-unreachable");
+          \t}
+          \tthrow statusError("unavailable", "account monitor has no validated connection address", void 0, "no-validated-address");
+          }
+          '''
+          text = text[:start] + new_region + text[end:]
+
+          old = '''\t} catch (error) {
+          \t\treturn unavailableSnapshot(spec, statusOf(error), now);
+          \t}
+          }
+          '''
+          new = '''\t} catch (error) {
+          \t\tconst reason = safeReasonOf(error);
+          \t\treturn unavailableSnapshot(spec, statusOf(error), now, reason === null ? {} : { reason });
+          \t}
+          }
+          '''
+          text = replace_once(text, old, new, 'queryAccount catch')
+          path.write_text(text)
+
+          path = Path('scripts/test-accounts.mjs')
+          text = path.read_text()
+          text = replace_once(
+              text,
+              '\tselectResolvedAddress,\n\tvalidateAccountConfig',
+              '\tselectResolvedAddress,\n\tselectResolvedAddresses,\n\tvalidateAccountConfig',
+              'test import'
+          )
+          insert = r'''
+
+          {
+          	const target = new URL("https://api.deepseek.com/user/balance");
+          	const ipv6 = { address: "2606:4700:4700::1111", family: 6 };
+          	const ipv4 = { address: "1.1.1.1", family: 4 };
+          	assert.deepEqual(
+          		selectResolvedAddresses(target, [ipv6, ipv4]),
+          		[ipv6, ipv4],
+          		"all validated public DNS answers must remain available for connection fallback"
+          	);
+          	console.log("multi-address DNS policy preserves validated candidates ok");
+          }
+
+          {
+          	const attempts = [];
+          	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+          		"relay-a": { adapter: "general" }
+          	} }));
+          	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+          		now: () => now,
+          		lookup: async () => [
+          			{ address: "2606:4700:4700::1111", family: 6 },
+          			{ address: "1.1.1.1", family: 4 }
+          		],
+          		requestPinned: async (_url, address) => {
+          			attempts.push(address.address);
+          			if (address.family === 6) {
+          				const error = new Error("IPv6 route unavailable");
+          				error.code = "ENETUNREACH";
+          				throw error;
+          			}
+          			return jsonResponse({ balance: 7, currency: "USD" });
+          		}
+          	});
+          	assert.equal(account.status, "ok");
+          	assert.equal(account.balance.remaining, 7);
+          	assert.deepEqual(attempts, ["2606:4700:4700::1111", "1.1.1.1"]);
+          	console.log("IPv6-unreachable falls back to validated IPv4 ok");
+          }
+
+          {
+          	const attempts = [];
+          	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+          		"relay-a": { adapter: "general" }
+          	} }));
+          	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+          		now: () => now,
+          		lookup: async () => [
+          			{ address: "1.1.1.1", family: 4 },
+          			{ address: "2606:4700:4700::1111", family: 6 }
+          		],
+          		requestPinned: async (_url, address) => {
+          			attempts.push(address.address);
+          			if (address.family === 4) {
+          				const error = new Error("IPv4 route unavailable");
+          				error.code = "EHOSTUNREACH";
+          				throw error;
+          			}
+          			return jsonResponse({ balance: 8, currency: "USD" });
+          		}
+          	});
+          	assert.equal(account.status, "ok");
+          	assert.equal(account.balance.remaining, 8);
+          	assert.deepEqual(attempts, ["1.1.1.1", "2606:4700:4700::1111"]);
+          	console.log("IPv4-unreachable falls back to validated IPv6 ok");
+          }
+
+          {
+          	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+          		"relay-a": { adapter: "general" }
+          	} }));
+          	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+          		now: () => now,
+          		lookup: async () => [
+          			{ address: "2606:4700:4700::1111", family: 6 },
+          			{ address: "1.1.1.1", family: 4 }
+          		],
+          		requestPinned: async () => {
+          			const error = new Error("no usable local route");
+          			error.code = "EADDRNOTAVAIL";
+          			throw error;
+          		}
+          	});
+          	assert.equal(account.status, "unavailable");
+          	assert.equal(account.reason, "all-addresses-unreachable");
+          	assert.equal(account.balance, null);
+          	console.log("all validated addresses unreachable degrades to safe unavailable snapshot ok");
+          }
+
+          {
+          	let attempts = 0;
+          	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+          		"relay-a": { adapter: "general" }
+          	} }));
+          	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+          		now: () => now,
+          		lookup: async () => [
+          			{ address: "2606:4700:4700::1111", family: 6 },
+          			{ address: "1.1.1.1", family: 4 }
+          		],
+          		requestPinned: async () => {
+          			attempts += 1;
+          			const error = new Error("certificate expired");
+          			error.code = "CERT_HAS_EXPIRED";
+          			throw error;
+          		}
+          	});
+          	assert.equal(account.status, "unavailable");
+          	assert.equal(account.reason, void 0, "TLS failures must not trigger address fallback or expose raw diagnostics");
+          	assert.equal(attempts, 1, "non-connection failures must not retry another IP");
+          	console.log("TLS failure does not bypass validation via address fallback ok");
+          }
+
+          {
+          	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+          		"relay-a": { adapter: "general" }
+          	} }));
+          	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+          		now: () => now,
+          		lookup: async () => { throw new Error("resolver offline"); }
+          	});
+          	assert.equal(account.status, "unavailable");
+          	assert.equal(account.reason, "dns-resolution-failed");
+          	console.log("DNS failure exposes only sanitized diagnostic reason ok");
+          }
+          '''
+          text = replace_once(text, '\nconsole.log("ACCOUNT TESTS PASSED");', insert + '\nconsole.log("ACCOUNT TESTS PASSED");', 'append network tests')
+          path.write_text(text)
+          PY
+      - name: Install dependencies
+        run: npm ci
+      - name: Validate
+        run: npm run check && npm test
+      - name: Commit validated patch and remove bootstrap workflow
+        shell: bash
+        run: |
+          rm .github/workflows/apply-network-address-fallback.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add lib/accounts.js scripts/test-accounts.mjs .github/workflows/apply-network-address-fallback.yml
+          git commit -m "fix: safely fall back across validated DNS addresses"
+          git push origin HEAD:fix/network-address-fallback

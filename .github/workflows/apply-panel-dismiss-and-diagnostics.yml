@@ -4,12 +4,16 @@ on:
   push:
     branches:
       - feat/panel-dismiss-and-diagnostics
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: write
 
 jobs:
   apply:
+    if: github.head_ref == '' || github.head_ref == 'feat/panel-dismiss-and-diagnostics'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -69,12 +73,7 @@ jobs:
               raise SystemExit("helper marker missing")
           text = text.replace(helper_marker, helpers + helper_marker, 1)
 
-          text = once(
-              text,
-              "\t\t\tconst layerRef = react.useRef(null);\n",
-              "\t\t\tconst layerRef = react.useRef(null);\n\t\t\tconst panelRef = react.useRef(null);\n",
-              "panel ref"
-          )
+          text = once(text, "\t\t\tconst layerRef = react.useRef(null);\n", "\t\t\tconst layerRef = react.useRef(null);\n\t\t\tconst panelRef = react.useRef(null);\n", "panel ref")
 
           effect_marker = "\n\t\t\t// Keep exactly one valid provider selected across independent provider"
           effect = r'''
@@ -102,58 +101,22 @@ jobs:
               raise SystemExit("effect marker missing")
           text = text.replace(effect_marker, effect + effect_marker, 1)
 
-          text = once(
-              text,
-              'open && react_dom.createPortal(react_jsx_runtime.jsxs("section", {\n\t\t\t\t\t\tclassName: S.panel,',
-              'open && react_dom.createPortal(react_jsx_runtime.jsxs("section", {\n\t\t\t\t\t\tref: panelRef,\n\t\t\t\t\t\tclassName: S.panel,',
-              "panel ref attachment"
-          )
+          text = once(text, 'open && react_dom.createPortal(react_jsx_runtime.jsxs("section", {\n\t\t\t\t\t\tclassName: S.panel,', 'open && react_dom.createPortal(react_jsx_runtime.jsxs("section", {\n\t\t\t\t\t\tref: panelRef,\n\t\t\t\t\t\tclassName: S.panel,', "panel ref attachment")
 
-          text = once(
-              text,
-              '\t\t\tconst balanceMessage = accountError ?? account?.missingCredentials?.[0] ?? status;\n',
-              '\t\t\tconst balanceMessage = accountError ?? account?.missingCredentials?.[0] ?? status;\n\t\t\tconst reasonText = diagnosticReasonText(account?.reason, translate);\n',
-              "reason calculation"
-          )
+          text = once(text, '\t\t\tconst balanceMessage = accountError ?? account?.missingCredentials?.[0] ?? status;\n', '\t\t\tconst balanceMessage = accountError ?? account?.missingCredentials?.[0] ?? status;\n\t\t\tconst reasonText = diagnosticReasonText(account?.reason, translate);\n', "reason calculation")
 
           body_line = '\t\t\t\t\t\t: react_jsx_runtime.jsx(BalanceContent, { balance: account?.balance ?? null, state: balanceState, message: balanceMessage, translate, onRetry })\n'
-          text = once(
-              text,
-              body_line,
-              body_line.rstrip("\n") + ',\n\t\t\t\t\treasonText !== null && status !== "ok" ? react_jsx_runtime.jsx("p", { className: S.note, children: reasonText }) : null\n',
-              "reason render"
-          )
+          text = once(text, body_line, body_line.rstrip("\n") + ',\n\t\t\t\t\treasonText !== null && status !== "ok" ? react_jsx_runtime.jsx("p", { className: S.note, children: reasonText }) : null\n', "reason render")
 
-          text = once(
-              text,
-              '\t\t\t"account.invalidResponse": "供应商返回了无法识别的额度数据。",\n',
-              '\t\t\t"account.invalidResponse": "供应商返回了无法识别的额度数据。",\n\t\t\t"account.reason.dnsResolutionFailed": "无法解析供应商域名。",\n\t\t\t"account.reason.allAddressesUnreachable": "已验证的网络地址均无法连接。",\n',
-              "zh reason strings"
-          )
-          text = once(
-              text,
-              '\t\t\t"account.invalidResponse": "The provider returned unrecognized quota data.",\n',
-              '\t\t\t"account.invalidResponse": "The provider returned unrecognized quota data.",\n\t\t\t"account.reason.dnsResolutionFailed": "The provider hostname could not be resolved.",\n\t\t\t"account.reason.allAddressesUnreachable": "None of the validated network addresses could be reached.",\n',
-              "en reason strings"
-          )
-
-          text = once(
-              text,
-              '\t\texports.badgeWarnOf = badgeWarnOf;\n',
-              '\t\texports.badgeWarnOf = badgeWarnOf;\n\t\texports.shouldDismissPanel = shouldDismissPanel;\n\t\texports.safeDiagnosticReason = safeDiagnosticReason;\n',
-              "helper exports"
-          )
+          text = once(text, '\t\t\t"account.invalidResponse": "供应商返回了无法识别的额度数据。",\n', '\t\t\t"account.invalidResponse": "供应商返回了无法识别的额度数据。",\n\t\t\t"account.reason.dnsResolutionFailed": "无法解析供应商域名。",\n\t\t\t"account.reason.allAddressesUnreachable": "已验证的网络地址均无法连接。",\n', "zh reason strings")
+          text = once(text, '\t\t\t"account.invalidResponse": "The provider returned unrecognized quota data.",\n', '\t\t\t"account.invalidResponse": "The provider returned unrecognized quota data.",\n\t\t\t"account.reason.dnsResolutionFailed": "The provider hostname could not be resolved.",\n\t\t\t"account.reason.allAddressesUnreachable": "None of the validated network addresses could be reached.",\n', "en reason strings")
+          text = once(text, '\t\texports.badgeWarnOf = badgeWarnOf;\n', '\t\texports.badgeWarnOf = badgeWarnOf;\n\t\texports.shouldDismissPanel = shouldDismissPanel;\n\t\texports.safeDiagnosticReason = safeDiagnosticReason;\n', "helper exports")
           client.write_text(text)
 
           smoke = Path("scripts/smoke-client.mjs")
           text = smoke.read_text()
           anchor = 'if (!source.includes(\'host.style.flexDirection = "column"\')) throw new Error("client must stack the host footer-actions container vertically (#21)");\n'
-          text = once(
-              text,
-              anchor,
-              anchor + 'if (!source.includes(\'document.addEventListener("pointerdown"\')) throw new Error("open panel must listen for outside pointerdown");\nif (!source.includes(\'event.key === "Escape"\')) throw new Error("open panel must dismiss on Escape");\nif (!source.includes("ref: panelRef")) throw new Error("portaled panel must expose a ref for outside-click detection");\n',
-              "source UX assertions"
-          )
+          text = once(text, anchor, anchor + 'if (!source.includes(\'document.addEventListener("pointerdown"\')) throw new Error("open panel must listen for outside pointerdown");\nif (!source.includes(\'event.key === "Escape"\')) throw new Error("open panel must dismiss on Escape");\nif (!source.includes("ref: panelRef")) throw new Error("portaled panel must expose a ref for outside-click detection");\n', "source UX assertions")
 
           anchor = 'if (typeof exports_.apply !== "function") throw new Error("missing apply export");\n'
           tests = '''if (typeof exports_.apply !== "function") throw new Error("missing apply export");
@@ -173,19 +136,9 @@ console.log("panel dismissal and diagnostic guards ok");
           text = once(text, anchor, tests, "pure helper tests")
 
           fixture = 'account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [] },'
-          text = once(
-              text,
-              fixture,
-              'account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [], reason: "all-addresses-unreachable" },',
-              "reason fixture"
-          )
+          text = once(text, fixture, 'account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [], reason: "all-addresses-unreachable" },', "reason fixture")
           assertion = 'if (!invalidMarkup.includes("account.status.invalidResponse") || !invalidMarkup.includes("account.invalidResponse")) throw new Error("invalid account responses need a distinct status and explanation");\n'
-          text = once(
-              text,
-              assertion,
-              assertion + 'if (!invalidMarkup.includes("account.reason.allAddressesUnreachable")) throw new Error("safe diagnostic reason must render in account card");\n',
-              "reason render assertion"
-          )
+          text = once(text, assertion, assertion + 'if (!invalidMarkup.includes("account.reason.allAddressesUnreachable")) throw new Error("safe diagnostic reason must render in account card");\n', "reason render assertion")
           smoke.write_text(text)
           PY
       - name: Install dependencies

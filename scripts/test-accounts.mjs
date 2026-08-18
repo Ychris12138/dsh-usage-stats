@@ -530,7 +530,8 @@ console.log("IPv4/IPv6 private-address classification ok");
 }
 
 {
-	// sub2api-auth: an invalid numeric balance is classified as invalid-response.
+	// sub2api-auth: an invalid numeric balance is classified as invalid-response,
+	// and the snapshot surfaces the observed top-level keys for diagnosis.
 	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
 		"relay-a": { adapter: "sub2api-auth" }
 	} }));
@@ -544,7 +545,26 @@ console.log("IPv4/IPv6 private-address classification ok");
 	});
 	assert.equal(account.status, "invalid-response");
 	assert.equal(account.balance, null);
+	assert.match(account.reason, /^sub2api-balance-keys:/, "must surface which keys the panel returned");
 	console.log("sub2api-auth missing numeric balance maps to invalid-response ok");
+}
+
+{
+	// sub2api-auth: a nested { code, data: { balance } } envelope is recognized.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			assert.equal(String(url).endsWith("/user/balance"), true);
+			return jsonResponse({ code: 0, message: "ok", data: { balance: 4.2, unit: "USD" } });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 4.2);
+	console.log("sub2api-auth nested data.balance envelope ok");
 }
 
 {

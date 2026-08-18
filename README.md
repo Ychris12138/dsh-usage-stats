@@ -84,6 +84,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | MiniMax Coding Plan | 订阅 | `MINIMAX_API_KEY` | `/v1/token_plan/remains` |
 | New API | 余额 | provider 推理 Token | `/api/usage/token/` |
 | Sub2API / Passion | 自动判别 | provider `apiKeyEnv` | `/v1/usage` |
+| Sub2API 面板（真实） | 余额 | 面板账号 或 JWT | `/api/v1/auth/me` |
 | General / Declarative | 余额或订阅 | 配置中的 credential ref | 受限 GET + JSON |
 
 没有公开账户接口的供应商仍会正常统计 Token；账户卡片会明确显示“不支持”，不会猜测余额。
@@ -174,6 +175,34 @@ Sub2API 风格 `/v1/usage`：
               criticalBelow: 1
 ```
 
+> 注意：`sub2api` 适配器对应一部分 Sub2API 部署暴露的 `/v1/usage` 协议。真实 Sub2API 面板（Wei-Shaw/sub2api 系）不提供该公开接口，改用 `sub2api-auth` 适配器读取面板自己的账号余额（见下）。
+
+**真实 Sub2API 面板余额（`sub2api-auth`）**：Sub2API 面板把上游订阅统一暴露成 API，但上游供应商通常没有公开余额接口。面板自己会维护一个美元余额（非订阅制账号），位于 `GET /api/v1/auth/me`，需要面板的 dashboard 会话。`sub2api-auth` 用两种方式之一取到短效访问令牌：
+
+```yaml
+        monitors:
+          relay-b:
+            adapter: sub2api-auth
+            # 方式一：面板账号登录（推荐），用户名/密码经 credential ref 注入
+            usernameRef: SUB2API_EMAIL
+            passwordRef: SUB2API_PASSWORD
+```
+```yaml
+          relay-b:
+            adapter: sub2api-auth
+            # 方式二：复用已有的访问令牌（无需保存面板密码）
+            accessTokenRef: SUB2API_ACCESS_TOKEN
+```
+
+dashboard 令牌是短效的；`sub2api-auth` 只在进程内存中维护当前令牌，401 时用面板密码重新登录，**不会把令牌或密码写入磁盘缓存、浏览器响应或日志**。关闭插件进程后内存令牌即失效，下次按需重新认证。
+
+```yaml
+# ~/.dsh/.credentials.yaml
+SUB2API_EMAIL: you-account@panel.example
+SUB2API_PASSWORD: your-panel-password
+SUB2API_ACCESS_TOKEN: <可选，面板登录后得到的短效 JWT>
+```
+
 Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动识别。钱包响应显示余额；`quota_limited` 或包含 `subscription` 的响应自动切换为额度窗口。
 
 声明式自定义查询只支持受限 GET + JSON Pointer，不执行 JavaScript：
@@ -198,7 +227,7 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
 
 </details>
 
-支持的 adapter：`deepseek-balance`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`new-api`、`sub2api`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`。
+支持的 adapter：`deepseek-balance`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`。
 
 `warning.warnBelow` 与 `warning.criticalBelow` 是余额绝对值阈值。具有总额度的余额和 Token Plan 会自动产生 `normal / warning / critical` 剩余比例状态（默认 30% / 10%）。
 
@@ -263,6 +292,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 ## 隐私与安全 / Privacy & security
 
 - API Key、OpenCode `auth.json`、Cookie 与管理 PAT 不会进入浏览器响应、插件缓存或日志。
+- Sub2API 面板短效 JWT（`sub2api-auth`）只保存在进程内存，401 时用面板密码重新登录；令牌与面板密码同样不进浏览器响应、磁盘缓存或日志。
 - 自定义 monitor 默认要求 HTTPS、同源相对路径、手动 redirect 和 JSON 响应，body 上限为 1 MiB。
 - 发凭据前会筛选域名的 IPv4/IPv6 解析结果并固定一个允许的连接地址，优先使用公网地址；HTTPS 域名解析到 `198.18.0.0/15` 时可作为 Clash/Mihomo 等代理的 synthetic fake-IP 使用。字面量 `198.18/15`、其他私网/特殊地址仍默认拒绝，防止 DNS rebinding 绕过私网限制。
 - `usageBaseURL` 禁止内嵌 username/password；`Authorization`、`X-API-Key`、`API-Key` 等 header 必须由 credential ref 注入。

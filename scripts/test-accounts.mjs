@@ -473,6 +473,136 @@ console.log("IPv4/IPv6 private-address classification ok");
 }
 
 {
+	// sub2api-auth: email+password login, then the dashboard balance + today usage.
+	const calls = [];
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": {
+			adapter: "sub2api-auth",
+			usernameRef: "SUB2API_EMAIL",
+			passwordRef: "SUB2API_PASSWORD"
+		}
+	} }));
+	const account = await queryAccount(spec, credentials({ SUB2API_EMAIL: "me@example.com", SUB2API_PASSWORD: "s3cret" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), method: init?.method ?? "GET", authorization: init?.headers?.authorization });
+			if (String(url).endsWith("/api/v1/auth/login")) {
+				assert.equal(init.method, "POST");
+				const body = JSON.parse(init.body);
+				assert.equal(body.email, "me@example.com");
+				assert.equal(body.password, "s3cret");
+				return jsonResponse({ code: 0, message: "ok", data: { access_token: "jwt-access", refresh_token: "jwt-refresh", expires_in: 3000 } });
+			}
+			if (String(url).includes("/api/v1/usage/stats")) {
+				return jsonResponse({ code: 0, message: "ok", data: { total_actual_cost: 2.5, total_input_tokens: 100, total_output_tokens: 50, total_requests: 3 } });
+			}
+			assert.ok(String(url).endsWith("/api/v1/auth/me"));
+			assert.equal(init.headers.authorization, "Bearer jwt-access");
+			return jsonResponse({ code: 0, message: "ok", data: { id: 42, username: "relay-a-owner", email: "me@example.com", balance: 12.5 } });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.mode, "balance");
+	assert.equal(account.plan, "relay-a-owner");
+	assert.deepEqual(account.balance, { remaining: 12.5, used: 2.5, currency: "USD", unlimited: false, expiresAt: null });
+	assert.equal(JSON.stringify(account).includes("jwt-access"), false, "access token must never leak into the snapshot");
+	assert.equal(JSON.stringify(account).includes("s3cret"), false, "password must never leak into the snapshot");
+	console.log("sub2api-auth login + balance normalization ok");
+}
+
+{
+	// sub2api-auth: a pre-issued access token avoids storing the panel password.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth", accessTokenRef: "SUB2API_ACCESS_TOKEN" }
+	} }));
+	const account = await queryAccount(spec, credentials({ SUB2API_ACCESS_TOKEN: "static-jwt" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			if (String(url).endsWith("/api/v1/auth/login")) { throw new Error("must not log in when a token is provided"); }
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			assert.equal(String(url).endsWith("/api/v1/auth/me"), true);
+			assert.equal(init.headers.authorization, "Bearer static-jwt");
+			return jsonResponse({ code: 0, message: "ok", data: { id: 1, username: "static", balance: 9.9 } });
+		},
+		sessions: new Map()
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 9.9);
+	console.log("sub2api-auth static access token path ok");
+}
+
+{
+	// sub2api-auth: a stale JWT (401) triggers one re-login and a successful retry.
+	let meCalls = 0;
+	let loginCount = 0;
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth", usernameRef: "SUB2API_EMAIL", passwordRef: "SUB2API_PASSWORD" }
+	} }));
+	const account = await queryAccount(spec, credentials({ SUB2API_EMAIL: "me@example.com", SUB2API_PASSWORD: "s3cret" }), {
+		now: () => now,
+		sessions: new Map(),
+		fetch: async (url, init) => {
+			if (String(url).endsWith("/api/v1/auth/login")) {
+				loginCount += 1;
+				return jsonResponse({ code: 0, message: "ok", data: { access_token: `jwt-${loginCount}` } });
+			}
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			assert.ok(String(url).endsWith("/api/v1/auth/me"));
+			meCalls += 1;
+			// The first dashboard request uses the initial(now-stale) token.
+			if (meCalls === 1) return jsonResponse({ code: 0, message: "no" }, 401);
+			assert.equal(init.headers.authorization, "Bearer jwt-2", "retry must use the newer token");
+			return jsonResponse({ code: 0, message: "ok", data: { id: 1, username: "retry", balance: 7.25 } });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 7.25);
+	assert.equal(loginCount, 2, "a stale token must trigger exactly one re-login");
+	console.log("sub2api-auth stale-JWT re-login retry ok");
+}
+
+{
+	// sub2api-auth: persistent login failure surfaces as unauthorized, never a secret leak.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth", usernameRef: "SUB2API_EMAIL", passwordRef: "SUB2API_PASSWORD" }
+	} }));
+	const account = await queryAccount(spec, credentials({ SUB2API_EMAIL: "me@example.com", SUB2API_PASSWORD: "wrong" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			if (String(url).endsWith("/api/v1/auth/login")) {
+				return jsonResponse({ code: 401, message: "invalid credentials" });
+			}
+			return jsonResponse({}, 401);
+		}
+	});
+	assert.equal(account.status, "unauthorized");
+	assert.equal(account.balance, null);
+	console.log("sub2api-auth failed login maps to unauthorized ok");
+}
+
+{
+	// sub2api-auth: missing dashboard credentials is not-configured (never a blind request).
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth", usernameRef: "SUB2API_EMAIL", passwordRef: "SUB2API_PASSWORD" }
+	} }));
+	const account = await queryAccount(spec, credentials({}), { now: () => now, fetch: async () => { throw new Error("must not fetch without credentials"); } });
+	assert.equal(account.status, "not-configured");
+	assert.equal(account.balance, null);
+	console.log("sub2api-auth missing credentials is not-configured ok");
+}
+
+{
+	// Config validation: sub2api-auth demands an auth pathway.
+	assert.throws(() => validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth", usernameRef: "SUB2API_EMAIL" }
+	} }), /accessTokenRef or both usernameRef and passwordRef/i);
+	assert.throws(() => validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth", passwordRef: 123 }
+	} }), /must be a credential reference name/i);
+	console.log("sub2api-auth config validation ok");
+}
+
+{
 	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
 		"relay-a": { adapter: "general" }
 	} }));

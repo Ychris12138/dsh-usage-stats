@@ -530,23 +530,69 @@ console.log("IPv4/IPv6 private-address classification ok");
 }
 
 {
-	// sub2api-auth: an invalid numeric balance is classified as invalid-response,
-	// and the snapshot surfaces the observed top-level keys for diagnosis.
+	// sub2api-auth: when /user/balance returns no recognizable numeric balance,
+	// the flow falls back to /v1/usage (same model API key).
 	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
 		"relay-a": { adapter: "sub2api-auth" }
 	} }));
 	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
 		now: () => now,
 		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) return jsonResponse({});
+			if (String(url).endsWith("/v1/usage")) return jsonResponse({ isValid: true, balance: 6.6, unit: "USD", planName: "Panel" });
 			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
-			assert.equal(String(url).endsWith("/user/balance"), true);
-			return jsonResponse({});
+			throw new Error(`unexpected url: ${url}`);
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.mode, "balance");
+	assert.equal(account.balance.remaining, 6.6);
+	assert.equal(account.plan, "Panel");
+	console.log("sub2api-auth /user/balance empty falls back to /v1/usage ok");
+}
+
+{
+	// sub2api-auth: an SPA HTML response for /user/balance (like real panels'
+	// catch-all) is skipped and the panel's /v1/usage is used instead.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) return new Response("<!doctype html><title>SPA</title>", {
+				status: 200,
+				headers: { "content-type": "text/html" }
+			});
+			if (String(url).endsWith("/v1/usage")) return jsonResponse({ mode: "unrestricted", isValid: true, remaining: 8.25, unit: "USD", balance: 8.25 });
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			throw new Error(`unexpected url: ${url}`);
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 8.25);
+	console.log("sub2api-auth HTML /user/balance falls back to /v1/usage ok");
+}
+
+{
+	// sub2api-auth: when both endpoints fail to yield a balance, the snapshot
+	// stays invalid-response and surfaces the /user/balance top-level keys.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) return jsonResponse({ message: "nope" });
+			if (String(url).endsWith("/v1/usage")) return jsonResponse({});
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			throw new Error(`unexpected url: ${url}`);
 		}
 	});
 	assert.equal(account.status, "invalid-response");
 	assert.equal(account.balance, null);
-	assert.match(account.reason, /^sub2api-balance-keys:/, "must surface which keys the panel returned");
-	console.log("sub2api-auth missing numeric balance maps to invalid-response ok");
+	assert.match(account.reason, /^sub2api-balance-keys:message/, "must surface which keys the panel returned");
+	console.log("sub2api-auth both endpoints missing balance keeps invalid-response ok");
 }
 
 {
@@ -557,9 +603,10 @@ console.log("IPv4/IPv6 private-address classification ok");
 	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
 		now: () => now,
 		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) return jsonResponse({ code: 0, message: "ok", data: { balance: 4.2, unit: "USD" } });
+			if (String(url).endsWith("/v1/usage")) throw new Error("must not fall back when /user/balance already yields a balance");
 			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
-			assert.equal(String(url).endsWith("/user/balance"), true);
-			return jsonResponse({ code: 0, message: "ok", data: { balance: 4.2, unit: "USD" } });
+			throw new Error(`unexpected url: ${url}`);
 		}
 	});
 	assert.equal(account.status, "ok");

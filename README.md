@@ -84,7 +84,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | MiniMax Coding Plan | 订阅 | `MINIMAX_API_KEY` | `/v1/token_plan/remains` |
 | New API | 余额 | provider 推理 Token | `/api/usage/token/` |
 | Sub2API / Passion | 自动判别 | provider `apiKeyEnv` | `/v1/usage` |
-| Sub2API 面板（真实） | 余额 | 面板账号 或 JWT | `/api/v1/auth/me` |
+| Sub2API 面板（真实） | 余额 | provider 推理 Token | `/user/balance`（复用 apiKey） |
 | General / Declarative | 余额或订阅 | 配置中的 credential ref | 受限 GET + JSON |
 
 没有公开账户接口的供应商仍会正常统计 Token；账户卡片会明确显示“不支持”，不会猜测余额。
@@ -175,35 +175,24 @@ Sub2API 风格 `/v1/usage`：
               criticalBelow: 1
 ```
 
-> 注意：`sub2api` 适配器对应一部分 Sub2API 部署暴露的 `/v1/usage` 协议。真实 Sub2API 面板（Wei-Shaw/sub2api 系）不提供该公开接口，改用 `sub2api-auth` 适配器读取面板自己的账号余额（见下）。
+> 注意：`sub2api` 适配器对应一部分 Sub2API 部署暴露的 `/v1/usage` 协议。真实 Sub2API 面板（Wei-Shaw/sub2api 系）不提供该公开接口，改用 `sub2api-auth` 适配器读取面板自己的余额（见下）。
 
-**真实 Sub2API 面板余额（`sub2api-auth`）**：Sub2API 面板把上游订阅统一暴露成 API，但上游供应商通常没有公开余额接口。面板自己会维护一个美元余额（非订阅制账号），位于 `GET /api/v1/auth/me`，需要面板的 dashboard 会话。`sub2api-auth` 用两种方式之一取到短效访问令牌：
+**真实 Sub2API 面板余额（`sub2api-auth`）**：Sub2API 面板把上游订阅统一暴露成 API，但上游供应商通常没有公开余额接口。`sub2api-auth` 用 provider 自己的推理 API Key 查询面板余额，同 CC Switch 的 General 模板：`GET {baseUrl}/user/balance`，`Authorization: Bearer {apiKey}`，读取 `body.balance`。**无需单独的面板凭据** —— provider 在 DSH 模型页里配置的那个 API Key 会被直接复用：
 
 ```yaml
         monitors:
           relay-b:
             adapter: sub2api-auth
-            # 方式一：面板账号登录（推荐），用户名/密码经 credential ref 注入
-            usernameRef: SUB2API_EMAIL
-            passwordRef: SUB2API_PASSWORD
-```
-```yaml
-          relay-b:
-            adapter: sub2api-auth
-            # 方式二：复用已有的访问令牌（无需保存面板密码）
-            accessTokenRef: SUB2API_ACCESS_TOKEN
 ```
 
-dashboard 令牌是短效的；`sub2api-auth` 只在进程内存中维护当前令牌，401 时用面板密码重新登录，**不会把令牌或密码写入磁盘缓存、浏览器响应或日志**。关闭插件进程后内存令牌即失效，下次按需重新认证。
+（可选）若 `/user/balance` 返回 UTF-8 金额对应 `body.unit`，会显示该币种；否则默认 USD。今日已用额度尽量从 `GET /api/v1/usage/stats?period=today` 的 `total_actual_cost` 补充，查询不到也不影响余额展示。
+
+**自动识别真实 Sub2API 面板（`sub2api-auth`）**：只要把 Sub2API 面板作为普通 provider 配置进 DSH（带入它的 API Key），插件会探测该 provider 的 `GET /api/v1/settings/public`。若指纹命中真实 Sub2API 面板（返回 `data.affiliate_enabled: boolean`），就自动按 `sub2api-auth` 用该 provider 的 API Key 读取余额，**无需为该 provider 单独写 `adapter`，也无需额外凭据**。显式 `adapter` 始终优先于自动识别；没有配置 API Key 的 provider 绝不会被探测。
 
 ```yaml
-# ~/.dsh/.credentials.yaml
-SUB2API_EMAIL: you-account@panel.example
-SUB2API_PASSWORD: your-panel-password
-SUB2API_ACCESS_TOKEN: <可选，面板登录后得到的短效 JWT>
+# 只要这些（不需要单独的 SUB2API_* 凭据）
+# DSH 模型页里为 Sub2API 面板配置 provider，baseURL 指向面板，API Key 填可用的密钥
 ```
-
-**自动识别真实 Sub2API 面板（`sub2api-auth`）**：只要在任何 Harness provider 里配置了 Sub2API 面板，并在 `~/.dsh/.credentials.yaml` 提供上面的 `SUB2API_EMAIL` + `SUB2API_PASSWORD`（或 `SUB2API_ACCESS_TOKEN`），插件会启动时探测该 provider 的 `GET /api/v1/settings/public`。若指纹命中真实 Sub2API 面板（返回 `data.affiliate_enabled: boolean`），则自动按 `sub2api-auth` 读取该面板的账号余额，无需为该 provider 单独写 `adapter`。显式 `adapter` 始终优先于自动识别；未配置面板凭据时绝不会发起探测请求。
 
 Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动识别。钱包响应显示余额；`quota_limited` 或包含 `subscription` 的响应自动切换为额度窗口。
 
@@ -294,7 +283,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 ## 隐私与安全 / Privacy & security
 
 - API Key、OpenCode `auth.json`、Cookie 与管理 PAT 不会进入浏览器响应、插件缓存或日志。
-- Sub2API 面板短效 JWT（`sub2api-auth`）只保存在进程内存，401 时用面板密码重新登录；令牌与面板密码同样不进浏览器响应、磁盘缓存或日志。
+- Sub2API `sub2api-auth` 复用 provider 自己的推理 API Key（模型页已配置的那个），不会再引入或落盘额外的面板凭据。
 - 自定义 monitor 默认要求 HTTPS、同源相对路径、手动 redirect 和 JSON 响应，body 上限为 1 MiB。
 - 发凭据前会筛选域名的 IPv4/IPv6 解析结果并固定一个允许的连接地址，优先使用公网地址；HTTPS 域名解析到 `198.18.0.0/15` 时可作为 Clash/Mihomo 等代理的 synthetic fake-IP 使用。字面量 `198.18/15`、其他私网/特殊地址仍默认拒绝，防止 DNS rebinding 绕过私网限制。
 - `usageBaseURL` 禁止内嵌 username/password；`Authorization`、`X-API-Key`、`API-Key` 等 header 必须由 credential ref 注入。

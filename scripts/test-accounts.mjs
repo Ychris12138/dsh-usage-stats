@@ -473,158 +473,96 @@ console.log("IPv4/IPv6 private-address classification ok");
 }
 
 {
-	// sub2api-auth: email+password login, then the dashboard balance + today usage.
+	// sub2api-auth: reuse the provider's own API key (already configured in the
+	// model) against GET /user/balance — the CC Switch General template.
 	const calls = [];
 	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
-		"relay-a": {
-			adapter: "sub2api-auth",
-			usernameRef: "SUB2API_EMAIL",
-			passwordRef: "SUB2API_PASSWORD"
-		}
+		"relay-a": { adapter: "sub2api-auth" }
 	} }));
-	const account = await queryAccount(spec, credentials({ SUB2API_EMAIL: "me@example.com", SUB2API_PASSWORD: "s3cret" }), {
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
 		now: () => now,
 		fetch: async (url, init) => {
-			calls.push({ url: String(url), method: init?.method ?? "GET", authorization: init?.headers?.authorization });
-			if (String(url).endsWith("/api/v1/auth/login")) {
-				assert.equal(init.method, "POST");
-				const body = JSON.parse(init.body);
-				assert.equal(body.email, "me@example.com");
-				assert.equal(body.password, "s3cret");
-				return jsonResponse({ code: 0, message: "ok", data: { access_token: "jwt-access", refresh_token: "jwt-refresh", expires_in: 3000 } });
-			}
+			calls.push({ url: String(url), authorization: init?.headers?.authorization });
 			if (String(url).includes("/api/v1/usage/stats")) {
-				return jsonResponse({ code: 0, message: "ok", data: { total_actual_cost: 2.5, total_input_tokens: 100, total_output_tokens: 50, total_requests: 3 } });
+				return jsonResponse({ code: 0, message: "ok", data: { total_actual_cost: 2.5, total_input_tokens: 100, total_output_tokens: 50 } });
 			}
-			assert.ok(String(url).endsWith("/api/v1/auth/me"));
-			assert.equal(init.headers.authorization, "Bearer jwt-access");
-			return jsonResponse({ code: 0, message: "ok", data: { id: 42, username: "relay-a-owner", email: "me@example.com", balance: 12.5 } });
+			assert.equal(String(url).endsWith("/user/balance"), true);
+			assert.equal(init.headers.authorization, "Bearer sk-relay");
+			return jsonResponse({ balance: 12.5, unit: "USD", planName: "Relay A" });
 		}
 	});
 	assert.equal(account.status, "ok");
 	assert.equal(account.mode, "balance");
-	assert.equal(account.plan, "relay-a-owner");
+	assert.equal(account.plan, "Relay A");
 	assert.deepEqual(account.balance, { remaining: 12.5, used: 2.5, currency: "USD", unlimited: false, expiresAt: null });
-	assert.equal(JSON.stringify(account).includes("jwt-access"), false, "access token must never leak into the snapshot");
-	assert.equal(JSON.stringify(account).includes("s3cret"), false, "password must never leak into the snapshot");
-	console.log("sub2api-auth login + balance normalization ok");
+	assert.equal(JSON.stringify(account).includes("sk-relay"), false, "provider key must never leak into the snapshot");
+	console.log("sub2api-auth reuses provider API key against /user/balance ok");
 }
 
 {
-	// sub2api-auth: a pre-issued access token avoids storing the panel password.
+	// sub2api-auth: a numeric-string balance and missing currency default to USD.
 	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
-		"relay-a": { adapter: "sub2api-auth", accessTokenRef: "SUB2API_ACCESS_TOKEN" }
+		"relay-a": { adapter: "sub2api-auth" }
 	} }));
-	const account = await queryAccount(spec, credentials({ SUB2API_ACCESS_TOKEN: "static-jwt" }), {
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
 		now: () => now,
-		fetch: async (url, init) => {
-			if (String(url).endsWith("/api/v1/auth/login")) { throw new Error("must not log in when a token is provided"); }
+		fetch: async (url) => {
 			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
-			assert.equal(String(url).endsWith("/api/v1/auth/me"), true);
-			assert.equal(init.headers.authorization, "Bearer static-jwt");
-			return jsonResponse({ code: 0, message: "ok", data: { id: 1, username: "static", balance: 9.9 } });
-		},
-		sessions: new Map()
-	});
-	assert.equal(account.status, "ok");
-	assert.equal(account.balance.remaining, 9.9);
-	console.log("sub2api-auth static access token path ok");
-}
-
-{
-	// sub2api-auth: a stale JWT (401) triggers one re-login and a successful retry.
-	let meCalls = 0;
-	let loginCount = 0;
-	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
-		"relay-a": { adapter: "sub2api-auth", usernameRef: "SUB2API_EMAIL", passwordRef: "SUB2API_PASSWORD" }
-	} }));
-	const account = await queryAccount(spec, credentials({ SUB2API_EMAIL: "me@example.com", SUB2API_PASSWORD: "s3cret" }), {
-		now: () => now,
-		sessions: new Map(),
-		fetch: async (url, init) => {
-			if (String(url).endsWith("/api/v1/auth/login")) {
-				loginCount += 1;
-				return jsonResponse({ code: 0, message: "ok", data: { access_token: `jwt-${loginCount}` } });
-			}
-			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
-			assert.ok(String(url).endsWith("/api/v1/auth/me"));
-			meCalls += 1;
-			// The first dashboard request uses the initial(now-stale) token.
-			if (meCalls === 1) return jsonResponse({ code: 0, message: "no" }, 401);
-			assert.equal(init.headers.authorization, "Bearer jwt-2", "retry must use the newer token");
-			return jsonResponse({ code: 0, message: "ok", data: { id: 1, username: "retry", balance: 7.25 } });
+			assert.equal(String(url).endsWith("/user/balance"), true);
+			return jsonResponse({ balance: "7.25" });
 		}
 	});
 	assert.equal(account.status, "ok");
 	assert.equal(account.balance.remaining, 7.25);
-	assert.equal(loginCount, 2, "a stale token must trigger exactly one re-login");
-	console.log("sub2api-auth stale-JWT re-login retry ok");
+	assert.equal(account.balance.currency, "USD");
+	console.log("sub2api-auth numeric-string balance and default currency ok");
 }
 
 {
-	// sub2api-auth: persistent login failure surfaces as unauthorized, never a secret leak.
+	// sub2api-auth: missing provider API key is not-configured (never a blind request).
 	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
-		"relay-a": { adapter: "sub2api-auth", usernameRef: "SUB2API_EMAIL", passwordRef: "SUB2API_PASSWORD" }
+		"relay-a": { adapter: "sub2api-auth" }
 	} }));
-	const account = await queryAccount(spec, credentials({ SUB2API_EMAIL: "me@example.com", SUB2API_PASSWORD: "wrong" }), {
-		now: () => now,
-		fetch: async (url, init) => {
-			if (String(url).endsWith("/api/v1/auth/login")) {
-				return jsonResponse({ code: 401, message: "invalid credentials" });
-			}
-			return jsonResponse({}, 401);
-		}
-	});
-	assert.equal(account.status, "unauthorized");
-	assert.equal(account.balance, null);
-	console.log("sub2api-auth failed login maps to unauthorized ok");
-}
-
-{
-	// sub2api-auth: missing dashboard credentials is not-configured (never a blind request).
-	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
-		"relay-a": { adapter: "sub2api-auth", usernameRef: "SUB2API_EMAIL", passwordRef: "SUB2API_PASSWORD" }
-	} }));
-	const account = await queryAccount(spec, credentials({}), { now: () => now, fetch: async () => { throw new Error("must not fetch without credentials"); } });
+	const account = await queryAccount(spec, credentials({}), { now: () => now, fetch: async () => { throw new Error("must not fetch without a provider API key"); } });
 	assert.equal(account.status, "not-configured");
 	assert.equal(account.balance, null);
-	console.log("sub2api-auth missing credentials is not-configured ok");
+	console.log("sub2api-auth missing provider key is not-configured ok");
 }
 
 {
-	// Config validation: sub2api-auth demands an auth pathway.
-	assert.throws(() => validateAccountConfig({ monitors: {
-		"relay-a": { adapter: "sub2api-auth", usernameRef: "SUB2API_EMAIL" }
-	} }), /accessTokenRef or both usernameRef and passwordRef/i);
-	assert.throws(() => validateAccountConfig({ monitors: {
-		"relay-a": { adapter: "sub2api-auth", passwordRef: 123 }
-	} }), /must be a credential reference name/i);
-	console.log("sub2api-auth config validation ok");
+	// sub2api-auth: an invalid numeric balance is classified as invalid-response.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			assert.equal(String(url).endsWith("/user/balance"), true);
+			return jsonResponse({});
+		}
+	});
+	assert.equal(account.status, "invalid-response");
+	assert.equal(account.balance, null);
+	console.log("sub2api-auth missing numeric balance maps to invalid-response ok");
 }
 
 {
-	// Auto-detection hit: a provider with no adapter, shared panel credentials
-	// present, and a public-settings fingerprint is auto-selected as sub2api-auth.
+	// Auto-detection hit: a relay provider with an API key and a public-settings
+	// fingerprint is auto-selected as sub2api-auth and queried with its own key.
 	const probed = [];
-	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({
-		SUB2API_EMAIL: "panel@example.com",
-		SUB2API_PASSWORD: "panel-secret"
-	}), {
+	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({ RELAY_A_KEY: "sk-relay" }), {
 		now: () => now,
 		fetch: async (url, init) => {
 			if (String(url).endsWith("/api/v1/settings/public")) {
 				probed.push(String(url));
 				return jsonResponse({ code: 0, message: "ok", data: { affiliate_enabled: true } });
 			}
-			if (String(url).endsWith("/api/v1/auth/login")) {
-				return jsonResponse({ code: 0, message: "ok", data: { access_token: "auto-jwt" } });
-			}
 			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
-			assert.ok(String(url).endsWith("/api/v1/auth/me"));
-			assert.equal(init.headers.authorization, "Bearer auto-jwt");
-			return jsonResponse({ code: 0, message: "ok", data: { id: 7, username: "panel", balance: 3.5 } });
+			assert.ok(String(url).endsWith("/user/balance"));
+			assert.equal(init.headers.authorization, "Bearer sk-relay");
+			return jsonResponse({ balance: 3.5, unit: "USD" });
 		},
-		sessions: new Map(),
 		sub2apiDetection: new Map()
 	});
 	assert.equal(account.status, "ok");
@@ -637,11 +575,8 @@ console.log("IPv4/IPv6 private-address classification ok");
 
 {
 	// Auto-detection miss: the probe shows it is not a Sub2API panel → unsupported,
-	// no dashboard login or balance query is attempted.
-	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({
-		SUB2API_EMAIL: "panel@example.com",
-		SUB2API_PASSWORD: "panel-secret"
-	}), {
+	// no balance query is attempted with the provider key.
+	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({ RELAY_A_KEY: "sk-relay" }), {
 		now: () => now,
 		fetch: async (url) => {
 			if (String(url).endsWith("/api/v1/settings/public")) {
@@ -657,27 +592,27 @@ console.log("IPv4/IPv6 private-address classification ok");
 }
 
 {
-	// Auto-detection is gated on shared credentials: without panel credentials the
-	// provider is left unsupported and never probed.
+	// Auto-detection is gated on a provider API key: an unkeyed relay is left
+	// unsupported and never probed.
 	let fetched = false;
-	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({ RELAY_A_KEY: "sk-relay" }), {
+	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({}), {
 		now: () => now,
-		fetch: async () => { fetched = true; throw new Error("must not probe without panel credentials"); },
+		fetch: async () => { fetched = true; throw new Error("must not probe without a provider API key"); },
 		sub2apiDetection: new Map()
 	});
 	assert.equal(account.status, "unsupported");
-	assert.equal(fetched, false, "no request must fire without panel credentials");
-	console.log("sub2api-auth auto-detection requires shared credentials ok");
+	assert.equal(fetched, false, "no request must fire without a provider API key");
+	console.log("sub2api-auth auto-detection requires a provider API key ok");
 }
 
 {
 	// An explicit adapter always wins over auto-detection: a provider bound to
-	// `new-api` is never probed or overridden even with panel credentials.
+	// `new-api` is never probed or overridden even with a provider API key.
 	let fetched = false;
 	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
 		"relay-a": { adapter: "new-api" }
 	} }));
-	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay", SUB2API_EMAIL: "panel@example.com", SUB2API_PASSWORD: "x" }), {
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
 		now: () => now,
 		fetch: async (url) => {
 			if (String(url).endsWith("/api/v1/settings/public")) { fetched = true; throw new Error("explicit adapter must not be probed"); }

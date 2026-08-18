@@ -2,38 +2,20 @@ name: CI
 
 on:
   push:
-    branches:
-      - feat/panel-dismiss-and-diagnostics
+  pull_request:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  apply-and-test:
+  test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          ref: feat/panel-dismiss-and-diagnostics
-          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
           cache: npm
-      - name: Apply focused client patch
-        run: python3 scripts/apply-v024-client-patch.py
-      - name: Install dependencies
-        run: npm ci
-      - name: Validate
-        run: npm run check && npm test
-      - name: Commit validated result and restore normal CI
-        shell: bash
-        run: |
-          git fetch origin main
-          git checkout origin/main -- .github/workflows/ci.yml
-          rm scripts/apply-v024-client-patch.py
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add lib/client.js scripts/smoke-client.mjs .github/workflows/ci.yml scripts/apply-v024-client-patch.py
-          git commit -m "feat: dismiss panel on outside click and Escape"
-          git push origin HEAD:feat/panel-dismiss-and-diagnostics
+      - run: npm ci
+      - run: npm run check
+      - run: npm test

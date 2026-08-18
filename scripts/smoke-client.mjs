@@ -29,6 +29,9 @@ const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", 
 if (!source.includes("/api/usage-stats/account")) throw new Error("client must use the unified account endpoint");
 if (source.includes('fetchJson("/api/usage-stats/subscriptions")')) throw new Error("client must not bulk-fetch every subscription provider");
 if (!source.includes('host.style.flexDirection = "column"')) throw new Error("client must stack the host footer-actions container vertically (#21)");
+if (!source.includes('document.addEventListener("pointerdown"')) throw new Error("open panel must listen for outside pointerdown");
+if (!source.includes('event.key === "Escape"')) throw new Error("open panel must dismiss on Escape");
+if (!source.includes("ref: panelRef")) throw new Error("portaled panel must expose a ref for outside-click detection");
 // Badge layout regression: the collapsed badge must keep the 「用量/余额」label,
 // render the account value as a separate middle element, and keep today's token
 // count on the right — the label must never be replaced by the amount.
@@ -52,6 +55,18 @@ const exports_ = captured.factory((spec) => {
 });
 
 if (typeof exports_.apply !== "function") throw new Error("missing apply export");
+
+const { shouldDismissPanel, safeDiagnosticReason } = exports_;
+const panelNode = { contains: (target) => target === "panel-child" };
+const layerNode = { contains: (target) => target === "badge-child" };
+if (shouldDismissPanel([panelNode], "panel-child", layerNode, panelNode)) throw new Error("panel click must stay open");
+if (shouldDismissPanel([layerNode], "badge-child", layerNode, panelNode)) throw new Error("badge click must stay inside");
+if (!shouldDismissPanel([], "page-content", layerNode, panelNode)) throw new Error("outside click must dismiss");
+if (!shouldDismissPanel([], "page-content", null, null)) throw new Error("missing refs must fail safe as outside");
+if (safeDiagnosticReason("all-addresses-unreachable") !== "all-addresses-unreachable") throw new Error("safe reason should pass");
+if (safeDiagnosticReason("Authorization: Bearer secret") !== null) throw new Error("secret-like reason must be rejected");
+if (safeDiagnosticReason("x".repeat(161)) !== null) throw new Error("oversized reason must be rejected");
+console.log("panel dismissal and diagnostic guards ok");
 
 // Render the panel (closed state) to static markup.
 const { UsageStatsPanel } = exports_;
@@ -200,13 +215,14 @@ if (!goMarkup.includes("data-account-mode=\"subscription\"") || !goMarkup.includ
 if ((goMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !goMarkup.includes("width:12%")) throw new Error("OpenCode Go must render three quota meters");
 const invalidMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
 	provider: { id: "minimax", displayName: "MiniMax", accountMode: "subscription" },
-	account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [] },
+	account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [], reason: "all-addresses-unreachable" },
 	accountLoading: false,
 	accountError: null,
 	translate: translateAccount,
 	onRetry: () => {}
 }));
 if (!invalidMarkup.includes("account.status.invalidResponse") || !invalidMarkup.includes("account.invalidResponse")) throw new Error("invalid account responses need a distinct status and explanation");
+if (!invalidMarkup.includes("account.reason.allAddressesUnreachable")) throw new Error("safe diagnostic reason must render in account card");
 
 // Local security-policy rejections must render a distinct blocked state, not
 // the "provider has no balance interface" unsupported message.

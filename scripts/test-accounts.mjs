@@ -603,6 +603,96 @@ console.log("IPv4/IPv6 private-address classification ok");
 }
 
 {
+	// Auto-detection hit: a provider with no adapter, shared panel credentials
+	// present, and a public-settings fingerprint is auto-selected as sub2api-auth.
+	const probed = [];
+	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({
+		SUB2API_EMAIL: "panel@example.com",
+		SUB2API_PASSWORD: "panel-secret"
+	}), {
+		now: () => now,
+		fetch: async (url, init) => {
+			if (String(url).endsWith("/api/v1/settings/public")) {
+				probed.push(String(url));
+				return jsonResponse({ code: 0, message: "ok", data: { affiliate_enabled: true } });
+			}
+			if (String(url).endsWith("/api/v1/auth/login")) {
+				return jsonResponse({ code: 0, message: "ok", data: { access_token: "auto-jwt" } });
+			}
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			assert.ok(String(url).endsWith("/api/v1/auth/me"));
+			assert.equal(init.headers.authorization, "Bearer auto-jwt");
+			return jsonResponse({ code: 0, message: "ok", data: { id: 7, username: "panel", balance: 3.5 } });
+		},
+		sessions: new Map(),
+		sub2apiDetection: new Map()
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.mode, "balance");
+	assert.equal(account.adapter, "sub2api-auth");
+	assert.equal(account.balance.remaining, 3.5);
+	assert.ok(probed.length === 1, "panel probe must run");
+	console.log("sub2api-auth auto-detection fingerprint hit ok");
+}
+
+{
+	// Auto-detection miss: the probe shows it is not a Sub2API panel → unsupported,
+	// no dashboard login or balance query is attempted.
+	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({
+		SUB2API_EMAIL: "panel@example.com",
+		SUB2API_PASSWORD: "panel-secret"
+	}), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/api/v1/settings/public")) {
+				return jsonResponse({ code: 0, message: "ok", data: { affiliate_enabled: "yes" } });
+			}
+			throw new Error("must not query non-panel endpoints when the probe misses");
+		},
+		sub2apiDetection: new Map()
+	});
+	assert.equal(account.status, "unsupported");
+	assert.equal(account.balance, null);
+	console.log("sub2api-auth auto-detection fingerprint miss ok");
+}
+
+{
+	// Auto-detection is gated on shared credentials: without panel credentials the
+	// provider is left unsupported and never probed.
+	let fetched = false;
+	const account = await queryAccount(resolveAccountSpec(relay, validateAccountConfig()), credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async () => { fetched = true; throw new Error("must not probe without panel credentials"); },
+		sub2apiDetection: new Map()
+	});
+	assert.equal(account.status, "unsupported");
+	assert.equal(fetched, false, "no request must fire without panel credentials");
+	console.log("sub2api-auth auto-detection requires shared credentials ok");
+}
+
+{
+	// An explicit adapter always wins over auto-detection: a provider bound to
+	// `new-api` is never probed or overridden even with panel credentials.
+	let fetched = false;
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "new-api" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay", SUB2API_EMAIL: "panel@example.com", SUB2API_PASSWORD: "x" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/api/v1/settings/public")) { fetched = true; throw new Error("explicit adapter must not be probed"); }
+			if (String(url).endsWith("/api/status")) return jsonResponse({ data: { quota_per_unit: 500000 } });
+			return jsonResponse({ code: true, data: { total_granted: 10, total_used: 2, total_available: 8 } });
+		},
+		sub2apiDetection: new Map()
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.adapter, "new-api");
+	assert.equal(fetched, false, "explicit adapter must bypass the panel probe");
+	console.log("sub2api-auth auto-detection never overrides explicit adapter ok");
+}
+
+{
 	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
 		"relay-a": { adapter: "general" }
 	} }));

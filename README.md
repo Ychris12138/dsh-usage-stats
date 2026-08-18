@@ -203,6 +203,8 @@ SUB2API_PASSWORD: your-panel-password
 SUB2API_ACCESS_TOKEN: <可选，面板登录后得到的短效 JWT>
 ```
 
+**自动识别真实 Sub2API 面板（`sub2api-auth`）**：只要在任何 Harness provider 里配置了 Sub2API 面板，并在 `~/.dsh/.credentials.yaml` 提供上面的 `SUB2API_EMAIL` + `SUB2API_PASSWORD`（或 `SUB2API_ACCESS_TOKEN`），插件会启动时探测该 provider 的 `GET /api/v1/settings/public`。若指纹命中真实 Sub2API 面板（返回 `data.affiliate_enabled: boolean`），则自动按 `sub2api-auth` 读取该面板的账号余额，无需为该 provider 单独写 `adapter`。显式 `adapter` 始终优先于自动识别；未配置面板凭据时绝不会发起探测请求。
+
 Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动识别。钱包响应显示余额；`quota_limited` 或包含 `subscription` 的响应自动切换为额度窗口。
 
 声明式自定义查询只支持受限 GET + JSON Pointer，不执行 JavaScript：

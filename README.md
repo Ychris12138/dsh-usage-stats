@@ -34,6 +34,22 @@ dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"
 
 然后重启已经运行的 `dsh web`，并在浏览器中硬刷新。侧边栏底部会出现“用量/余额”（Usage/Balance）入口。
 
+### 插件市场 GUI 安装（DSH Community Market，Path A 标准来源）
+
+本仓库按 [DSH Community Market 目录 adapter 指南](https://github.com/anywhere-labs/deepseek-harness-desktop/blob/master/dsh-community-market/docs/catalog-adapter-guide.zh.md) 的**标准来源（Path A）** 接入，无需修改 Market 代码。内置两份目录数据：
+
+- `catalog/catalog-source.json` — 来源 manifest（`catalog-source.schema.json` v1.0.0）
+- `catalog/v1/plugins.json` — 标准 provider page（`catalog-provider-page.schema.json` v1.0.0）
+
+**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`（当前可用）。要启用 GUI「安装」按钮，需先发布：
+
+1. 把 `package.json` 的 `name` 改为 `@ychris12138/dsh-usage-stats`（或你选定的可用名），去掉 `private: true`，并同步 `cordis.patch.yml` 的 `name` 与 `catalog/v1/plugins.json` 的 `package.name` / `latestVersion`。
+2. `npm publish`（scoped 公开包）。
+3. 把 `catalog/v1/plugins.json` 内容发布到 `https://ycris12138.github.io/dsh-usage-stats/v1/plugins`（GitHub Pages，manifest 与 endpoint 必须同源、HTTPS 443、无凭据）。
+4. 在 DSH 插件市场 → 来源管理 → 添加来源，粘贴 manifest URL：`https://ycris12138.github.io/dsh-usage-stats/catalog-source.json`，选择后即可走「可恢复安装边界」GUI 安装。
+
+> 若最终包名不同，请同步修改 `catalog-source.json` 的 `providerId`/`transport.endpoint` 与 `catalog/v1/plugins.json` 的身份字段。发布前目录条目可浏览但安装保持禁用（fail-closed，属预期）。
+
 升级或卸载：
 
 ```bash

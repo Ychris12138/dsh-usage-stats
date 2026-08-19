@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import {
 	createAccountService,
 	isPrivateAddress,
@@ -711,6 +712,42 @@ console.log("IPv4/IPv6 private-address classification ok");
 		"all validated public DNS answers must remain available for connection fallback"
 	);
 	console.log("multi-address DNS policy preserves validated candidates ok");
+}
+
+{
+	const source = readFileSync(new URL("../lib/accounts.js", import.meta.url), "utf8");
+	assert.match(source, /family:\s*address\.family/, "each pinned request must fix the selected address family");
+	assert.match(source, /autoSelectFamily:\s*false/, "Node network-family autoselection must stay disabled inside each pinned attempt");
+	console.log("Node 24 pinned request disables inner network-family autoselection ok");
+}
+
+{
+	const { createServer } = await import("node:http");
+	const server = createServer((req, res) => {
+		assert.equal(req.url, "/user/balance");
+		res.writeHead(200, { "content-type": "application/json" });
+		res.end(JSON.stringify({ balance: 11, currency: "USD" }));
+	});
+	await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+	const { port } = server.address();
+	try {
+		const localProvider = { ...relay, baseURL: `http://localhost:${port}/v1` };
+		const spec = resolveAccountSpec(localProvider, validateAccountConfig({ monitors: {
+			"relay-a": { adapter: "general", allowPrivateNetwork: true, allowInsecure: true }
+		} }));
+		const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+			now: () => now,
+			lookup: async () => [
+				{ address: "::1", family: 6 },
+				{ address: "127.0.0.1", family: 4 }
+			]
+		});
+		assert.equal(account.status, "ok");
+		assert.equal(account.balance.remaining, 11);
+	} finally {
+		await new Promise((resolve) => server.close(resolve));
+	}
+	console.log("real socket IPv6 failure falls back to pinned IPv4 without escaping ok");
 }
 
 {

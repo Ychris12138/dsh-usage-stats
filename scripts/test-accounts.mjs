@@ -22,6 +22,13 @@ function jsonResponse(value, status = 200, headers = {}) {
 	});
 }
 
+/** Build a fake provider-status error the way lib/accounts.js statusError() does. */
+function statusErrorFromTest(status, message) {
+	const error = new Error(message);
+	error.providerStatus = status;
+	return error;
+}
+
 const now = Date.parse("2026-08-15T00:00:00Z");
 const relay = {
 	id: "relay-a",
@@ -591,7 +598,7 @@ console.log("IPv4/IPv6 private-address classification ok");
 	});
 	assert.equal(account.status, "invalid-response");
 	assert.equal(account.balance, null);
-	assert.match(account.reason, /^sub2api-balance-keys:message/, "must surface which keys the panel returned");
+	assert.equal(account.reason, "sub2api-balance-shape-unrecognized", "reason must be a fixed enum, never upstream-controlled keys");
 	console.log("sub2api-auth both endpoints missing balance keeps invalid-response ok");
 }
 
@@ -692,6 +699,78 @@ console.log("IPv4/IPv6 private-address classification ok");
 	assert.equal(account.adapter, "new-api");
 	assert.equal(fetched, false, "explicit adapter must bypass the panel probe");
 	console.log("sub2api-auth auto-detection never overrides explicit adapter ok");
+}
+
+{
+	// P1 regression: upstream-controlled JSON property names must never appear
+	// in the normalized snapshot's reason. A hostile panel echoing sensitive
+	// material as an object key (e.g. an API key) must stay out of safeReason.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) return jsonResponse({ "sk-super-secret-api-key": 1 });
+			if (String(url).endsWith("/v1/usage")) return jsonResponse({});
+			if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+			throw new Error(`unexpected url: ${url}`);
+		}
+	});
+	assert.equal(account.status, "invalid-response");
+	assert.equal(account.reason, "sub2api-balance-shape-unrecognized", "reason must be a fixed enum");
+	assert.equal(JSON.stringify(account).includes("sk-super-secret-api-key"), false, "upstream-controlled key must never reach the snapshot");
+	console.log("sub2api-auth upstream key names never leak into snapshot ok");
+}
+
+{
+	// P1 regression: the detection cache must live on the service, so two
+	// refresh/query cycles for the same configKey probe the panel only once.
+	let probes = 0;
+	const service = createAccountService({
+		credentials: credentials({ RELAY_A_KEY: "sk-relay" }),
+		getProviders: async () => [relay],
+		config: { monitors: {} },
+		deps: {
+			now: () => now,
+			fetch: async (url, init) => {
+				if (String(url).endsWith("/api/v1/settings/public")) {
+					probes += 1;
+					return jsonResponse({ code: 0, message: "ok", data: { affiliate_enabled: true } });
+				}
+				if (String(url).includes("/api/v1/usage/stats")) return jsonResponse({ code: 0, message: "ok", data: {} });
+				if (String(url).endsWith("/user/balance")) return jsonResponse({ balance: 1.5, unit: "USD" });
+				throw new Error(`unexpected url: ${url}`);
+			}
+		}
+	});
+	const first = await service.get("relay-a", { force: true });
+	assert.equal(first.adapter, "sub2api-auth");
+	assert.equal(probes, 1, "first cycle must probe exactly once");
+	const second = await service.get("relay-a", { force: true });
+	assert.equal(second.adapter, "sub2api-auth");
+	assert.equal(probes, 1, "second cycle must reuse the persisted detection cache");
+	console.log("sub2api-auth detection cache persists across service refreshes ok");
+}
+
+{
+	// Reviewer suggestion: security-policy/TLS failures on /user/balance must
+	// not be silently swallowed into the /v1/usage fallback — the real error
+	// surfaces instead of being masked.
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "sub2api-auth" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/user/balance")) {
+				throw statusErrorFromTest("blocked", "account monitor requires HTTPS");
+			}
+			throw new Error(`must not fall back after a security-policy failure: ${url}`);
+		}
+	});
+	assert.equal(account.status, "blocked", "security-policy failures must surface, not fall back");
+	console.log("sub2api-auth security-policy failure not swallowed ok");
 }
 
 {

@@ -722,6 +722,38 @@ console.log("IPv4/IPv6 private-address classification ok");
 }
 
 {
+	const source = readFileSync(new URL("../lib/accounts.js", import.meta.url), "utf8");
+	assert.match(source, /request\.on\("socket",\s*\(socket\)\s*=>\s*\{[^}]*socket\.on\("error"/, "pinned request must forward connect-phase socket errors to the request (#42)");
+	console.log("pinned request socket error backstop present ok");
+}
+
+{
+	// Real transport regression for #42: a pinned connection to a closed port
+	// must reject through the normal error path (unavailable snapshot), never
+	// escape as an unhandled socket 'error' that kills the host process.
+	const { createServer } = await import("node:http");
+	const probe = createServer();
+	await new Promise((resolve) => probe.listen(0, "127.0.0.1", resolve));
+	const { port } = probe.address();
+	await new Promise((resolve) => probe.close(resolve)); // port is now guaranteed closed
+	const localProvider = { ...relay, baseURL: `http://localhost:${port}/v1` };
+	const spec = resolveAccountSpec(localProvider, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "general", allowPrivateNetwork: true, allowInsecure: true }
+	} }));
+	// No requestPinned mock: exercise the real pinnedRequest transport so the
+	// connect-phase ECONNREFUSED travels the exact socket error path from #42.
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		lookup: async () => [
+			{ address: "127.0.0.1", family: 4 }
+		]
+	});
+	assert.equal(account.status, "unavailable");
+	assert.equal(account.reason, "all-addresses-unreachable");
+	console.log("real socket connect refusal degrades without unhandled error ok");
+}
+
+{
 	const { createServer } = await import("node:http");
 	const server = createServer((req, res) => {
 		assert.equal(req.url, "/user/balance");

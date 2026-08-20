@@ -44,6 +44,7 @@ new Function(source)(); // executes the window.__ModuleLoader__.load call
 if (captured === null) throw new Error("loader did not capture the bundle");
 const packageName = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")).name;
 if (captured.id !== packageName) throw new Error(`unexpected id ${captured.id}; expected package name ${packageName}`);
+if (!source.includes(`tag.dataset.plugin = "${packageName}"`)) throw new Error(`style ownership id must match package name ${packageName}`);
 
 const exports_ = captured.factory((spec) => {
 	if (spec === "react") return react;

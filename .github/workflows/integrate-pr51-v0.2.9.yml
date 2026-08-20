@@ -1,0 +1,64 @@
+name: Integrate remaining PR 51 identity fix
+
+on:
+  push:
+    branches: [fix/scoped-installer-v0.2.9]
+    paths:
+      - .github/workflows/integrate-pr51-v0.2.9.yml
+
+permissions:
+  contents: write
+
+jobs:
+  integrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Align style ownership identity and add regression
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+          let client = fs.readFileSync('lib/client.js', 'utf8');
+          const oldLine = 'tag.dataset.plugin = "dsh-usage-stats";';
+          const newLine = `tag.dataset.plugin = "${pkg.name}";`;
+          if (!client.includes(oldLine) && !client.includes(newLine)) throw new Error('expected style ownership line not found');
+          client = client.replace(oldLine, newLine);
+          fs.writeFileSync('lib/client.js', client);
+
+          let smoke = fs.readFileSync('scripts/smoke-client.mjs', 'utf8');
+          const anchor = 'if (captured.id !== packageName) throw new Error(`unexpected id ${captured.id}; expected package name ${packageName}`);';
+          const guard = 'if (!source.includes(`tag.dataset.plugin = "${packageName}"`)) throw new Error(`style ownership id must match package name ${packageName}`);';
+          if (!smoke.includes(anchor)) throw new Error('smoke anchor not found');
+          if (!smoke.includes(guard)) smoke = smoke.replace(anchor, `${anchor}\n${guard}`);
+          fs.writeFileSync('scripts/smoke-client.mjs', smoke);
+          NODE
+
+      - run: npm ci
+      - run: npm run check
+      - run: npm test
+      - run: npm pack --dry-run
+
+      - name: Commit integration with contributor credit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- lib/client.js scripts/smoke-client.mjs
+          if ! git diff --cached --quiet; then
+            git commit -m $'fix: align client style ownership with scoped package\n\nCo-authored-by: noneowl <93021114+noneowl@users.noreply.github.com>'
+          fi
+          git push
+
+      - name: Remove one-shot workflow
+        run: |
+          git rm -- .github/workflows/integrate-pr51-v0.2.9.yml
+          git commit -m "chore: remove PR 51 integration workflow"
+          git push

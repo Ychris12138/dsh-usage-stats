@@ -33,13 +33,24 @@ Set DSH_HOME to override the default ~/.dsh location.`);
 const sourceRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 const sourcePackage = JSON.parse(await readFile(join(sourceRoot, "package.json"), "utf8"));
 const dshHome = process.env.DSH_HOME ?? join(homedir(), ".dsh");
-const target = join(dshHome, "profiles", "node_modules", "dsh-usage-stats");
+const packagePath = sourcePackage.name.split("/");
+if (packagePath.some((part) => part === "" || part === "." || part === "..")) {
+	throw new Error(`invalid package name: ${sourcePackage.name}`);
+}
+const target = join(dshHome, "profiles", "node_modules", ...packagePath);
 const patchPath = join(dshHome, "profiles", "web", "cordis.patch.yml");
-const pluginLine = /^\s+name:\s*dsh-usage-stats\s*$/gm;
+const legacyPackageName = sourcePackage.name.split("/").at(-1);
+const quotedPackageName = JSON.stringify(sourcePackage.name);
+const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+const scopedNamePattern = escapeRegExp(sourcePackage.name);
+const legacyNamePattern = escapeRegExp(legacyPackageName);
+const pluginLine = new RegExp(`^\\s+name:\\s*(?:"${scopedNamePattern}"|'${scopedNamePattern}')\\s*$`, "gm");
+const unquotedScopedPluginLine = new RegExp(`^(\\s+name:\\s*)${scopedNamePattern}\\s*$`, "gm");
+const legacyPluginLine = new RegExp(`^(\\s+name:\\s*)(?:"${legacyNamePattern}"|'${legacyNamePattern}'|${legacyNamePattern})\\s*$`, "gm");
 const patchBlock = `# dsh-usage-stats: token usage heatmap + DeepSeek balance
 - insert:
     - id: usage-stats
-      name: dsh-usage-stats
+      name: ${quotedPackageName}
 `;
 const emptySequenceRoot = /^\[\](?:[ \t]+#.*)?$/;
 
@@ -76,10 +87,26 @@ function assertNoEmptyRootConflict(text) {
 	}
 }
 
+function countMatches(text, pattern) {
+	return [...String(text).matchAll(pattern)].length;
+}
+
+/** Migrate the pre-scope entry and repair an invalid unquoted scoped YAML value. */
+function normalizePluginIdentity(text) {
+	const scopedCount = countMatches(text, pluginLine);
+	const legacyCount = countMatches(text, legacyPluginLine) + countMatches(text, unquotedScopedPluginLine);
+	if (scopedCount + legacyCount > 1) {
+		throw new Error(`multiple dsh-usage-stats entries in ${patchPath}; keep one ${quotedPackageName} entry`);
+	}
+	return String(text)
+		.replace(legacyPluginLine, (_, prefix) => `${prefix}${quotedPackageName}`)
+		.replace(unquotedScopedPluginLine, (_, prefix) => `${prefix}${quotedPackageName}`);
+}
+
 /** Preserve existing YAML/comments while adding exactly one plugin patch entry. */
 function enablePluginInPatch(text) {
-	const base = withoutEmptySequenceRoot(text);
-	if ([...base.matchAll(pluginLine)].length > 0) return base;
+	const base = normalizePluginIdentity(withoutEmptySequenceRoot(text));
+	if (countMatches(base, pluginLine) > 0) return base;
 	return base.trim() === "" ? patchBlock : `${base.trimEnd()}\n\n${patchBlock}`;
 }
 
@@ -100,10 +127,12 @@ async function verify(expectEnabled) {
 		throw new Error(`installed package is ${installed.name ?? "unknown"}@${installed.version ?? "unknown"}; expected ${sourcePackage.name}@${sourcePackage.version}`);
 	}
 	if (expectEnabled) {
-		const patch = await readOptional(patchPath);
-		const count = patch === null ? 0 : [...patch.matchAll(pluginLine)].length;
-		if (count !== 1) throw new Error(`expected exactly one dsh-usage-stats entry in ${patchPath}; found ${count}`);
+		const patch = await readOptional(patchPath) ?? "";
 		assertNoEmptyRootConflict(patch);
+		const count = countMatches(patch, pluginLine);
+		if (count !== 1) throw new Error(`expected exactly one dsh-usage-stats entry in ${patchPath}; found ${count}`);
+		if (countMatches(patch, legacyPluginLine) > 0) throw new Error(`legacy package name ${legacyPackageName} remains in ${patchPath}`);
+		if (countMatches(patch, unquotedScopedPluginLine) > 0) throw new Error(`scoped package name must be quoted in ${patchPath}`);
 	}
 	console.log(`Verified ${sourcePackage.name}@${sourcePackage.version}`);
 	console.log(`  package: ${target}`);

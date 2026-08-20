@@ -53,8 +53,8 @@ dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"
 升级或卸载：
 
 ```bash
-dsh plugin --profile web update dsh-usage-stats
-dsh plugin --profile web remove dsh-usage-stats
+dsh plugin --profile web update "@ychris12138/dsh-usage-stats"
+dsh plugin --profile web remove "@ychris12138/dsh-usage-stats"
 ```
 
 <details>
@@ -66,7 +66,7 @@ PowerShell、命令提示符和 macOS/Linux 终端使用同一条命令：
 npx --yes github:Ychris12138/dsh-usage-stats
 ```
 
-安装器会把运行文件复制到 `~/.dsh/profiles/node_modules/dsh-usage-stats`，并在 `profiles/web/cordis.patch.yml` 中幂等启用插件。重复运行即可更新，不会重复追加配置。设置了 `DSH_HOME` 时使用该目录。
+安装器会把运行文件复制到 `~/.dsh/profiles/node_modules/@ychris12138/dsh-usage-stats`，并在 `profiles/web/cordis.patch.yml` 中以带引号的 scoped identity 幂等启用插件。重复运行即可更新，不会重复追加配置；旧版 `name: dsh-usage-stats` 和未加引号的 `name: @ychris12138/dsh-usage-stats` 会自动迁移。设置了 `DSH_HOME` 时使用该目录。
 
 `dsh plugin` 与 `npx` 是两条独立安装路径，请选择其中一种；不要同时保留手工 Cordis entry 和 bundle 注册，否则会重复挂载。
 
@@ -147,7 +147,7 @@ Z.ai 全球区使用 `api.z.ai`，中国区使用 `open.bigmodel.cn`。MiniMax �
 
 ### New API、Sub2API 与自定义 monitor
 
-在现有 `name: dsh-usage-stats` Cordis entry 下合并 `config`，不要追加第二个插件 entry。monitor 键必须是 Harness 中真实存在的 provider id；未知 provider、adapter 或非法映射会在路由和 timer 注册前阻止插件启动。例外：monitor 同时显式提供 `usageBaseURL` 与 `credentialRef` 时视为自包含，会在 provider 注册可见前临时物化为 provider（适用于 Harness 设置页里后加载的 provider），此时不要求该 provider 已出现在注册表中。
+在现有 `name: "@ychris12138/dsh-usage-stats"` Cordis entry 下合并 `config`，不要追加第二个插件 entry。monitor 键必须是 Harness 中真实存在的 provider id；未知 provider、adapter 或非法映射会在路由和 timer 注册前阻止插件启动。例外：monitor 同时显式提供 `usageBaseURL` 与 `credentialRef` 时视为自包含，会在 provider 注册可见前临时物化为 provider（适用于 Harness 设置页里后加载的 provider），此时不要求该 provider 已出现在注册表中。
 
 <details>
 <summary><strong>展开 monitor 配置示例</strong></summary>
@@ -158,7 +158,7 @@ New API 默认用 provider 推理 Token 查询 `/api/usage/token/`，并从 `/ap
 # ~/.dsh/profiles/web/cordis.patch.yml
 - insert:
     - id: usage-stats
-      name: dsh-usage-stats
+      name: "@ychris12138/dsh-usage-stats"
       config:
         monitors:
           relay-a:                 # Harness provider id
@@ -264,7 +264,7 @@ Constraints:
 
 Procedure:
 1. Confirm node, npx, and dsh are available.
-2. Prefer `dsh plugin --profile web update dsh-usage-stats` when already installed; otherwise use `dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"`.
+2. Prefer `dsh plugin --profile web update "@ychris12138/dsh-usage-stats"` when already installed; otherwise use `dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"`.
 3. If unavailable, use: npx --yes github:Ychris12138/dsh-usage-stats
 4. Do not combine bundle installation with an existing manual dsh-usage-stats Cordis entry.
 5. For npx, require a verified package and exactly one Cordis entry, then run again with --check.

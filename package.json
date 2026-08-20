@@ -1,8 +1,7 @@
 {
-  "name": "dsh-usage-stats",
+  "name": "@ychris12138/dsh-usage-stats",
   "description": "Token usage heatmap, provider balances, and subscription quotas for the dsh web GUI",
-  "version": "0.2.5",
-  "private": true,
+  "version": "0.2.6",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Ychris12138/dsh-usage-stats.git"
@@ -59,11 +58,15 @@
     "test:balance": "node scripts/test-balance.mjs",
     "test:subscriptions": "node scripts/test-subscriptions.mjs",
     "test:accounts": "node scripts/test-accounts.mjs",
-    "validate:live": "node scripts/validate-fold.mjs && node scripts/verify-raw.mjs"
+    "validate:live": "node scripts/validate-fold.mjs && node scripts/verify-raw.mjs",
+    "prepublishOnly": "npm run check && npm test"
   },
   "devDependencies": {
     "react": "^18.2.0",
     "react-dom": "^18.2.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "publishConfig": {
+    "access": "public"
+  }
 }

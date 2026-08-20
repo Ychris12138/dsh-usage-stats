@@ -14,9 +14,9 @@ const patchPath = join(root, normalize(patchDeclaration));
 await access(patchPath);
 const patch = await readFile(patchPath, "utf8");
 assert.equal(
-	[...patch.matchAll(/^\s+name:\s*dsh-usage-stats\s*$/gm)].length,
+	[...patch.matchAll(/^\s+name:\s*@ychris12138\/dsh-usage-stats\s*$/gm)].length,
 	1,
-	"bundle patch must mount dsh-usage-stats exactly once"
+	"bundle patch must mount @ychris12138/dsh-usage-stats exactly once"
 );
 
 console.log("DSH BUNDLE MANIFEST TESTS PASSED");

@@ -43,8 +43,8 @@ dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"
 
 **使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`（当前可用）。要启用 GUI「安装」按钮，需先发布：
 
-1. 把 `package.json` 的 `name` 改为 `@ychris12138/dsh-usage-stats`（或你选定的可用名），去掉 `private: true`，并同步 `cordis.patch.yml` 的 `name` 与 `catalog/v1/plugins.json` 的 `package.name` / `latestVersion`；**每次发版都要同步 bump `catalog/v1/plugins.json` 的 `latestVersion`**。
-2. `npm publish`（scoped 公开包）。
+1. 仓库包身份已统一为 `@ychris12138/dsh-usage-stats`；每次发版需同步 `package.json` / `package-lock.json` / `catalog/v1/plugins.json` 的版本。
+2. 发布 scoped 公共包：`npm publish --access public`。
 3. 把 `catalog/v1/plugins.json` 内容发布到 `https://ychris12138.github.io/dsh-usage-stats/v1/plugins`（GitHub Pages，manifest 与 endpoint 必须同源、HTTPS 443、无凭据）。
 4. 在 DSH 插件市场 → 来源管理 → 添加来源，粘贴 manifest URL：`https://ychris12138.github.io/dsh-usage-stats/catalog-source.json`，选择后即可走「可恢复安装边界」GUI 安装。
 

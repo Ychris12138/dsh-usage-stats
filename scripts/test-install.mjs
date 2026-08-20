@@ -31,7 +31,7 @@ function runFailure(...args) {
 try {
 	run();
 	run();
-	assert.match(run("--check"), /Verified dsh-usage-stats@/);
+	assert.match(run("--check"), /Verified @ychris12138\/dsh-usage-stats@/);
 	let patch = await readFile(patchPath, "utf8");
 	assert.equal([...patch.matchAll(pluginEntry)].length, 1, "installer must be idempotent");
 
@@ -91,11 +91,11 @@ try {
 	assert.match(patch, /name: existing-plugin/, "existing patch entries must be preserved");
 	assert.equal([...patch.matchAll(pluginEntry)].length, 1);
 	const installed = JSON.parse(await readFile(join(home, "profiles", "node_modules", "dsh-usage-stats", "package.json"), "utf8"));
-	assert.equal(installed.name, "dsh-usage-stats");
+	assert.equal(installed.name, "@ychris12138/dsh-usage-stats");
 	assert.equal(installed.dsh?.bundle?.patch, "./cordis.patch.yml");
 	assert.match(
 		await readFile(join(home, "profiles", "node_modules", "dsh-usage-stats", "cordis.patch.yml"), "utf8"),
-		/^\s+name:\s*dsh-usage-stats\s*$/m
+		/^\s+name:\s*@ychris12138\/dsh-usage-stats\s*$/m
 	);
 	assert.equal(await readFile(join(home, "profiles", "node_modules", "dsh-usage-stats", "lib", "index.js"), "utf8").then((text) => text.length > 1000), true);
 	console.log("INSTALLER REGRESSION TESTS PASSED");

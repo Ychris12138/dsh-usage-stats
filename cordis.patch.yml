@@ -2,4 +2,4 @@
 # DeepSeek Harness profile bundle.
 - insert:
     - id: usage-stats
-      name: dsh-usage-stats
+      name: @ychris12138/dsh-usage-stats

@@ -42,7 +42,8 @@ if (!source.includes("badgeCount !== null && react_jsx_runtime.jsx(\"span\", { c
 new Function(source)(); // executes the window.__ModuleLoader__.load call
 
 if (captured === null) throw new Error("loader did not capture the bundle");
-if (captured.id !== "dsh-usage-stats") throw new Error(`unexpected id ${captured.id}`);
+const packageName = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")).name;
+if (captured.id !== packageName) throw new Error(`unexpected id ${captured.id}; expected package name ${packageName}`);
 
 const exports_ = captured.factory((spec) => {
 	if (spec === "react") return react;

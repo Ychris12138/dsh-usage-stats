@@ -1,0 +1,90 @@
+name: Finalize v0.2.6
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/finalize-v0.2.6.yml
+
+permissions:
+  contents: write
+
+jobs:
+  finalize:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify release target
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="57e1b429839bc0413828780963b52b70a3979363"
+          git cat-file -e "${target}^{commit}"
+          pkg="$(git show "${target}:package.json")"
+          node -e 'const p=JSON.parse(process.argv[1]); if(p.name!=="@ychris12138/dsh-usage-stats"||p.version!=="0.2.6") process.exit(1)' "$pkg"
+          catalog="$(git show "${target}:catalog/v1/plugins.json")"
+          node -e 'const p=JSON.parse(process.argv[1]); if(p.revision!=="0.2.6"||p.items?.[0]?.latestVersion!=="0.2.6"||p.items?.[0]?.package?.name!=="@ychris12138/dsh-usage-stats") process.exit(1)' "$catalog"
+
+      - name: Create annotated v0.2.6 tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          target="57e1b429839bc0413828780963b52b70a3979363"
+          git fetch --tags --force
+          if git show-ref --verify --quiet refs/tags/v0.2.6; then
+            existing="$(git rev-list -n 1 v0.2.6)"
+            test "$existing" = "$target"
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a v0.2.6 "$target" -m "dsh-usage-stats v0.2.6"
+            git push origin refs/tags/v0.2.6
+          fi
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view v0.2.6 >/dev/null 2>&1; then
+            exit 0
+          fi
+          cat > /tmp/release-notes.md <<'EOF'
+          ## dsh-usage-stats v0.2.6
+
+          Stability and compatibility release.
+
+          ### Highlights
+          - Adds defense-in-depth handling for socket-level transport errors so account refresh failures do not terminate `dsh web` (#42, #43).
+          - Adds real Sub2API panel balance support with safe provider detection, bounded fallback behavior, and sanitized diagnostics (#38, #44).
+          - Adds the DSH Community Market Path A catalog source metadata for managed GUI installation (#41).
+          - Publishes the package publicly on npm as `@ychris12138/dsh-usage-stats@0.2.6`.
+
+          ### Notes
+          - Existing git-based installation remains supported.
+          - MiniMax Token Plan issue #14 remains open and is not claimed fixed by this release.
+          EOF
+          gh release create v0.2.6 \
+            --verify-tag \
+            --title "v0.2.6" \
+            --notes-file /tmp/release-notes.md
+
+      - name: Remove one-shot workflow
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          path='.github/workflows/finalize-v0.2.6.yml'
+          sha="$(gh api "repos/${GITHUB_REPOSITORY}/contents/${path}?ref=main" --jq .sha)"
+          gh api \
+            --method DELETE \
+            "repos/${GITHUB_REPOSITORY}/contents/${path}" \
+            -f message='chore: remove v0.2.6 release finalizer' \
+            -f sha="$sha" \
+            -f branch=main

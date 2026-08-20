@@ -1,0 +1,95 @@
+name: Bootstrap scoped client loader hotfix
+
+on:
+  push:
+    branches: [fix/scoped-client-loader-id-0.2.8]
+    paths:
+      - .github/workflows/bootstrap-scoped-client-id.yml
+
+permissions:
+  contents: write
+
+jobs:
+  patch-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - name: Patch loader identity and regression test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+          import json
+          from datetime import datetime, timezone
+
+          client = Path('lib/client.js')
+          text = client.read_text()
+          old = 'id: "dsh-usage-stats",'
+          new = 'id: "@ychris12138/dsh-usage-stats",'
+          if text.count(old) != 1:
+              raise SystemExit(f'expected exactly one legacy client loader id, found {text.count(old)}')
+          client.write_text(text.replace(old, new, 1))
+
+          smoke = Path('scripts/smoke-client.mjs')
+          text = smoke.read_text()
+          old = 'if (captured.id !== "dsh-usage-stats") throw new Error(`unexpected id ${captured.id}`);'
+          new = '''const packageName = JSON.parse(readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "package.json"), "utf8")).name;\nif (captured.id !== packageName) throw new Error(`unexpected id ${captured.id}; expected package name ${packageName}`);'''
+          if text.count(old) != 1:
+              raise SystemExit('legacy smoke-test loader assertion not found exactly once')
+          smoke.write_text(text.replace(old, new, 1))
+
+          catalog_path = Path('catalog/v1/plugins.json')
+          catalog = json.loads(catalog_path.read_text())
+          now = datetime.now(timezone.utc).isoformat(timespec='milliseconds').replace('+00:00', 'Z')
+          catalog['revision'] = '0.2.8'
+          catalog['generatedAt'] = now
+          if not catalog.get('items'):
+              raise SystemExit('catalog has no items')
+          catalog['items'][0]['latestVersion'] = '0.2.8'
+          catalog['items'][0]['updatedAt'] = now
+          catalog_path.write_text(json.dumps(catalog, ensure_ascii=False, indent=2) + '\n')
+          PY
+
+          npm version 0.2.8 --no-git-tag-version
+
+      - name: Validate release candidate
+        shell: bash
+        run: |
+          set -euo pipefail
+          npm ci
+          npm run check
+          npm test
+          npm pack --dry-run
+
+          node <<'NODE'
+          const fs = require('fs')
+          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'))
+          const lock = JSON.parse(fs.readFileSync('package-lock.json', 'utf8'))
+          const catalog = JSON.parse(fs.readFileSync('catalog/v1/plugins.json', 'utf8'))
+          const client = fs.readFileSync('lib/client.js', 'utf8')
+          if (pkg.name !== '@ychris12138/dsh-usage-stats' || pkg.version !== '0.2.8') throw new Error('package identity/version mismatch')
+          if (lock.version !== '0.2.8' || lock.packages?.['']?.version !== '0.2.8') throw new Error('lockfile version mismatch')
+          if (catalog.revision !== '0.2.8' || catalog.items?.[0]?.latestVersion !== '0.2.8') throw new Error('catalog version mismatch')
+          if (!client.includes('id: "@ychris12138/dsh-usage-stats"')) throw new Error('scoped client loader id missing')
+          if (client.includes('id: "dsh-usage-stats"')) throw new Error('legacy client loader id remains')
+          NODE
+
+      - name: Commit tested hotfix and remove bootstrap workflow
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm .github/workflows/bootstrap-scoped-client-id.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix: register scoped client module and prepare v0.2.8"
+          git push origin HEAD:fix/scoped-client-loader-id-0.2.8

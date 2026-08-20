@@ -14,9 +14,10 @@ const patchPath = join(root, normalize(patchDeclaration));
 await access(patchPath);
 const patch = await readFile(patchPath, "utf8");
 assert.equal(
-	[...patch.matchAll(/^\s+name:\s*@ychris12138\/dsh-usage-stats\s*$/gm)].length,
+	[...patch.matchAll(/^\s+name:\s+"@ychris12138\/dsh-usage-stats"\s*$/gm)].length,
 	1,
-	"bundle patch must mount @ychris12138/dsh-usage-stats exactly once"
+	"bundle patch must mount the scoped package exactly once as a quoted YAML scalar"
 );
+assert.doesNotMatch(patch, /^\s+name:\s+@ychris12138\/dsh-usage-stats\s*$/m, "scoped package name must not be an unquoted YAML scalar");
 
 console.log("DSH BUNDLE MANIFEST TESTS PASSED");

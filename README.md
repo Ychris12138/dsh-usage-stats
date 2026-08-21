@@ -147,6 +147,21 @@ OpenCode Go 依次尝试 Harness credential、`~/.local/share/opencode/auth.json
 
 Ollama 云读取 `OLLAMA_API_KEY`，调用 `/api/usage` 展示两个订阅窗口（5 小时会话 + 每周），无余额；`usage` 按 0..1 比例换算为进度条。
 
+Ollama 适配器只对**已配置的 provider** 生效，不会自动添加账户：当 provider 的 id 为 `ollama`，或其 baseURL 主机为 `ollama.com`（含子域）时自动选用；本地 Ollama（`localhost:11434`）不会被当作云配额账户。特殊代理/自定义端点可用显式 monitor 绑定：
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- insert:
+    - id: usage-stats
+      name: dsh-usage-stats
+      config:
+        monitors:
+          relay-ollama:            # 你配置的 provider id
+            adapter: ollama
+            usageBaseURL: https://ollama.example.com
+            credentialRef: OLLAMA_API_KEY   # 非已配置 provider 时必填
+```
+
 Z.ai 全球区使用 `api.z.ai`，中国区使用 `open.bigmodel.cn`。MiniMax 优先使用官方 `www.minimax.io` / `www.minimaxi.com` Token Plan 地址，并解析 5 小时与周窗口的剩余比例和重置时间。
 
 ### New API、Sub2API 与自定义 monitor

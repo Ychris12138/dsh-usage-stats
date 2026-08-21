@@ -1196,4 +1196,116 @@ console.log("IPv4/IPv6 private-address classification ok");
 	console.log("DNS failure exposes only sanitized diagnostic reason ok");
 }
 
+{
+	// Ollama Cloud: canonical provider id auto-selects the ollama adapter.
+	const spec = resolveAccountSpec({ id: "ollama", displayName: "Ollama", apiKeyEnv: "OLLAMA_API_KEY", baseURL: "https://ollama.com" }, validateAccountConfig());
+	assert.equal(spec.adapter, "ollama");
+	assert.equal(spec.mode, "subscription");
+	assert.equal(spec.apiKeyRef, "OLLAMA_API_KEY");
+	console.log("Ollama canonical id auto-detection ok");
+}
+
+{
+	// Ollama Cloud: a custom provider id with an ollama.com baseURL host also
+	// auto-selects the adapter (the user's own id/displayName are preserved).
+	const spec = resolveAccountSpec({ id: "my-ollama", displayName: "My Ollama", apiKeyEnv: "OLLAMA_API_KEY", baseURL: "https://ollama.com" }, validateAccountConfig());
+	assert.equal(spec.adapter, "ollama");
+	assert.equal(spec.mode, "subscription");
+	assert.equal(spec.id, "my-ollama");
+	assert.equal(spec.displayName, "My Ollama");
+	const subdomain = resolveAccountSpec({ id: "custom", displayName: "Custom", apiKeyEnv: "OLLAMA_API_KEY", baseURL: "https://api.ollama.com" }, validateAccountConfig());
+	assert.equal(subdomain.adapter, "ollama");
+	console.log("Ollama baseURL hostname auto-detection ok");
+}
+
+{
+	// Local Ollama (localhost:11434) must NOT auto-become an Ollama Cloud
+	// quota account: no adapter is selected.
+	const local = resolveAccountSpec({ id: "ollama-local", displayName: "Local Ollama", apiKeyEnv: "OLLAMA_API_KEY", baseURL: "http://localhost:11434" }, validateAccountConfig());
+	assert.equal(local.adapter, null);
+	const loopback = resolveAccountSpec({ id: "ollama-local", displayName: "Local Ollama", apiKeyEnv: "OLLAMA_API_KEY", baseURL: "http://127.0.0.1:11434" }, validateAccountConfig());
+	assert.equal(loopback.adapter, null);
+	// Regression: a local install that happens to use the canonical "ollama"
+	// id must still not be misread as a cloud quota account.
+	const canonicalLocal = resolveAccountSpec({ id: "ollama", displayName: "Ollama", apiKeyEnv: "OLLAMA_API_KEY", baseURL: "http://localhost:11434" }, validateAccountConfig());
+	assert.equal(canonicalLocal.adapter, null, "canonical id + localhost must not select the cloud adapter");
+	console.log("Local Ollama is not auto-detected as cloud quota ok");
+}
+
+{
+	// Explicit monitor.adapter: "ollama" remains the escape hatch for proxies
+	// and custom endpoints where hostname detection cannot work.
+	const spec = resolveAccountSpec({ id: "relay-ollama", displayName: "Relay", apiKeyEnv: "RELAY_KEY", baseURL: "https://relay.example.com" }, validateAccountConfig({ monitors: {
+		"relay-ollama": { adapter: "ollama", usageBaseURL: "https://ollama.example.com" }
+	} }));
+	assert.equal(spec.adapter, "ollama");
+	assert.equal(spec.mode, "subscription");
+	assert.equal(spec.baseURL, "https://ollama.example.com");
+	console.log("Ollama explicit monitor escape hatch ok");
+}
+
+{
+	// Ollama Cloud: queryAccount integration — windows, alert, and no key leak.
+	const spec = resolveAccountSpec({ id: "ollama", displayName: "Ollama", apiKeyEnv: "OLLAMA_API_KEY", baseURL: "https://ollama.com" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ OLLAMA_API_KEY: "sk-ollama-secret" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			assert.equal(String(url), "https://ollama.com/api/usage");
+			assert.equal(init.headers.authorization, "Bearer sk-ollama-secret");
+			return jsonResponse({ limits: { session: { usage: 0.3 }, weekly: { usage: 0.1 } } });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.mode, "subscription");
+	assert.equal(account.adapter, "ollama");
+	assert.equal(account.id, "ollama");
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 30, 70],
+		["weekly", 10, 90]
+	]);
+	assert.deepEqual(account.alert, { level: "normal", metric: "remaining-percent", value: 70 });
+	assert.equal(JSON.stringify(account).includes("sk-ollama-secret"), false, "API key must never cross the account snapshot boundary");
+	console.log("Ollama queryAccount integration and alert ok");
+}
+
+{
+	// Ollama Cloud: no unconditional provider — an unconfigured install must
+	// NOT show an Ollama account; only configured providers appear.
+	const service = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [{ id: "deepseek-official", displayName: "DeepSeek", apiKeyEnv: "DEEPSEEK_API_KEY", baseURL: "https://api.deepseek.com" }],
+		config: validateAccountConfig(),
+		deps: { includeLegacyProviders: true, now: () => now }
+	});
+	const views = await service.providerViews();
+	assert.equal(views.some((view) => view.id === "ollama"), false, "unconfigured install must not list an Ollama account");
+	assert.equal(views.some((view) => view.id === "deepseek-official"), true);
+	console.log("Ollama is not unconditionally added ok");
+}
+
+{
+	// Ollama Cloud: a configured provider with ollama identity appears with the
+	// user's own id and gets the subscription adapter.
+	const service = createAccountService({
+		credentials: credentials({ OLLAMA_API_KEY: "sk-ollama" }),
+		getProviders: async () => [{ id: "my-ollama", displayName: "My Ollama", apiKeyEnv: "OLLAMA_API_KEY", baseURL: "https://ollama.com" }],
+		config: validateAccountConfig(),
+		deps: {
+			includeLegacyProviders: true,
+			now: () => now,
+			fetch: async () => jsonResponse({ limits: { session: { usage: 0.2 }, weekly: { usage: 0.1 } } })
+		}
+	});
+	const views = await service.providerViews();
+	const view = views.find((entry) => entry.id === "my-ollama");
+	assert.equal(view?.adapter, "ollama");
+	assert.equal(view?.accountMode, "subscription");
+	const account = await service.get("my-ollama", { force: true });
+	assert.equal(account.status, "ok");
+	assert.equal(account.id, "my-ollama");
+	assert.equal(account.displayName, "My Ollama");
+	assert.equal(account.windows.length, 2);
+	console.log("Configured Ollama provider appears with user id ok");
+}
+
 console.log("ACCOUNT TESTS PASSED");

@@ -394,4 +394,140 @@ const noLocalAuth = {
 	console.log("Token-plan invalid JSON classification ok");
 }
 
+{
+	// Ollama Cloud: normal limits.session.usage + limits.weekly.usage parsing.
+	const secret = "sk-ollama-test";
+	const calls = [];
+	const ollama = await collectSubscription("ollama", credentials({ OLLAMA_API_KEY: secret }), {}, {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), init });
+			return {
+				ok: true,
+				status: 200,
+				json: async () => ({ limits: { session: { usage: 0.3 }, weekly: { usage: 0.08 } } })
+			};
+		}
+	});
+	assert.equal(ollama.status, "ok");
+	assert.equal(ollama.mode, "subscription");
+	assert.deepEqual(ollama.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 30, 70],
+		["weekly", 8, 92]
+	]);
+	assert.equal(calls[0].url, "https://ollama.com/api/usage");
+	assert.equal(calls[0].init.headers.authorization, "Bearer " + secret);
+	assert.equal(JSON.stringify(ollama).includes(secret), false, "API key must not cross the module interface");
+	console.log("Ollama normal window parsing ok");
+}
+
+{
+	// Ollama Cloud: 0 / 1 / negative / out-of-range / string ratios.
+	const fetchFor = (session, weekly) => async () => ({
+		ok: true,
+		status: 200,
+		json: async () => ({ limits: { session: { usage: session }, weekly: { usage: weekly } } })
+	});
+	const zero = await collectSubscription("ollama", credentials({ OLLAMA_API_KEY: "x" }), {}, { now: () => now, fetch: fetchFor(0, 0) });
+	assert.deepEqual(zero.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 0, 100],
+		["weekly", 0, 100]
+	]);
+	const full = await collectSubscription("ollama", credentials({ OLLAMA_API_KEY: "x" }), {}, { now: () => now, fetch: fetchFor(1, 0.5) });
+	assert.deepEqual(full.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 100, 0],
+		["weekly", 50, 50]
+	]);
+	// Negative clamps to 0; out-of-range (>1) clamps to a full bar instead of dropping.
+	const clamped = await collectSubscription("ollama", credentials({ OLLAMA_API_KEY: "x" }), {}, { now: () => now, fetch: fetchFor(-0.2, 1.4) });
+	assert.deepEqual(clamped.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 0, 100],
+		["weekly", 100, 0]
+	]);
+	const stringRatio = await collectSubscription("ollama", credentials({ OLLAMA_API_KEY: "x" }), {}, { now: () => now, fetch: fetchFor("0.25", "0.05") });
+	assert.deepEqual(stringRatio.windows.map((window) => [window.kind, window.usedPercent]), [
+		["session", 25],
+		["weekly", 5]
+	]);
+	console.log("Ollama ratio edge cases ok");
+}
+
+{
+	// Ollama Cloud: missing limits / non-object body -> invalid-response.
+	const missing = await collectSubscription("ollama", credentials({ OLLAMA_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async () => ({ ok: true, status: 200, json: async () => ({}) })
+	});
+	assert.equal(missing.status, "invalid-response");
+	assert.deepEqual(missing.windows, []);
+	const nonObject = await collectSubscription("ollama", credentials({ OLLAMA_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async () => ({ ok: true, status: 200, json: async () => "not-an-object" })
+	});
+	assert.equal(nonObject.status, "invalid-response");
+	assert.deepEqual(nonObject.windows, []);
+	console.log("Ollama invalid-response classification ok");
+}
+
+{
+	// Ollama Cloud: HTTP status mapping.
+	for (const [httpStatus, providerStatus] of [[401, "unauthorized"], [403, "unauthorized"], [429, "rate-limited"], [500, "unavailable"], [503, "unavailable"]]) {
+		const account = await collectSubscription("ollama", credentials({ OLLAMA_API_KEY: "x" }), {}, {
+			now: () => now,
+			fetch: async () => ({ ok: false, status: httpStatus, json: async () => ({}) })
+		});
+		assert.equal(account.status, providerStatus, "HTTP " + httpStatus + " should map to " + providerStatus);
+	}
+	console.log("Ollama HTTP status mapping ok");
+}
+
+{
+	// Ollama Cloud: missing credential -> not-configured with the ref listed.
+	const account = await collectSubscription("ollama", credentials({}), {}, {
+		now: () => now,
+		fetch: async () => { throw new Error("must not fetch without a credential"); }
+	});
+	assert.equal(account.status, "not-configured");
+	assert.deepEqual(account.missingCredentials, [subscriptionCredentialRefs.ollamaApiKey]);
+	console.log("Ollama missing credential is not-configured ok");
+}
+
+{
+	// Ollama Cloud: real captured payload shape (2026-08-20 live response).
+	// Guards against circular verification: the parser must handle the actual
+	// upstream shape, not just hand-crafted JSON that mirrors the assumption.
+	const realPayload = {
+		activity: { cost: "0.00000", period: { type: "last_4_weeks", starting_at: "2026-07-27T00:00:00Z", ending_at: "2026-08-20T18:39:14.280986854Z" }, models: [] },
+		limits: {
+			session: { usage: 0.276, models: [{ name: "deepseek-v4-flash:0731", request_count: 670 }, { name: "web search", request_count: 1 }] },
+			weekly: { usage: 0.078, models: [{ name: "deepseek-v4-flash:0731", request_count: 1158 }] }
+		}
+	};
+	const real = await collectSubscription("ollama", credentials({ OLLAMA_API_KEY: "x" }), {}, {
+		now: () => now,
+		fetch: async () => ({ ok: true, status: 200, json: async () => realPayload })
+	});
+	assert.equal(real.status, "ok");
+	assert.deepEqual(real.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 27.6, 72.4],
+		["weekly", 7.8, 92.2]
+	]);
+	console.log("Ollama real captured payload parses ok");
+}
+
+{
+	// Ollama Cloud: custom usage base URL override is honored.
+	const calls = [];
+	const account = await collectSubscription("ollama", credentials({ OLLAMA_API_KEY: "x" }), { baseURL: "https://ollama.example.com" }, {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			return { ok: true, status: 200, json: async () => ({ limits: { session: { usage: 0.1 }, weekly: { usage: 0.2 } } }) };
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.deepEqual(calls, ["https://ollama.example.com/api/usage"]);
+	console.log("Ollama custom usage base URL ok");
+}
+
 console.log("SUBSCRIPTION TESTS PASSED");

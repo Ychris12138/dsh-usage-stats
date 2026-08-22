@@ -190,6 +190,38 @@ async function testRevisionRewrite(root) {
 	assert.equal(reads, 3, "rewrite detection must retry from seq 0");
 }
 
+async function testFallbackIncremental(root) {
+	const plugin = await freshModule("fallback-incremental", join(root, "fallback-incremental"));
+	const id = "fallback-session";
+	// No listSnapshots (the fallback path) means every cycle re-reads, but an
+	// unchanged log must read only the delta tail — not refold from seq 0 —
+	// while a truncated log must still refold from scratch.
+	const log = [usageEvent(1, 5), usageEvent(2, 7), usageEvent(3, 11)];
+	const reads = [];
+	const persistence = {
+		list: async () => [{ id }],
+		readFrom: async (_id, fromSeq) => {
+			reads.push(fromSeq);
+			return { events: log.filter((event) => event.seq >= fromSeq) };
+		}
+	};
+	const ctx = makeContext({ sessions: { list: () => [] }, persistence });
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 23);
+	assert.deepEqual(reads, [0], "the initial fold reads from seq 0");
+	reads.length = 0;
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 23, "an unchanged fallback log must keep the folded total");
+	assert.deepEqual(reads, [3], "an unchanged fallback log must not refold from seq 0");
+	log.push(usageEvent(4, 13));
+	reads.length = 0;
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 36, "new events must fold incrementally in the fallback path");
+	assert.deepEqual(reads, [3], "only the delta tail is read");
+	log.length = 0;
+	log.push(usageEvent(1, 5));
+	reads.length = 0;
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 5, "a truncated fallback log must refold");
+	assert.deepEqual(reads, [4, 0], "truncation detection retries from seq 0");
+}
+
 async function testLiveLogShrink(root) {
 	const plugin = await freshModule("shrink", join(root, "shrink"));
 	const id = "shrink-session";
@@ -240,6 +272,7 @@ try {
 	await testBackgroundRefresh(root);
 	await testPersistedToLive(root);
 	await testRevisionRewrite(root);
+	await testFallbackIncremental(root);
 	await testLiveLogShrink(root);
 	await testZeroUsageRowsFiltered(root);
 	console.log("SERVER REGRESSION TESTS PASSED");

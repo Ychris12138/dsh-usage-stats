@@ -1,7 +1,7 @@
 {
   "schemaVersion": "1.0.0",
-  "generatedAt": "2026-08-20T11:30:00.595Z",
-  "revision": "0.2.9",
+  "generatedAt": "2026-08-22T06:49:00.000Z",
+  "revision": "0.2.10",
   "items": [
     {
       "id": "dsh-usage-stats",
@@ -10,7 +10,7 @@
       "summary": "Token usage heatmap, provider balances, and subscription quotas for the dsh web GUI.",
       "description": "在 DSH 对话界面内展示 Token 用量热力图、各 provider 账户余额与订阅配额，数据来自持久化会话日志。catalog 条目身份与 npm 包 `@ychris12138/dsh-usage-stats` 对齐，发布后即可通过插件市场 GUI 直接安装。",
       "homepage": "https://github.com/Ychris12138/dsh-usage-stats",
-      "latestVersion": "0.2.9",
+      "latestVersion": "0.2.10",
       "license": "MIT",
       "categories": [
         "development",
@@ -40,7 +40,7 @@
           "dsh"
         ]
       },
-      "updatedAt": "2026-08-20T11:30:00.595Z"
+      "updatedAt": "2026-08-22T06:49:00.000Z"
     }
   ],
   "page": {}

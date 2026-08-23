@@ -4,6 +4,7 @@
 // 3. render <UsageStatsPanel wide t> with react-dom/server
 // 4. run apply(ctx) against a stub client context
 import { createRequire } from "node:module";
+import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -213,15 +214,16 @@ const translateAccount = (key, params) => {
 	if (params?.ref !== void 0) return `${key}:${params.ref}`;
 	return key;
 };
+const deepseekAccount = {
+	id: "deepseek-official",
+	displayName: "DeepSeek",
+	mode: "balance",
+	status: "ok",
+	balance: { remaining: 36.44, currency: "CNY", unlimited: false, breakdown: { toppedUp: 20, granted: 16.44 } }
+};
 const deepseekMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
 	provider: { id: "deepseek-official", displayName: "DeepSeek", accountMode: "balance" },
-	account: {
-		id: "deepseek-official",
-		displayName: "DeepSeek",
-		mode: "balance",
-		status: "ok",
-		balance: { remaining: 36.44, currency: "CNY", unlimited: false, breakdown: { toppedUp: 20, granted: 16.44 } }
-	},
+	account: deepseekAccount,
 	accountLoading: false,
 	accountError: null,
 	translate: translateAccount,
@@ -285,6 +287,29 @@ if (blockedMarkup.includes("balance.unsupported")) throw new Error("blocked must
 if (blockedMarkup.includes("balance.blocked") || blockedSubMarkup.includes("balance.blocked")) throw new Error("blocked must not reuse the balance-specific explanation");
 if (!source.includes('"account.status.blocked"') || !source.includes('"account.blocked"')) throw new Error("blocked status keys missing from client locales");
 if (source.includes('"balance.blocked"')) throw new Error("balance-specific blocked copy must not be reintroduced");
+
+const healthMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "deepseek-official", displayName: "DeepSeek", accountMode: "balance", adapter: "deepseek-balance" },
+	account: {
+		...deepseekAccount,
+		status: "rate-limited",
+		stale: true,
+		lastAttemptAt: Date.parse("2026-08-24T01:00:00Z"),
+		lastSuccessAt: Date.parse("2026-08-24T00:00:00Z"),
+		ageMs: 3600000,
+		provenance: "official",
+		reason: "rate-limited",
+		secret: "SECRET_API_KEY"
+	},
+	accountLoading: false,
+	accountError: null,
+	translate: translateAccount,
+	onRetry: () => {}
+}));
+for (const expected of ["account.status.stale", "account.health.lastAttempt", "account.health.lastSuccess", "account.health.age", "account.health.provenance", "account.provenance.official", "account.reason.rateLimited"]) {
+	if (!healthMarkup.includes(expected)) throw new Error(`account health detail is missing ${expected}`);
+}
+if (!healthMarkup.includes('data-account-stale="true"') || healthMarkup.includes("SECRET_API_KEY")) throw new Error("stale health metadata must be explicit and secret-free");
 
 const choices = buildProviderChoices([
 	{ id: "deepseek-official", displayName: "DeepSeek", adapter: "deepseek-balance", accountMode: "balance", configured: true },
@@ -358,6 +383,7 @@ console.log("collapsed-badge account value + warning policy ok");
 const {
 	CurrentSessionPill,
 	CurrentSessionPillView,
+	formatResetCountdown,
 	loadSessionPillSnapshot,
 	requestUsageStatsPanel,
 	sessionContextSignalOf,
@@ -365,12 +391,31 @@ const {
 	modelSelectionSignalOf,
 	subscribeUsageStatsPanel
 } = exports_;
-if ([CurrentSessionPill, CurrentSessionPillView, loadSessionPillSnapshot, requestUsageStatsPanel, sessionContextSignalOf, sessionPillViewOf, modelSelectionSignalOf, subscribeUsageStatsPanel].some((entry) => typeof entry !== "function")) {
+if ([CurrentSessionPill, CurrentSessionPillView, formatResetCountdown, loadSessionPillSnapshot, requestUsageStatsPanel, sessionContextSignalOf, sessionPillViewOf, modelSelectionSignalOf, subscribeUsageStatsPanel].some((entry) => typeof entry !== "function")) {
 	throw new Error("current-session pill exports are incomplete");
 }
+const resetTranslate = (key, params) => {
+	if (key === "duration.minutes") return `${params.minutes}m`;
+	if (key === "duration.hoursMinutes") return `${params.hours}h ${params.minutes}m`;
+	if (key === "duration.daysHours") return `${params.days}d ${params.hours}h`;
+	if (key === "subscription.resets") return `Resets in ${params.time}`;
+	if (key === "subscription.resetDue") return "Reset due";
+	return key;
+};
+const resetNow = Date.parse("2026-08-24T00:00:00Z");
+assert.equal(formatResetCountdown(null, resetNow, resetTranslate), "");
+assert.equal(formatResetCountdown("invalid", resetNow, resetTranslate), "");
+assert.equal(formatResetCountdown("2026-08-23T23:59:00Z", resetNow, resetTranslate), "Reset due");
+assert.equal(formatResetCountdown("2026-08-24T00:05:00Z", resetNow, resetTranslate), "Resets in 5m");
+assert.equal(formatResetCountdown("2026-08-24T02:37:00Z", resetNow, resetTranslate), "Resets in 2h 37m");
+assert.equal(formatResetCountdown("2026-08-27T14:00:00Z", resetNow, resetTranslate), "Resets in 3d 14h");
 const pillTranslate = (key, params) => {
 	if (params?.provider !== void 0 && params?.value !== void 0) return `${params.provider}: ${params.value}`;
+	if (key === "duration.minutes") return `${params.minutes}m`;
+	if (key === "duration.hoursMinutes") return `${params.hours}h ${params.minutes}m`;
+	if (key === "duration.daysHours") return `${params.days}d ${params.hours}h`;
 	if (key === "subscription.resets" && params?.time !== void 0) return `reset:${params.time}`;
+	if (key === "subscription.resetDue") return "reset:due";
 	return key;
 };
 const pillContext = {
@@ -436,7 +481,7 @@ const subscriptionPillWithResetSnapshot = {
 		alert: { level: "critical", metric: "remaining-percent", value: 8 }
 	}
 };
-const subscriptionPillWithReset = sessionPillViewOf(subscriptionPillWithResetSnapshot, pillTranslate);
+const subscriptionPillWithReset = sessionPillViewOf(subscriptionPillWithResetSnapshot, pillTranslate, resetNow);
 if (!subscriptionPillWithReset.ariaLabel.includes("reset:")) throw new Error("subscription pill must expose the tightest window reset through accessible text");
 if (subscriptionPillWithReset.value !== subscriptionPill.value) throw new Error("reset information must not expand the compact visible pill value");
 const warningPill = sessionPillViewOf({ ...balancePillSnapshot, account: { ...balancePillSnapshot.account, alert: { level: "warning" } } }, pillTranslate);
@@ -482,6 +527,7 @@ const subscriptionPillMarkup = renderToStaticMarkup(subscriptionPillElement);
 const subscriptionPillWithResetElement = CurrentSessionPillView({
 	snapshot: subscriptionPillWithResetSnapshot,
 	translate: pillTranslate,
+	now: resetNow,
 	onOpen: () => {}
 });
 if (!subscriptionPillWithResetElement.props.title.includes("reset:") || subscriptionPillWithResetElement.props["aria-label"] !== subscriptionPillWithResetElement.props.title) {
@@ -514,7 +560,7 @@ currentProvider = "opencode-go";
 const switchedPillLoad = await loadSessionPillSnapshot("session/one", fetchPill);
 if (firstPillLoad.account.id !== "deepseek-official" || switchedPillLoad.account.id !== "opencode-go") throw new Error("session provider switch must resolve a fresh account snapshot");
 if (requests[0] !== "/api/usage-stats/session-context?session=session%2Fone") throw new Error(`session context request must carry the explicit encoded session id: ${requests[0]}`);
-if (!requests.includes("/api/usage-stats/account?provider=opencode-go")) throw new Error("pill must reuse the unified account endpoint for the resolved provider");
+if (!requests.includes("/api/usage-stats/account?provider=opencode-go&activity=active")) throw new Error("pill must reuse the unified account endpoint and mark the server-owned active provider");
 await loadSessionPillSnapshot("session/one", fetchPill, { provider: "route:two", model: "same/model" });
 if (!requests.includes("/api/usage-stats/session-context?session=session%2Fone&provider=route%3Atwo&model=same%2Fmodel")) {
 	throw new Error("the formal model-selector route must be encoded as a session-context hint");
@@ -611,24 +657,28 @@ if (openedBy.join(",") !== "second:opencode-go,first:deepseek-official") throw n
 // panel with the current provider selected. Network and timers are inert test
 // doubles; production still uses the panel's existing refresh/cache path.
 const originalFetch = globalThis.fetch;
+const integrationRequests = [];
 document.addEventListener = () => {};
 document.removeEventListener = () => {};
 window.setInterval = () => 1;
 window.clearInterval = () => {};
-globalThis.fetch = async (path) => ({
-	ok: true,
-	json: async () => {
-		if (String(path).includes("/providers")) return {
-			ok: true,
-			providers: [
-				{ id: "deepseek-official", displayName: "DeepSeek", configured: true, accountMode: "balance" },
-				{ id: "opencode-go", displayName: "OpenCode Go", configured: true, accountMode: "subscription" }
-			]
-		};
-		if (String(path).includes("/account")) return { ok: true, account: { id: "opencode-go", displayName: "OpenCode Go", mode: "subscription", status: "ok", windows: [{ kind: "weekly", remainingPercent: 18 }], alert: { level: "warning" } } };
-		return { ok: true, days: [], total: { tokens: 0 } };
-	}
-});
+globalThis.fetch = async (path) => {
+	integrationRequests.push(String(path));
+	return {
+		ok: true,
+		json: async () => {
+			if (String(path).includes("/providers")) return {
+				ok: true,
+				providers: [
+					{ id: "deepseek-official", displayName: "DeepSeek", configured: true, accountMode: "balance" },
+					{ id: "opencode-go", displayName: "OpenCode Go", configured: true, accountMode: "subscription" }
+				]
+			};
+			if (String(path).includes("/account")) return { ok: true, account: { id: "opencode-go", displayName: "OpenCode Go", mode: "subscription", status: "ok", windows: [{ kind: "weekly", remainingPercent: 18 }], alert: { level: "warning" } } };
+			return { ok: true, days: [], total: { tokens: 0 } };
+		}
+	};
+};
 let integrationRenderer;
 await act(async () => {
 	integrationRenderer = TestRenderer.create(react.createElement(react.Fragment, {},
@@ -648,6 +698,7 @@ await act(async () => {
 if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).length !== 1) throw new Error("pill click must open the existing account panel");
 const selectedPicker = integrationRenderer.root.findByType("select");
 if (selectedPicker.props.value !== "opencode-go") throw new Error(`pill click must select its provider in the existing panel, got ${selectedPicker.props.value}`);
+if (!integrationRequests.some((path) => path.includes("/account?provider=opencode-go&activity=detail"))) throw new Error("the open detail panel must signal its provider to the central scheduler");
 await act(async () => { integrationRenderer.unmount(); });
 globalThis.fetch = originalFetch;
 

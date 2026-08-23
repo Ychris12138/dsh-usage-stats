@@ -110,7 +110,15 @@ async function testSessionContext(root) {
 			}
 		} : void 0
 	};
-	await plugin.apply(makeContext({ sessions, persistence, routes, settings }), {}, { disableBackgroundRefresh: true });
+	const touches = [];
+	const accounts = {
+		validate: async () => {},
+		touch: (providerId, activity) => touches.push([providerId, activity]),
+		providerViews: async () => [],
+		get: async () => null,
+		subscriptionAccounts: async () => []
+	};
+	await plugin.apply(makeContext({ sessions, persistence, routes, settings }), {}, { disableBackgroundRefresh: true, accounts });
 	const handler = routes.get(plugin.SESSION_CONTEXT_PATH);
 
 	const first = makeResponse();
@@ -125,6 +133,7 @@ async function testSessionContext(root) {
 		updatedAt: Date.UTC(2026, 7, 23, 12, 0, 0)
 	});
 	assert.doesNotMatch(first.body, /SECRET|apiKey|baseURL/i, "session context must not expose connection or credential fields");
+	assert.deepEqual(touches.at(-1), ["route-a", "active"], "session context must signal only its resolver-owned account identity");
 
 	const selectorSwitched = makeResponse();
 	await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session&provider=route-b&model=shared-model`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, selectorSwitched);
@@ -136,6 +145,7 @@ async function testSessionContext(root) {
 		accountId: "route-b",
 		updatedAt: null
 	}, "an accepted selector route must override the last request/header immediately");
+	assert.deepEqual(touches.at(-1), ["route-b", "active"], "selector route changes must update central scheduler activity");
 	const invalidSelectionQueries = [
 		"provider=route-b",
 		"provider=route-b&model=",
@@ -252,11 +262,15 @@ async function testLegacyZaiSubscriptionId(root) {
 		status: "ok",
 		windows: []
 	};
+	let accountRead = null;
 	const accounts = {
 		validate: async () => {},
 		subscriptionAccounts: async () => [account],
-		providerViews: async () => [],
-		get: async () => null,
+		providerViews: async () => [{ id: "zai-coding-cn", configured: true }],
+		get: async (providerId, options) => {
+			accountRead = { providerId, options };
+			return account;
+		},
 		refreshAll: async () => []
 	};
 	await plugin.apply(makeContext({ sessions: { list: () => [] }, persistence: { listSnapshots: async () => [], list: async () => [] }, routes }), {}, {
@@ -268,36 +282,62 @@ async function testLegacyZaiSubscriptionId(root) {
 	const legacy = JSON.parse(response.body).subscriptions[0];
 	assert.equal(legacy.id, "zai", "0.1.x clients require the canonical Z.ai subscription id");
 	assert.equal(account.id, "zai-coding-cn", "legacy canonicalization must not mutate the account protocol");
+	const detail = makeResponse();
+	await routes.get(plugin.ACCOUNT_PATH)({ method: "GET", url: `${plugin.ACCOUNT_PATH}?provider=zai-coding-cn&activity=detail`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, detail);
+	assert.equal(detail.status, 200);
+	assert.deepEqual(accountRead, { providerId: "zai-coding-cn", options: { force: false, activity: "detail" } }, "detail activity must stay a small server-owned AccountService hint");
 }
 
 async function testBackgroundRefresh(root) {
 	const plugin = await freshModule("background", join(root, "background"));
 	let refreshes = 0;
-	let interval = null;
+	let delay = null;
 	let tick = null;
 	let cleared = false;
+	let unsubscribed = false;
+	let policyChanged = null;
+	let clock = Date.UTC(2026, 7, 24, 0, 0, 0);
+	let accountDeadline = clock + 60000;
+	const activeSets = [];
+	const session = { id: "active-session", events: [routeEvent(0, "route-a", "shared-model")] };
 	const ctx = makeContext({
-		sessions: { list: () => [] },
+		sessions: { list: () => [session], get: (id) => id === session.id ? session : void 0 },
 		persistence: { listSnapshots: async () => [], list: async () => [] }
 	});
 	const cleanup = plugin.startBackgroundRefresh(ctx, {
-		refreshAll: async () => { refreshes += 1; }
+		setActiveProviders: (ids) => { activeSets.push([...ids]); },
+		refreshDue: async () => { refreshes += 1; },
+		nextRefreshAt: async () => accountDeadline,
+		subscribePolicyChanges: (listener) => {
+			policyChanged = listener;
+			return () => { unsubscribed = true; };
+		}
 	}, {
-		setInterval: (callback, ms) => {
+		config: { monitors: {} },
+		now: () => clock,
+		setTimeout: (callback, ms) => {
 			tick = callback;
-			interval = ms;
+			delay = ms;
 			return { unref: () => {} };
 		},
-		clearInterval: () => { cleared = true; }
+		clearTimeout: () => { cleared = true; }
 	});
-	await new Promise((resolve) => setImmediate(resolve));
-	assert.equal(interval, 300000);
+	await cleanup.ready;
+	assert.equal(delay, 60000, "one central timer must target the earliest account/usage deadline");
 	assert.equal(refreshes, 1, "background refresh must run immediately at startup");
+	assert.deepEqual(activeSets.at(-1), ["route-a"], "active providers must come from existing session route identity");
 	assert.equal(typeof tick, "function");
+	accountDeadline = clock + 15000;
+	policyChanged();
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(delay, 15000, "an activity priority change must rearm the same central timer to the earlier deadline");
+	assert.equal(cleared, true, "rearming must clear the previously scheduled central timer");
+	clock += 15000;
 	await cleanup.refreshNow();
-	assert.equal(refreshes, 2, "the five-minute timer must refresh accounts again");
+	assert.equal(refreshes, 2, "manual scheduler wake must reuse the central refresh path");
 	await cleanup();
 	assert.equal(cleared, true);
+	assert.equal(unsubscribed, true, "scheduler cleanup must unsubscribe from AccountService policy changes");
 }
 
 async function testPersistedToLive(root) {

@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import {
+	accountProvenance,
 	createAccountService,
 	isPrivateAddress,
 	queryAccount,
+	refreshPolicy,
 	resolveAccountSpec,
 	selectResolvedAddress,
 	selectResolvedAddresses,
-	validateAccountConfig
+	validateAccountConfig,
+	withHealthAge
 } from "../lib/accounts.js";
 
 function credentials(values) {
@@ -51,6 +54,59 @@ const deepseek = {
 	apiKeyEnv: "DEEPSEEK_API_KEY",
 	baseURL: "https://api.deepseek.com"
 };
+
+{
+	const provenanceCases = new Map([
+		["deepseek-balance", "official"],
+		["openrouter-balance", "official"],
+		["moonshot-balance", "official"],
+		["zai-balance", "official"],
+		["opencode-go", "official"],
+		["zai-token-plan", "official"],
+		["kimi-token-plan", "official"],
+		["minimax-token-plan", "official"],
+		["ollama", "official"],
+		["new-api", "provider"],
+		["sub2api", "provider"],
+		["sub2api-auth", "provider"],
+		["general", "configured"],
+		["declarative", "configured"],
+		[null, "unknown"]
+	]);
+	for (const [adapter, expected] of provenanceCases) assert.equal(accountProvenance({ adapter }), expected, `${adapter} provenance`);
+	assert.equal(accountProvenance(resolveAccountSpec(deepseek, validateAccountConfig())), "official");
+	assert.equal(accountProvenance({ ...resolveAccountSpec(relay, validateAccountConfig()), provenanceHint: "experimental" }), "experimental");
+	console.log("account provenance vocabulary ok");
+}
+
+{
+	const active = refreshPolicy({ activity: "active", status: "ok", rateLimitFailures: 0, lastAttemptAt: now }, now);
+	const detail = refreshPolicy({ activity: "detail", status: "ok", rateLimitFailures: 0, lastAttemptAt: now }, now);
+	const background = refreshPolicy({ activity: "background", status: "ok", rateLimitFailures: 0, lastAttemptAt: now }, now);
+	assert.ok(active.nextRefreshAt < background.nextRefreshAt, "active providers must refresh sooner than background providers");
+	assert.ok(detail.nextRefreshAt < background.nextRefreshAt, "detail providers must refresh sooner than background providers");
+	const first429 = refreshPolicy({ activity: "active", status: "rate-limited", rateLimitFailures: 1, lastAttemptAt: now }, now);
+	const second429 = refreshPolicy({ activity: "active", status: "rate-limited", rateLimitFailures: 2, lastAttemptAt: now }, now);
+	const failedRetry = refreshPolicy({ activity: "active", status: "unavailable", rateLimitFailures: 2, lastAttemptAt: now }, now);
+	const bounded429 = refreshPolicy({ activity: "active", status: "rate-limited", rateLimitFailures: 99, lastAttemptAt: now }, now);
+	assert.ok(first429.nextRefreshAt > active.nextRefreshAt, "429 must override the fast activity interval");
+	assert.ok(second429.nextRefreshAt > first429.nextRefreshAt, "consecutive 429 responses must increase backoff");
+	assert.equal(failedRetry.nextRefreshAt, second429.nextRefreshAt, "a non-success retry must preserve the existing rate-limit backoff");
+	assert.ok(bounded429.nextRefreshAt - now <= 3600000, "429 backoff must remain bounded");
+	assert.equal(refreshPolicy({ activity: "background", status: "pending", rateLimitFailures: 0, lastAttemptAt: null }, now).nextRefreshAt, now);
+	console.log("adaptive refresh policy and bounded 429 backoff ok");
+}
+
+{
+	const stored = { status: "ok", lastSuccessAt: now, fetchedAt: now };
+	const first = withHealthAge(stored, now + 1000);
+	const second = withHealthAge(stored, now + 9000);
+	assert.equal(first.ageMs, 1000);
+	assert.equal(second.ageMs, 9000);
+	assert.equal(Object.hasOwn(stored, "ageMs"), false, "ageMs must never become a cached dead value");
+	assert.equal(withHealthAge({ status: "unavailable", lastSuccessAt: null }, now).ageMs, null);
+	console.log("health age is derived at read time ok");
+}
 
 assert.equal(isPrivateAddress("127.0.0.1"), true);
 assert.equal(isPrivateAddress("::ffff:127.0.0.1"), true);
@@ -163,6 +219,33 @@ console.log("IPv4/IPv6 private-address classification ok");
 	assert.equal(account.status, "unavailable");
 	assert.equal(account.balance.available, false);
 	assert.equal(account.balance.remaining, 12.5);
+	let clock = now;
+	let available = true;
+	const service = createAccountService({
+		credentials: credentials({ DEEPSEEK_API_KEY: "sk-test" }),
+		getProviders: async () => [deepseek],
+		config: validateAccountConfig(),
+		deps: {
+			includeLegacyProviders: false,
+			now: () => clock,
+			fetch: async () => jsonResponse({
+				is_available: available,
+				balance_infos: [{ currency: "CNY", total_balance: available ? "20.00" : "12.50", granted_balance: "0", topped_up_balance: available ? "20.00" : "12.50" }]
+			})
+		}
+	});
+	const healthy = await service.get("deepseek-official");
+	assert.equal(healthy.status, "ok");
+	assert.equal(healthy.lastSuccessAt, now);
+	available = false;
+	clock += 1000;
+	const observed = await service.get("deepseek-official", { force: true });
+	assert.equal(observed.status, "unavailable");
+	assert.equal(observed.stale, false, "a valid unavailable response must replace rather than retain the previous balance");
+	assert.equal(observed.balance.remaining, 12.5);
+	assert.equal(observed.lastAttemptAt, clock);
+	assert.equal(observed.lastSuccessAt, clock, "a valid DeepSeek response must advance health success even when the account is unavailable");
+	assert.equal(observed.ageMs, 0);
 	console.log("DeepSeek provider-reported unavailable state ok");
 }
 
@@ -176,6 +259,15 @@ console.log("IPv4/IPv6 private-address classification ok");
 	});
 	assert.equal(inferenceOnly.status, "not-configured");
 	assert.deepEqual(inferenceOnly.missingCredentials, ["OPENROUTER_MANAGEMENT_KEY"]);
+	const unconfiguredService = createAccountService({
+		credentials: credentials({ OPENROUTER_API_KEY: "inference-key" }),
+		getProviders: async () => [provider],
+		config: validateAccountConfig(),
+		deps: { includeLegacyProviders: false, now: () => now, fetch: async () => { throw new Error("must not request upstream"); } }
+	});
+	const unconfigured = await unconfiguredService.get("openrouter");
+	assert.equal(unconfigured.lastAttemptAt, null, "missing management credentials must not count as a provider attempt");
+	assert.equal(unconfigured.lastSuccessAt, null);
 	const account = await queryAccount(spec, credentials({ OPENROUTER_MANAGEMENT_KEY: "management-key" }), {
 		now: () => now,
 		fetch: async (_url, init) => {
@@ -449,6 +541,7 @@ console.log("IPv4/IPv6 private-address classification ok");
 		fetch: async () => jsonResponse({ balance: 1 }, 200, { "content-length": String(1024 * 1024 + 1) })
 	});
 	assert.equal(account.status, "invalid-response");
+	assert.equal(account.reason, "upstream-too-large");
 	console.log("declarative response-size limit ok");
 }
 
@@ -943,24 +1036,255 @@ console.log("IPv4/IPv6 private-address classification ok");
 			fetch: async (url) => {
 				if (String(url).endsWith("/api/status")) return jsonResponse({ data: { quota_per_unit: 1 } });
 				if (phase === "transient") return jsonResponse({}, 503);
+				if (phase === "rate-limited") return jsonResponse({}, 429);
 				if (phase === "auth") return jsonResponse({}, 401);
 				return jsonResponse({ code: true, data: { total_granted: 10, total_used: 2, total_available: 8 } });
 			}
 		}
 	});
-	assert.equal((await service.get("relay-a")).status, "ok");
+	const success = await service.get("relay-a");
+	assert.equal(success.status, "ok");
+	assert.equal(success.lastAttemptAt, now);
+	assert.equal(success.lastSuccessAt, now);
+	assert.equal(success.ageMs, 0);
+	assert.equal(success.stale, false);
+	assert.equal(success.provenance, "provider");
+	clock += 1000;
+	const successAgain = await service.get("relay-a", { force: true });
+	const successfulAt = clock;
+	assert.equal(successAgain.lastAttemptAt, successfulAt);
+	assert.equal(successAgain.lastSuccessAt, successfulAt, "consecutive success must advance both health timestamps");
+	assert.equal(successAgain.ageMs, 0);
+	const providerView = (await service.providerViews()).find((entry) => entry.id === "relay-a");
+	assert.deepEqual({
+		stale: providerView.stale,
+		lastAttemptAt: providerView.lastAttemptAt,
+		lastSuccessAt: providerView.lastSuccessAt,
+		ageMs: providerView.ageMs,
+		provenance: providerView.provenance,
+		reason: providerView.reason
+	}, { stale: false, lastAttemptAt: successfulAt, lastSuccessAt: successfulAt, ageMs: 0, provenance: "provider", reason: null });
+	clock += 1000;
+	assert.equal((await service.get("relay-a")).ageMs, 1000, "cached health age must advance at read time");
 	phase = "transient";
 	clock += 300000;
 	const stale = await service.get("relay-a", { force: true });
 	assert.equal(stale.status, "unavailable");
 	assert.equal(stale.stale, true);
 	assert.equal(stale.balance.remaining, 8);
-	phase = "auth";
+	assert.equal(stale.lastAttemptAt, clock);
+	assert.equal(stale.lastSuccessAt, successfulAt);
+	assert.equal(stale.ageMs, 301000);
+	assert.equal(stale.reason, "unknown");
+	phase = "rate-limited";
+	clock += 1000;
+	const limited = await service.get("relay-a", { force: true });
+	assert.equal(limited.status, "rate-limited");
+	assert.equal(limited.stale, true);
+	assert.equal(limited.balance.remaining, 8);
+	assert.equal(limited.lastSuccessAt, successfulAt);
+	assert.equal(limited.reason, "rate-limited");
+	assert.equal(await service.nextRefreshAt(), clock + 300000, "the first 429 must schedule bounded backoff");
 	clock += 300000;
+	const limitedAgain = await service.get("relay-a", { force: true });
+	assert.equal(limitedAgain.status, "rate-limited");
+	assert.equal(await service.nextRefreshAt(), clock + 600000, "consecutive 429 responses must increase backoff per provider");
+	phase = "transient";
+	clock += 1000;
+	const failedRetry = await service.get("relay-a", { force: true });
+	assert.equal(failedRetry.status, "unavailable");
+	assert.equal(failedRetry.stale, true);
+	assert.equal(await service.nextRefreshAt(), clock + 600000, "a failed retry must not clear rate-limit backoff before recovery");
+	phase = "auth";
+	clock += 1000;
 	const unauthorized = await service.get("relay-a", { force: true });
 	assert.equal(unauthorized.status, "unauthorized");
 	assert.equal(unauthorized.balance, null, "auth failures must not retain stale account data");
-	console.log("transient stale retention and auth clearing ok");
+	assert.equal(unauthorized.stale, false);
+	assert.equal(unauthorized.lastSuccessAt, successfulAt, "non-transient failures must not erase health history");
+	assert.equal(unauthorized.reason, "unauthorized");
+	phase = "ok";
+	clock += 1000;
+	const recovered = await service.get("relay-a", { force: true });
+	assert.equal(recovered.status, "ok");
+	assert.equal(recovered.stale, false);
+	assert.equal(recovered.lastSuccessAt, clock);
+	assert.equal(recovered.ageMs, 0);
+	assert.equal(await service.nextRefreshAt(), clock + 900000, "success must clear rate-limit backoff");
+	console.log("account health transitions, stale retention, and 429 recovery ok");
+}
+
+{
+	let phase = "ok";
+	let provider = { ...relay };
+	const service = createAccountService({
+		credentials: credentials({ RELAY_A_KEY: "sk-relay" }),
+		getProviders: async () => [provider],
+		config: validateAccountConfig({ monitors: { "relay-a": { adapter: "general" } } }),
+		deps: {
+			includeLegacyProviders: false,
+			now: () => now,
+			fetch: async () => phase === "ok"
+				? jsonResponse({ balance: 42, currency: "USD" })
+				: jsonResponse({}, 503)
+		}
+	});
+	const first = await service.get("relay-a");
+	assert.equal(first.balance.remaining, 42);
+	provider = { ...provider, baseURL: "https://replacement.example.com/v1" };
+	const reboundView = (await service.providerViews()).find((entry) => entry.id === "relay-a");
+	assert.equal(reboundView.status, "pending", "provider views must not expose a snapshot from a different config key");
+	assert.equal(reboundView.fetchedAt, null);
+	assert.equal(reboundView.lastSuccessAt, null);
+	phase = "unavailable";
+	const changed = await service.get("relay-a", { force: true });
+	assert.equal(changed.status, "unavailable");
+	assert.equal(changed.stale, false, "a new provider binding must not retain data from the previous config key");
+	assert.equal(changed.balance, null);
+	assert.equal(changed.lastSuccessAt, null);
+	console.log("account config changes invalidate stale-data and backoff history ok");
+}
+
+{
+	let clock = now;
+	let configured = true;
+	let calls = 0;
+	const service = createAccountService({
+		credentials: { resolve: async () => configured ? { value: "sk-relay" } : void 0 },
+		getProviders: async () => [relay],
+		config: validateAccountConfig({ monitors: { "relay-a": { adapter: "general" } } }),
+		deps: {
+			includeLegacyProviders: false,
+			now: () => clock,
+			fetch: async () => {
+				calls += 1;
+				return jsonResponse({ balance: 42, currency: "USD" });
+			}
+		}
+	});
+	const success = await service.get("relay-a");
+	assert.equal(success.lastAttemptAt, now);
+	configured = false;
+	clock += 900000;
+	await service.refreshDue();
+	const unconfigured = service.cached("relay-a");
+	assert.equal(unconfigured.status, "not-configured");
+	assert.equal(unconfigured.lastAttemptAt, now, "a local missing-credential evaluation must preserve the last real provider attempt");
+	assert.equal(unconfigured.lastSuccessAt, now);
+	assert.equal(await service.nextRefreshAt(), clock + 900000, "a no-attempt evaluation must still advance the scheduler deadline");
+	clock += 900000;
+	await service.refreshDue();
+	assert.equal(await service.nextRefreshAt(), clock + 900000, "consecutive missing-credential evaluations must never create a one-second loop");
+	assert.equal(calls, 1, "missing credentials must not create extra provider requests");
+	console.log("no-attempt evaluations remain health-accurate and scheduler-bounded ok");
+}
+
+{
+	let provider = { ...relay, baseURL: "https://old.example.com/v1" };
+	let releaseOld;
+	const calls = [];
+	const service = createAccountService({
+		credentials: credentials({ RELAY_A_KEY: "sk-relay" }),
+		getProviders: async () => [provider],
+		config: validateAccountConfig({ monitors: { "relay-a": { adapter: "general" } } }),
+		deps: {
+			includeLegacyProviders: false,
+			now: () => now,
+			fetch: async (url) => {
+				calls.push(String(url));
+				if (String(url).includes("old.example.com")) {
+					await new Promise((resolve) => { releaseOld = resolve; });
+					return jsonResponse({ balance: 10, currency: "USD" });
+				}
+				return jsonResponse({ balance: 99, currency: "USD" });
+			}
+		}
+	});
+	const oldRequest = service.get("relay-a", { force: true });
+	await new Promise((resolve) => setImmediate(resolve));
+	provider = { ...provider, baseURL: "https://new.example.com/v1" };
+	const newAccount = await service.get("relay-a", { force: true });
+	assert.equal(newAccount.balance.remaining, 99, "a rebound provider must not share the previous config's inflight request");
+	releaseOld();
+	const oldAccount = await oldRequest;
+	assert.equal(oldAccount.balance.remaining, 10);
+	assert.equal((await service.get("relay-a")).balance.remaining, 99, "a late old-config completion must not overwrite the new binding cache");
+	assert.deepEqual(calls, ["https://old.example.com/user/balance", "https://new.example.com/user/balance"]);
+	console.log("single-flight is config-aware and rejects late old-binding cache writes ok");
+}
+
+{
+	const secret = "SECRET_API_KEY_sk-danger";
+	const service = createAccountService({
+		credentials: credentials({ RELAY_A_KEY: secret }),
+		getProviders: async () => [relay],
+		config: validateAccountConfig({ monitors: { "relay-a": { adapter: "general" } } }),
+		deps: {
+			includeLegacyProviders: false,
+			now: () => now,
+			fetch: async () => {
+				const error = new Error(`Authorization: Bearer ${secret}; Cookie=session-secret; upstream body=${secret}`);
+				error.providerStatus = "unavailable";
+				error.safeReason = `Authorization: Bearer ${secret}`;
+				throw error;
+			}
+		}
+	});
+	const account = await service.get("relay-a", { force: true });
+	assert.equal(account.reason, "unknown");
+	assert.equal(account.lastAttemptAt, now);
+	assert.equal(account.lastSuccessAt, null);
+	assert.equal(account.ageMs, null, "an account that never succeeded has no data age");
+	const wire = JSON.stringify({ account, providers: await service.providerViews() });
+	assert.equal(wire.includes(secret), false);
+	assert.equal(/Authorization|Cookie|upstream body/i.test(wire), false);
+	console.log("account health diagnostics never expose hostile upstream secrets ok");
+}
+
+{
+	let clock = now;
+	let releaseRelayA;
+	let holdRelayA = true;
+	const calls = new Map([["relay-a", 0], ["relay-b", 0]]);
+	const relayB = { ...relay, id: "relay-b", displayName: "Relay B", apiKeyEnv: "RELAY_B_KEY", baseURL: "https://relay-b.example.com/v1" };
+	const service = createAccountService({
+		credentials: credentials({ RELAY_A_KEY: "sk-a", RELAY_B_KEY: "sk-b" }),
+		getProviders: async () => [relay, relayB],
+		config: validateAccountConfig({ monitors: {
+			"relay-a": { adapter: "general" },
+			"relay-b": { adapter: "general" }
+		} }),
+		deps: {
+			includeLegacyProviders: false,
+			now: () => clock,
+			fetch: async (url) => {
+				const id = String(url).includes("relay-b") ? "relay-b" : "relay-a";
+				calls.set(id, calls.get(id) + 1);
+				if (id === "relay-a" && holdRelayA) await new Promise((resolve) => { releaseRelayA = resolve; });
+				return jsonResponse({ balance: id === "relay-a" ? 10 : 20, currency: "USD" });
+			}
+		}
+	});
+	let policyChanges = 0;
+	const unsubscribe = service.subscribePolicyChanges(() => { policyChanges += 1; });
+	service.touch("relay-a", "detail");
+	assert.equal(policyChanges, 1, "background-to-detail activity must notify the central scheduler");
+	service.touch("relay-a", "detail");
+	assert.equal(policyChanges, 1, "refreshing the same activity hint must not create redundant scheduler wakes");
+	service.setActiveProviders(["relay-a"]);
+	assert.equal(policyChanges, 2, "detail-to-active activity must notify the central scheduler");
+	const direct = service.get("relay-a", { force: true, activity: "active" });
+	await new Promise((resolve) => setImmediate(resolve));
+	const central = service.refreshDue({ force: true });
+	holdRelayA = false;
+	releaseRelayA();
+	await Promise.all([direct, central]);
+	assert.deepEqual(Object.fromEntries(calls), { "relay-a": 1, "relay-b": 1 }, "detail/background overlap must preserve one upstream request per provider");
+	clock += 60000;
+	await service.refreshDue();
+	assert.deepEqual(Object.fromEntries(calls), { "relay-a": 2, "relay-b": 1 }, "active and background providers must keep independent due times");
+	unsubscribe();
+	console.log("adaptive refresh preserves single-flight and per-provider independence ok");
 }
 
 {
@@ -1178,7 +1502,7 @@ console.log("IPv4/IPv6 private-address classification ok");
 		}
 	});
 	assert.equal(account.status, "unavailable");
-	assert.equal(account.reason, void 0, "TLS failures must not trigger address fallback or expose raw diagnostics");
+	assert.equal(account.reason, "unknown", "TLS failures must expose only a fixed diagnostic code");
 	assert.equal(attempts, 1, "non-connection failures must not retry another IP");
 	console.log("TLS failure does not bypass validation via address fallback ok");
 }

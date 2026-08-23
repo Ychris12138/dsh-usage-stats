@@ -126,6 +126,38 @@ async function testSessionContext(root) {
 	});
 	assert.doesNotMatch(first.body, /SECRET|apiKey|baseURL/i, "session context must not expose connection or credential fields");
 
+	const selectorSwitched = makeResponse();
+	await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session&provider=route-b&model=shared-model`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, selectorSwitched);
+	assert.deepEqual(JSON.parse(selectorSwitched.body).context, {
+		sessionId: "live-session",
+		providerId: "route-b",
+		providerFamily: "ollama",
+		model: "shared-model",
+		accountId: "route-b",
+		updatedAt: null
+	}, "an accepted selector route must override the last request/header immediately");
+	const invalidSelectionQueries = [
+		"provider=route-b",
+		"provider=route-b&model=",
+		`provider=${"p".repeat(257)}&model=m`,
+		`provider=p&model=${"m".repeat(513)}`,
+		"provider=route%00b&model=m",
+		"provider=route-b&model=m%00"
+	];
+	for (const query of invalidSelectionQueries) {
+		const invalidSelection = makeResponse();
+		await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session&${query}`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, invalidSelection);
+		assert.equal(invalidSelection.status, 400, `invalid selector hint must fail closed: ${query.slice(0, 80)}`);
+		assert.equal(JSON.parse(invalidSelection.body).error, "invalid-selection");
+	}
+	const boundaryProvider = "p".repeat(256);
+	const boundaryModel = "m".repeat(512);
+	const boundarySelection = makeResponse();
+	await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session&provider=${boundaryProvider}&model=${boundaryModel}`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, boundarySelection);
+	assert.equal(boundarySelection.status, 200, "bounded selector hint limits must be inclusive");
+	assert.equal(JSON.parse(boundarySelection.body).context.providerId, boundaryProvider);
+	assert.equal(JSON.parse(boundarySelection.body).context.model, boundaryModel);
+
 	events.push(routeEvent(1, "route-b", "shared-model"));
 	const switched = makeResponse();
 	await handler({ method: "GET", url: plugin.SESSION_CONTEXT_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, switched);

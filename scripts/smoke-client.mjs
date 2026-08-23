@@ -16,6 +16,8 @@ const require = process.env.SMOKE_NODE_MODULES === void 0
 const react = require("react");
 const jsxRuntime = require("react/jsx-runtime");
 const { renderToStaticMarkup } = require("react-dom/server");
+const TestRenderer = require("react-test-renderer");
+const { act } = TestRenderer;
 
 // Fake primitives: every named export is a no-op component (returns its props as children is not needed).
 const Stub = () => null;
@@ -39,6 +41,10 @@ if (!source.includes('translate("panel.badge")')) throw new Error("badge must ke
 if (!source.includes("badgeAmountText !== null &&")) throw new Error("badge amount must be a separate middle element");
 if (!source.includes("S.badgeAmount")) throw new Error("badge amount element is missing its class");
 if (!source.includes("badgeCount !== null && react_jsx_runtime.jsx(\"span\", { className: S.badgeCount")) throw new Error("badge must keep the today token count on the right");
+if (!source.includes('.slots.inject("conversation.input.right"')) throw new Error("current-session pill must use the formal composer control slot");
+const pillSource = source.slice(source.indexOf("//#region CurrentSessionPill"), source.indexOf("//#endregion", source.indexOf("//#region CurrentSessionPill")));
+if (pillSource.includes("setInterval") || pillSource.includes("setTimeout")) throw new Error("current-session pill must not add an independent polling loop");
+if (pillSource.includes("MutationObserver") || pillSource.includes("addEventListener")) throw new Error("current-session pill must use slot session snapshots instead of DOM observers/listeners");
 new Function(source)(); // executes the window.__ModuleLoader__.load call
 
 if (captured === null) throw new Error("loader did not capture the bundle");
@@ -78,18 +84,47 @@ console.log("render ok, markup length:", markup.length);
 
 // Apply against a stub client context.
 const registrations = [];
+const registeredEntries = [];
+const modelSubscribers = new Set();
+let modelSnapshot = { current: { provider: "deepseek-official", model: "deepseek-chat" } };
+const modelDirectory = {
+	subscribe: (fn) => { modelSubscribers.add(fn); return () => modelSubscribers.delete(fn); },
+	getSnapshot: () => modelSnapshot
+};
 const ctx = {
 	effect: () => {},
 	locale: { register: (ns, dict) => { if (ns !== "usageStats") throw new Error(`unexpected ns ${ns}`); if (!dict.zh || !dict.en) throw new Error("missing dictionaries"); } },
-	slots: { inject: (slot, fn) => { registrations.push([slot, fn]); return () => {}; }, register: () => () => {} }
+	inject: (_services, fn) => fn({
+		slots: ctx.slots,
+		modelDirectories: { directoryFor: () => ({ store: modelDirectory }) }
+	}),
+	slots: {
+		inject: (slot, fn) => { registrations.push([slot, fn]); return () => {}; },
+		register: (options, component) => { registeredEntries.push({ options, component }); return () => {}; }
+	}
 };
 exports_.apply(ctx);
-if (registrations.length !== 1) throw new Error("expected one slot injection");
-const [slot, registerFn] = registrations[0];
-if (slot !== "sidebar.footer.action") throw new Error(`unexpected slot ${slot}`);
-const disposer = registerFn();
-if (typeof disposer !== "function") throw new Error("slot registration must return a disposer");
-console.log("apply ok, slot:", slot);
+if (registrations.length !== 2) throw new Error(`expected sidebar + composer slot injections, got ${registrations.length}`);
+const registrationBySlot = new Map(registrations);
+if (!registrationBySlot.has("sidebar.footer.action")) throw new Error("sidebar footer slot registration missing");
+if (!registrationBySlot.has("conversation.input.right")) throw new Error("current-session pill slot registration missing");
+for (const registerFn of registrationBySlot.values()) {
+	const disposer = registerFn();
+	if (typeof disposer !== "function") throw new Error("slot registration must return a disposer");
+}
+const pillEntry = registeredEntries.find((entry) => entry.options.name === "conversation.input.right");
+if (pillEntry?.options.id !== "usage-stats-current-session-pill") throw new Error("pill list entry needs a stable unique id");
+if (typeof pillEntry.component !== "function") throw new Error("pill slot must register a component");
+if (pillEntry.options.inject("session-a").modelDirectory !== modelDirectory) throw new Error("pill must subscribe to the host model-selection store");
+// Missing mount point: the host may never invoke a slot injection callback.
+// apply() must still complete without attempting any DOM fallback or throwing.
+exports_.apply({
+	effect: () => {},
+	locale: ctx.locale,
+	inject: () => () => {},
+	slots: { inject: () => () => {}, register: () => { throw new Error("missing host slot must not register"); } }
+});
+console.log("apply ok, formal slots:", [...registrationBySlot.keys()].join(", "));
 
 // Render the month heatmap with synthetic per-day data (calendar grid + colors).
 const { MonthHeatmap, DayDetail, buildMonthHeatmap } = exports_;
@@ -316,4 +351,275 @@ if (badgeWarnOf(staleSubscription) !== false) throw new Error("stale subscriptio
 const okButStale = { mode: "balance", status: "ok", stale: true, balance: { remaining: 100, currency: "USD" } };
 if (badgeAccountValue(okButStale) !== null) throw new Error("ok-but-stale snapshot must not render a numeric badge");
 console.log("collapsed-badge account value + warning policy ok");
+
+// Current Session Pill: one server-resolved provider/account snapshot is
+// reduced to a compact, neutral-by-default view model. No provider inference
+// or client-owned warning thresholds are allowed here.
+const {
+	CurrentSessionPill,
+	CurrentSessionPillView,
+	loadSessionPillSnapshot,
+	requestUsageStatsPanel,
+	sessionContextSignalOf,
+	sessionPillViewOf,
+	modelSelectionSignalOf,
+	subscribeUsageStatsPanel
+} = exports_;
+if ([CurrentSessionPill, CurrentSessionPillView, loadSessionPillSnapshot, requestUsageStatsPanel, sessionContextSignalOf, sessionPillViewOf, modelSelectionSignalOf, subscribeUsageStatsPanel].some((entry) => typeof entry !== "function")) {
+	throw new Error("current-session pill exports are incomplete");
+}
+const pillTranslate = (key, params) => {
+	if (params?.provider !== void 0 && params?.value !== void 0) return `${params.provider}: ${params.value}`;
+	return key;
+};
+const pillContext = {
+	sessionId: "session/one",
+	providerId: "deepseek-official",
+	providerFamily: "deepseek",
+	model: "deepseek-chat",
+	accountId: "deepseek-official"
+};
+const balancePillSnapshot = {
+	context: pillContext,
+	account: {
+		id: "deepseek-official",
+		displayName: "DeepSeek",
+		mode: "balance",
+		status: "ok",
+		balance: { remaining: 36.44, currency: "CNY", unlimited: false },
+		alert: { level: "normal", metric: "balance", value: 36.44 },
+		credentialRef: "MUST_NOT_RENDER",
+		baseURL: "https://secret.invalid"
+	}
+};
+const balancePill = sessionPillViewOf(balancePillSnapshot, pillTranslate);
+if (balancePill.providerId !== "deepseek-official" || balancePill.providerLabel !== "DeepSeek") throw new Error("balance pill lost server-resolved provider identity");
+if (!balancePill.value.includes("36.44") || balancePill.tone !== "normal") throw new Error(`balance pill value/tone incorrect: ${JSON.stringify(balancePill)}`);
+const unlimitedPill = sessionPillViewOf({
+	context: pillContext,
+	account: { ...balancePillSnapshot.account, balance: { remaining: null, currency: "USD", unlimited: true } }
+}, pillTranslate);
+if (unlimitedPill.value !== "∞") throw new Error("unlimited balance pill must render infinity");
+
+const subscriptionPill = sessionPillViewOf({
+	context: { ...pillContext, providerId: "opencode-go", accountId: "opencode-go" },
+	account: {
+		id: "opencode-go",
+		displayName: "OpenCode Go",
+		mode: "subscription",
+		status: "ok",
+		windows: [
+			{ kind: "session", remainingPercent: 42 },
+			{ kind: "weekly", remainingPercent: 8 },
+			{ kind: "monthly", remainingPercent: null }
+		],
+		alert: { level: "critical", metric: "remaining-percent", value: 8 }
+	}
+}, pillTranslate);
+if (subscriptionPill.providerLabel !== "OpenCode Go" || !subscriptionPill.value.includes("subscription.window.weekly") || !subscriptionPill.value.includes("8%")) {
+	throw new Error(`subscription pill must show the tightest valid window: ${JSON.stringify(subscriptionPill)}`);
+}
+if (subscriptionPill.tone !== "critical") throw new Error("subscription pill tone must come from account.alert.level");
+const warningPill = sessionPillViewOf({ ...balancePillSnapshot, account: { ...balancePillSnapshot.account, alert: { level: "warning" } } }, pillTranslate);
+if (warningPill.tone !== "warning") throw new Error("warning alert tone must be preserved");
+
+const statusKeys = new Map([
+	["not-configured", "subscription.status.notConfigured"],
+	["unauthorized", "subscription.status.unauthorized"],
+	["rate-limited", "subscription.status.rateLimited"],
+	["unavailable", "subscription.status.unavailable"],
+	["invalid-response", "account.status.invalidResponse"],
+	["blocked", "account.status.blocked"],
+	["unsupported", "sessionPill.status.unsupported"],
+	["unknown", "account.status.unknown"]
+]);
+for (const [status, expected] of statusKeys) {
+	const view = sessionPillViewOf({
+		context: pillContext,
+		account: { ...balancePillSnapshot.account, status, alert: { level: "critical" } }
+	}, pillTranslate);
+	if (view.value !== expected || view.tone !== "neutral") throw new Error(`${status} pill must be a neutral status, got ${JSON.stringify(view)}`);
+}
+const unknownProviderPill = sessionPillViewOf({ context: { ...pillContext, providerId: "relay-a", accountId: "relay-a" }, account: null, status: "unsupported" }, pillTranslate);
+if (unknownProviderPill.providerLabel !== "relay-a" || unknownProviderPill.value !== "sessionPill.status.unsupported" || unknownProviderPill.tone !== "neutral") {
+	throw new Error("unknown/no-adapter provider must remain a neutral server identity");
+}
+
+let openedProvider = null;
+const pillElement = CurrentSessionPillView({ snapshot: balancePillSnapshot, translate: pillTranslate, onOpen: (id) => { openedProvider = id; } });
+if (pillElement.type !== "button" || pillElement.props["data-current-session-pill"] !== true) throw new Error("pill view needs one stable button root");
+pillElement.props.onClick();
+if (openedProvider !== "deepseek-official") throw new Error(`pill click must open the account panel at its provider, got ${openedProvider}`);
+const balancePillMarkup = renderToStaticMarkup(pillElement);
+const subscriptionPillElement = CurrentSessionPillView({
+	snapshot: {
+		context: { ...pillContext, providerId: "opencode-go", accountId: "opencode-go" },
+		account: { id: "opencode-go", displayName: "OpenCode Go", mode: "subscription", status: "ok", windows: [{ kind: "weekly", remainingPercent: 8 }], alert: { level: "critical" } }
+	},
+	translate: pillTranslate,
+	onOpen: () => {}
+});
+const subscriptionPillMarkup = renderToStaticMarkup(subscriptionPillElement);
+if (!balancePillMarkup.includes('data-tone="normal"') || !subscriptionPillMarkup.includes('data-tone="critical"')) throw new Error("pill alert tones missing from markup");
+if (balancePillMarkup.includes("MUST_NOT_RENDER") || balancePillMarkup.includes("secret.invalid")) throw new Error("pill must not render credential or connection fields");
+if (pillElement.type !== subscriptionPillElement.type || balancePillMarkup === subscriptionPillMarkup) throw new Error("provider switch must update the existing pill root");
+
+const requests = [];
+let currentProvider = "deepseek-official";
+const fetchPill = async (path) => {
+	requests.push(path);
+	if (path.startsWith("/api/usage-stats/session-context")) return {
+		ok: true,
+		context: { ...pillContext, providerId: currentProvider, accountId: currentProvider }
+	};
+	return {
+		ok: true,
+		account: currentProvider === "deepseek-official"
+			? balancePillSnapshot.account
+			: { id: "opencode-go", displayName: "OpenCode Go", mode: "subscription", status: "ok", windows: [{ kind: "weekly", remainingPercent: 18 }], alert: { level: "warning" } }
+	};
+};
+const firstPillLoad = await loadSessionPillSnapshot("session/one", fetchPill);
+currentProvider = "opencode-go";
+const switchedPillLoad = await loadSessionPillSnapshot("session/one", fetchPill);
+if (firstPillLoad.account.id !== "deepseek-official" || switchedPillLoad.account.id !== "opencode-go") throw new Error("session provider switch must resolve a fresh account snapshot");
+if (requests[0] !== "/api/usage-stats/session-context?session=session%2Fone") throw new Error(`session context request must carry the explicit encoded session id: ${requests[0]}`);
+if (!requests.includes("/api/usage-stats/account?provider=opencode-go")) throw new Error("pill must reuse the unified account endpoint for the resolved provider");
+await loadSessionPillSnapshot("session/one", fetchPill, { provider: "route:two", model: "same/model" });
+if (!requests.includes("/api/usage-stats/session-context?session=session%2Fone&provider=route%3Atwo&model=same%2Fmodel")) {
+	throw new Error("the formal model-selector route must be encoded as a session-context hint");
+}
+let noContextRequests = 0;
+const noContext = await loadSessionPillSnapshot("blank", async () => {
+	noContextRequests += 1;
+	return { ok: true, context: null };
+});
+if (noContext !== null || noContextRequests !== 1) throw new Error("a session without route context must silently omit the pill and skip account lookup");
+const unsupportedLoad = await loadSessionPillSnapshot("unknown", async (path) => path.includes("session-context")
+	? { ok: true, context: { ...pillContext, providerId: "relay-a", accountId: "relay-a" } }
+	: { ok: false, error: "unknown-provider" });
+if (unsupportedLoad.status !== "unsupported" || unsupportedLoad.account !== null) throw new Error("unknown account adapters must degrade to a neutral unsupported snapshot");
+
+const baseSession = { running: false, removed: false, nodes: [], chat: { order: [] }, partial: null };
+const baseSignal = sessionContextSignalOf(baseSession);
+if (sessionContextSignalOf({ ...baseSession }) !== baseSignal) throw new Error("unrelated session object replacement must not trigger a pill request");
+if (sessionContextSignalOf({ ...baseSession, running: true }) === baseSignal) throw new Error("turn start must trigger an event-driven pill refresh");
+if (sessionContextSignalOf({ ...baseSession, nodes: [{}] }) === baseSignal) throw new Error("new message must trigger an event-driven pill refresh");
+if (sessionContextSignalOf({ ...baseSession, partial: {} }) === baseSignal) throw new Error("assistant activity must trigger an event-driven pill refresh");
+if (modelSelectionSignalOf({ current: { provider: "a:b", model: "c" } }) === modelSelectionSignalOf({ current: { provider: "a", model: "b:c" } })) {
+	throw new Error("model selection refresh keys must not collide when route ids contain colons");
+}
+
+// Exercise the actual hook lifecycle. A host model-directory notification must
+// clear the old provider immediately, then replace the same button root after
+// the server-owned session-context/account chain settles.
+let lifecycleProvider = "deepseek-official";
+let resolveSwitchedContext;
+let holdSwitchedContext = false;
+const lifecycleRequests = [];
+const lifecycleRequest = async (path) => {
+	lifecycleRequests.push(path);
+	if (path.startsWith("/api/usage-stats/session-context")) {
+		if (holdSwitchedContext) return new Promise((resolve) => { resolveSwitchedContext = resolve; });
+		return { ok: true, context: { ...pillContext, providerId: lifecycleProvider, accountId: lifecycleProvider } };
+	}
+	return {
+		ok: true,
+		account: lifecycleProvider === "deepseek-official"
+			? balancePillSnapshot.account
+			: { id: "opencode-go", displayName: "OpenCode Go", mode: "subscription", status: "ok", windows: [{ kind: "weekly", remainingPercent: 18 }], alert: { level: "warning" } }
+	};
+};
+let pillRenderer;
+await act(async () => {
+	pillRenderer = TestRenderer.create(react.createElement(CurrentSessionPill, {
+		sessionId: "session-one",
+		session: baseSession,
+		modelDirectory,
+		request: lifecycleRequest,
+		t: (key) => key
+	}));
+	await Promise.resolve();
+	await Promise.resolve();
+});
+if (pillRenderer.root.findAllByProps({ "data-current-session-pill": true }).length !== 1) throw new Error("successful mount must create exactly one pill");
+if (pillRenderer.root.findByType("button").props["data-provider"] !== "deepseek-official") throw new Error("initial lifecycle provider missing");
+
+lifecycleProvider = "opencode-go";
+holdSwitchedContext = true;
+await act(async () => {
+	modelSnapshot = { current: { provider: "opencode-go", model: "same-model" } };
+	for (const subscriber of modelSubscribers) subscriber();
+	await Promise.resolve();
+});
+if (pillRenderer.toJSON() !== null) throw new Error("provider switch must not leave the previous session/account pill clickable while loading");
+holdSwitchedContext = false;
+await act(async () => {
+	resolveSwitchedContext({ ok: true, context: { ...pillContext, providerId: "opencode-go", accountId: "opencode-go" } });
+	await Promise.resolve();
+	await Promise.resolve();
+});
+const switchedButtons = pillRenderer.root.findAllByProps({ "data-current-session-pill": true });
+if (switchedButtons.length !== 1 || switchedButtons[0].props["data-provider"] !== "opencode-go") throw new Error("provider switch must update the existing single pill root");
+if (!lifecycleRequests.includes("/api/usage-stats/session-context?session=session-one&provider=opencode-go&model=same-model")) {
+	throw new Error("model-directory notifications must refresh session-context with the current route hint");
+}
+await act(async () => { pillRenderer.unmount(); });
+
+// Multiple panel roots are not expected, but one unmount must never erase a
+// still-mounted opener. This bus is the cross-slot bridge, not another cache.
+const openedBy = [];
+const stopFirstOpener = subscribeUsageStatsPanel((providerId) => openedBy.push(`first:${providerId}`));
+const stopSecondOpener = subscribeUsageStatsPanel((providerId) => openedBy.push(`second:${providerId}`));
+requestUsageStatsPanel("opencode-go");
+stopSecondOpener();
+requestUsageStatsPanel("deepseek-official");
+stopFirstOpener();
+if (openedBy.join(",") !== "second:opencode-go,first:deepseek-official") throw new Error(`panel opener lifecycle must target one newest mounted subscriber and then fall back: ${openedBy.join(",")}`);
+
+// Mount the real existing panel plus the pill and verify a click opens that
+// panel with the current provider selected. Network and timers are inert test
+// doubles; production still uses the panel's existing refresh/cache path.
+const originalFetch = globalThis.fetch;
+document.addEventListener = () => {};
+document.removeEventListener = () => {};
+window.setInterval = () => 1;
+window.clearInterval = () => {};
+globalThis.fetch = async (path) => ({
+	ok: true,
+	json: async () => {
+		if (String(path).includes("/providers")) return {
+			ok: true,
+			providers: [
+				{ id: "deepseek-official", displayName: "DeepSeek", configured: true, accountMode: "balance" },
+				{ id: "opencode-go", displayName: "OpenCode Go", configured: true, accountMode: "subscription" }
+			]
+		};
+		if (String(path).includes("/account")) return { ok: true, account: { id: "opencode-go", displayName: "OpenCode Go", mode: "subscription", status: "ok", windows: [{ kind: "weekly", remainingPercent: 18 }], alert: { level: "warning" } } };
+		return { ok: true, days: [], total: { tokens: 0 } };
+	}
+});
+let integrationRenderer;
+await act(async () => {
+	integrationRenderer = TestRenderer.create(react.createElement(react.Fragment, {},
+		react.createElement(UsageStatsPanel, { wide: true, t: (key) => key }),
+		react.createElement(CurrentSessionPillView, {
+			snapshot: { ...balancePillSnapshot, context: { ...pillContext, providerId: "opencode-go", accountId: "opencode-go" } },
+			translate: pillTranslate
+		})
+	));
+	await Promise.resolve();
+});
+await act(async () => {
+	integrationRenderer.root.findByProps({ "data-current-session-pill": true }).props.onClick();
+	await Promise.resolve();
+	await Promise.resolve();
+});
+if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).length !== 1) throw new Error("pill click must open the existing account panel");
+const selectedPicker = integrationRenderer.root.findByType("select");
+if (selectedPicker.props.value !== "opencode-go") throw new Error(`pill click must select its provider in the existing panel, got ${selectedPicker.props.value}`);
+await act(async () => { integrationRenderer.unmount(); });
+globalThis.fetch = originalFetch;
+
+console.log("current-session pill rendering, switching, hook lifecycle, and request policy ok");
 console.log("SMOKE TEST PASSED");

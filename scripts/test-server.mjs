@@ -17,6 +17,15 @@ function usageEvent(seq, inputTokens) {
 	};
 }
 
+function routeEvent(seq, provider, model) {
+	return {
+		seq,
+		time: Date.UTC(2026, 7, 23, 12, 0, seq),
+		type: "request/header",
+		data: { header: { config: { provider, model } } }
+	};
+}
+
 async function freshModule(label, home) {
 	process.env.DSH_HOME = home;
 	return import(new URL(`../lib/index.js?test=${label}-${Date.now()}-${Math.random()}`, import.meta.url));
@@ -71,6 +80,70 @@ async function testRouteFence(root) {
 	await routes.get(plugin.ACCOUNT_PATH)({ method: "GET", url: `${plugin.ACCOUNT_PATH}?provider=deepseek-official`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, account);
 	assert.equal(account.status, 200);
 	assert.equal(JSON.parse(account.body).account.status, "not-configured");
+	assert.equal(typeof routes.get(plugin.SESSION_CONTEXT_PATH), "function");
+}
+
+async function testSessionContext(root) {
+	const plugin = await freshModule("session-context", join(root, "session-context"));
+	const routes = new Map();
+	const events = [routeEvent(0, "route-a", "shared-model")];
+	const session = { id: "live-session", events };
+	let liveSessions = [session];
+	const sessions = {
+		get: (id) => liveSessions.find((entry) => entry.id === id),
+		list: () => liveSessions
+	};
+	const persistence = { listSnapshots: async () => [], list: async () => [] };
+	const settings = {
+		get: (name) => name === "llm-pi-ai" ? {
+			providers: {
+				"route-a": {
+					displayName: "Friendly label",
+					baseURL: "https://api.deepseek.com/v1",
+					apiKeyEnv: "SECRET_API_KEY_REFERENCE"
+				},
+				"route-b": {
+					displayName: "Another label",
+					baseURL: "https://api.ollama.com/v1",
+					apiKeyEnv: "OTHER_SECRET_REFERENCE"
+				}
+			}
+		} : void 0
+	};
+	await plugin.apply(makeContext({ sessions, persistence, routes, settings }), {}, { disableBackgroundRefresh: true });
+	const handler = routes.get(plugin.SESSION_CONTEXT_PATH);
+
+	const first = makeResponse();
+	await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, first);
+	assert.equal(first.status, 200);
+	assert.deepEqual(JSON.parse(first.body).context, {
+		sessionId: "live-session",
+		providerId: "route-a",
+		providerFamily: "deepseek",
+		model: "shared-model",
+		accountId: "route-a",
+		updatedAt: Date.UTC(2026, 7, 23, 12, 0, 0)
+	});
+	assert.doesNotMatch(first.body, /SECRET|apiKey|baseURL/i, "session context must not expose connection or credential fields");
+
+	events.push(routeEvent(1, "route-b", "shared-model"));
+	const switched = makeResponse();
+	await handler({ method: "GET", url: plugin.SESSION_CONTEXT_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, switched);
+	assert.equal(switched.status, 200, "one live session may be selected without guessing");
+	assert.equal(JSON.parse(switched.body).context.providerId, "route-b");
+	assert.equal(JSON.parse(switched.body).context.providerFamily, "ollama");
+	assert.equal(JSON.parse(switched.body).context.model, "shared-model");
+
+	const missing = makeResponse();
+	await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=missing`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, missing);
+	assert.equal(missing.status, 404);
+	assert.equal(JSON.parse(missing.body).error, "unknown-session");
+
+	liveSessions = [session, { id: "second-session", events: [] }];
+	const ambiguous = makeResponse();
+	await handler({ method: "GET", url: plugin.SESSION_CONTEXT_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, ambiguous);
+	assert.equal(ambiguous.status, 400, "multiple live sessions require an explicit id instead of guessing the active browser session");
+	assert.equal(JSON.parse(ambiguous.body).error, "session-required");
 }
 
 async function testConfigValidation(root) {
@@ -235,6 +308,7 @@ async function testZeroUsageRowsFiltered(root) {
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
+	await testSessionContext(root);
 	await testConfigValidation(root);
 	await testLegacyZaiSubscriptionId(root);
 	await testBackgroundRefresh(root);

@@ -48,13 +48,14 @@
     }
   },
   "scripts": {
-    "check": "node --check lib/index.js && node --check lib/usage.js && node --check lib/balance.js && node --check lib/subscriptions.js && node --check lib/accounts.js && node --check lib/client.js && node --check scripts/install.mjs && node --check scripts/smoke-client.mjs && node --check scripts/test-overlay-layering.mjs && node --check scripts/test-bundle.mjs && node --check scripts/test-install.mjs && node --check scripts/test-server.mjs && node --check scripts/test-balance.mjs && node --check scripts/test-subscriptions.mjs && node --check scripts/test-accounts.mjs && node --check scripts/validate-fold.mjs && node --check scripts/verify-raw.mjs && node --check scripts/check-balance.mjs",
-    "test": "npm run test:bundle && npm run test:client && npm run test:overlay && npm run test:server && npm run test:balance && npm run test:subscriptions && npm run test:accounts && npm run test:install",
+    "check": "node --check lib/index.js && node --check lib/usage.js && node --check lib/network.js && node --check lib/provider-identity.js && node --check lib/balance.js && node --check lib/subscriptions.js && node --check lib/accounts.js && node --check lib/client.js && node --check scripts/install.mjs && node --check scripts/smoke-client.mjs && node --check scripts/test-overlay-layering.mjs && node --check scripts/test-bundle.mjs && node --check scripts/test-install.mjs && node --check scripts/test-server.mjs && node --check scripts/test-provider-identity.mjs && node --check scripts/test-balance.mjs && node --check scripts/test-subscriptions.mjs && node --check scripts/test-accounts.mjs && node --check scripts/validate-fold.mjs && node --check scripts/verify-raw.mjs && node --check scripts/check-balance.mjs",
+    "test": "npm run test:bundle && npm run test:client && npm run test:overlay && npm run test:server && npm run test:provider-identity && npm run test:balance && npm run test:subscriptions && npm run test:accounts && npm run test:install",
     "test:bundle": "node scripts/test-bundle.mjs",
     "test:client": "node scripts/smoke-client.mjs",
     "test:overlay": "node scripts/test-overlay-layering.mjs",
     "test:install": "node scripts/test-install.mjs",
     "test:server": "node scripts/test-server.mjs",
+    "test:provider-identity": "node scripts/test-provider-identity.mjs",
     "test:balance": "node scripts/test-balance.mjs",
     "test:subscriptions": "node scripts/test-subscriptions.mjs",
     "test:accounts": "node scripts/test-accounts.mjs",

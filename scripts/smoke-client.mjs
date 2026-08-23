@@ -370,6 +370,7 @@ if ([CurrentSessionPill, CurrentSessionPillView, loadSessionPillSnapshot, reques
 }
 const pillTranslate = (key, params) => {
 	if (params?.provider !== void 0 && params?.value !== void 0) return `${params.provider}: ${params.value}`;
+	if (key === "subscription.resets" && params?.time !== void 0) return `reset:${params.time}`;
 	return key;
 };
 const pillContext = {
@@ -420,6 +421,24 @@ if (subscriptionPill.providerLabel !== "OpenCode Go" || !subscriptionPill.value.
 	throw new Error(`subscription pill must show the tightest valid window: ${JSON.stringify(subscriptionPill)}`);
 }
 if (subscriptionPill.tone !== "critical") throw new Error("subscription pill tone must come from account.alert.level");
+if (subscriptionPill.ariaLabel.includes("reset:")) throw new Error("subscription pill without resetsAt must not invent reset information");
+const subscriptionPillWithResetSnapshot = {
+	context: { ...pillContext, providerId: "opencode-go", accountId: "opencode-go" },
+	account: {
+		id: "opencode-go",
+		displayName: "OpenCode Go",
+		mode: "subscription",
+		status: "ok",
+		windows: [
+			{ kind: "session", remainingPercent: 42, resetsAt: "2026-08-24T01:00:00Z" },
+			{ kind: "weekly", remainingPercent: 8, resetsAt: "2026-08-30T01:00:00Z" }
+		],
+		alert: { level: "critical", metric: "remaining-percent", value: 8 }
+	}
+};
+const subscriptionPillWithReset = sessionPillViewOf(subscriptionPillWithResetSnapshot, pillTranslate);
+if (!subscriptionPillWithReset.ariaLabel.includes("reset:")) throw new Error("subscription pill must expose the tightest window reset through accessible text");
+if (subscriptionPillWithReset.value !== subscriptionPill.value) throw new Error("reset information must not expand the compact visible pill value");
 const warningPill = sessionPillViewOf({ ...balancePillSnapshot, account: { ...balancePillSnapshot.account, alert: { level: "warning" } } }, pillTranslate);
 if (warningPill.tone !== "warning") throw new Error("warning alert tone must be preserved");
 
@@ -460,6 +479,17 @@ const subscriptionPillElement = CurrentSessionPillView({
 	onOpen: () => {}
 });
 const subscriptionPillMarkup = renderToStaticMarkup(subscriptionPillElement);
+const subscriptionPillWithResetElement = CurrentSessionPillView({
+	snapshot: subscriptionPillWithResetSnapshot,
+	translate: pillTranslate,
+	onOpen: () => {}
+});
+if (!subscriptionPillWithResetElement.props.title.includes("reset:") || subscriptionPillWithResetElement.props["aria-label"] !== subscriptionPillWithResetElement.props.title) {
+	throw new Error("known resetsAt must be exposed consistently through the pill title and aria-label");
+}
+if (subscriptionPillElement.props.title.includes("reset:") || subscriptionPillElement.props["aria-label"].includes("reset:")) {
+	throw new Error("missing resetsAt must leave the pill title and aria-label free of invented reset information");
+}
 if (!balancePillMarkup.includes('data-tone="normal"') || !subscriptionPillMarkup.includes('data-tone="critical"')) throw new Error("pill alert tones missing from markup");
 if (balancePillMarkup.includes("MUST_NOT_RENDER") || balancePillMarkup.includes("secret.invalid")) throw new Error("pill must not render credential or connection fields");
 if (pillElement.type !== subscriptionPillElement.type || balancePillMarkup === subscriptionPillMarkup) throw new Error("provider switch must update the existing pill root");

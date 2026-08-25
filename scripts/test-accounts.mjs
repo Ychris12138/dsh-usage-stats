@@ -26,6 +26,10 @@ function jsonResponse(value, status = 200, headers = {}) {
 	});
 }
 
+function closeTo(actual, expected, label) {
+	assert.ok(Math.abs(actual - expected) < 1e-12, `${label}: expected ${expected}, got ${actual}`);
+}
+
 /** Build a fake provider-status error the way lib/accounts.js statusError() does. */
 function statusErrorFromTest(status, message) {
 	const error = new Error(message);
@@ -189,7 +193,7 @@ console.log("IPv4/IPv6 private-address classification ok");
 		now: () => now,
 		fetch: async (url, init) => {
 			calls.push({ url: String(url), init });
-			if (String(url).endsWith("/api/status")) return jsonResponse({ data: { quota_per_unit: 500000 } });
+			if (String(url).endsWith("/api/status")) return jsonResponse({ data: { quota_per_unit: 500000, quota_display_type: "USD", usd_exchange_rate: 6.73 } });
 			return jsonResponse({ code: true, data: {
 				total_granted: 1500000,
 				total_used: 500000,
@@ -212,6 +216,111 @@ console.log("IPv4/IPv6 private-address classification ok");
 	assert.equal(calls[0].init.headers.authorization, "Bearer sk-relay");
 	assert.equal(JSON.stringify(account).includes("sk-relay"), false);
 	console.log("New API token-scoped normalization ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "new-api" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => String(url).endsWith("/api/status")
+			? jsonResponse({ data: { quota_per_unit: 500000, quota_display_type: "CNY", usd_exchange_rate: 7 } })
+			: jsonResponse({ code: true, data: {
+				total_granted: 7500000,
+				total_used: 2500000,
+				total_available: 5000000,
+				unlimited_quota: false
+			} })
+	});
+	assert.deepEqual(account.balance, {
+		remaining: 70,
+		used: 35,
+		total: 105,
+		currency: "CNY",
+		unlimited: false,
+		expiresAt: null
+	});
+	console.log("New API token route converts every CNY balance component ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "new-api" }
+	} }));
+	for (const statusCode of [404, 405]) {
+		const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+			now: () => now,
+			fetch: async (url) => String(url).endsWith("/api/status")
+				? jsonResponse({}, statusCode)
+				: jsonResponse({ code: true, data: { total_granted: 5000000, total_used: 0, total_available: 5000000 } })
+		});
+		assert.deepEqual({ remaining: account.balance.remaining, currency: account.balance.currency }, { remaining: 10, currency: "USD" });
+		assert.equal(account.quotaUnit, 500000);
+		assert.equal(account.quotaUnitFallback, true);
+	}
+	const missingStatusFields = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => String(url).endsWith("/api/status")
+			? jsonResponse({ data: {} })
+			: jsonResponse({ code: true, data: { total_granted: 5000000, total_used: 0, total_available: 5000000 } })
+	});
+	assert.deepEqual({ remaining: missingStatusFields.balance.remaining, currency: missingStatusFields.balance.currency }, { remaining: 10, currency: "USD" });
+	assert.equal(missingStatusFields.quotaUnitFallback, true);
+	console.log("New API legacy status schema and 404/405 retain USD fallback ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "new-api" }
+	} }));
+	for (const usdExchangeRate of [void 0, 0, -1, "invalid", Infinity]) {
+		const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+			now: () => now,
+			fetch: async (url) => {
+				if (!String(url).endsWith("/api/status")) return jsonResponse({ code: true, data: { total_granted: 5000000, total_used: 0, total_available: 5000000 } });
+				const statusBody = { data: { quota_per_unit: 500000, quota_display_type: "CNY", usd_exchange_rate: usdExchangeRate } };
+				if (usdExchangeRate !== Infinity) return jsonResponse(statusBody);
+				return { ok: true, status: 200, headers: { get: () => "application/json" }, json: async () => statusBody };
+			}
+		});
+		assert.equal(account.status, "invalid-response", `CNY rate ${String(usdExchangeRate)} must fail closed`);
+		assert.equal(account.balance, null);
+	}
+	console.log("New API explicit CNY with an invalid exchange rate fails closed ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "new-api" }
+	} }));
+	for (const quotaDisplayType of ["TOKENS", "CUSTOM"]) {
+		const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+			now: () => now,
+			fetch: async (url) => String(url).endsWith("/api/status")
+				? jsonResponse({ data: { quota_per_unit: 500000, quota_display_type: quotaDisplayType } })
+				: jsonResponse({ code: true, data: { total_granted: 5000000, total_used: 0, total_available: 5000000 } })
+		});
+		assert.equal(account.status, "unsupported");
+		assert.equal(account.balance, null, `${quotaDisplayType} must not enter the ISO currency field`);
+	}
+	console.log("New API TOKENS/CUSTOM display types remain unsupported ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": { adapter: "new-api" }
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "sk-relay" }), {
+		now: () => now,
+		fetch: async (url) => String(url).endsWith("/api/status")
+			? jsonResponse({ data: { quota_per_unit: 500000, quota_display_type: "USD" } })
+			: jsonResponse({ code: true, data: { total_granted: 0, total_used: 0, total_available: null, unlimited_quota: true } })
+	});
+	assert.equal(account.status, "ok");
+	assert.deepEqual(account.balance, { remaining: null, used: 0, total: 0, currency: "USD", unlimited: true, expiresAt: null });
+	assert.deepEqual(account.alert, { level: "normal", metric: "remaining-percent", value: 100 });
+	console.log("New API unlimited quota behavior remains intact ok");
 }
 
 {
@@ -423,15 +532,37 @@ console.log("IPv4/IPv6 private-address classification ok");
 		fetch: async (url, init) => {
 			calls.push({ url: String(url), authorization: init.headers.authorization });
 			if (String(url).endsWith("/api/usage/token/")) return jsonResponse({}, 404);
-			if (String(url).endsWith("/api/status")) return jsonResponse({ data: { quota_per_unit: 1000 } });
-			return jsonResponse({ success: true, data: { group: "pro", quota: 8000, used_quota: 2000 } });
+			if (String(url).endsWith("/api/status")) return jsonResponse({ data: { quota_per_unit: 500000, quota_display_type: "CNY", usd_exchange_rate: 6.73 } });
+			return jsonResponse({ success: true, data: { group: "pro", quota: 5000000, used_quota: 2500000 } });
 		}
 	});
 	assert.equal(account.status, "ok");
 	assert.equal(account.plan, "pro");
-	assert.deepEqual(account.balance, { remaining: 8, used: 2, total: 10, currency: "USD", unlimited: false, expiresAt: null });
+	assert.deepEqual({ currency: account.balance.currency, unlimited: account.balance.unlimited, expiresAt: account.balance.expiresAt }, { currency: "CNY", unlimited: false, expiresAt: null });
+	closeTo(account.balance.remaining, 67.3, "management fallback CNY remaining");
+	closeTo(account.balance.used, 33.65, "management fallback CNY used");
+	closeTo(account.balance.total, 100.95, "management fallback CNY total");
 	assert.ok(calls.some((call) => call.url.endsWith("/api/user/self") && call.authorization === "Bearer management-pat"));
-	console.log("New API explicit management fallback ok");
+	console.log("New API management fallback shares non-hardcoded CNY conversion ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": {
+			adapter: "new-api",
+			fallbackCredentialRef: "RELAY_A_PAT"
+		}
+	} }));
+	const account = await queryAccount(spec, credentials({ RELAY_A_KEY: "inference-key", RELAY_A_PAT: "management-pat" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/api/usage/token/") || String(url).endsWith("/api/status")) return jsonResponse({}, 404);
+			return jsonResponse({ success: true, data: { quota: 5000000, used_quota: 0 } });
+		}
+	});
+	assert.deepEqual(account.balance, { remaining: 10, used: 0, total: 10, currency: "USD", unlimited: false, expiresAt: null });
+	assert.equal(account.quotaUnitFallback, true);
+	console.log("New API management fallback retains legacy USD behavior when status is unavailable ok");
 }
 
 {

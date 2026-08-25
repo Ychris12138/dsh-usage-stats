@@ -235,7 +235,14 @@ async function testV3CacheUpgradeRefoldsCurrentRoute(root) {
 
 async function testConfigValidation(root) {
 	const plugin = await freshModule("config", join(root, "config"));
-	assert.deepEqual(plugin.Config["~standard"].validate({ monitors: {} }).issues, void 0);
+	const validated = plugin.Config["~standard"].validate({
+		refresh: { enabled: false, activeMs: 120000, detailMs: 180000, backgroundMs: 240000 },
+		monitors: {}
+	});
+	assert.deepEqual(validated.issues, void 0);
+	assert.deepEqual(validated.value.refresh, { enabled: false, activeMs: 120000, detailMs: 180000, backgroundMs: 240000 });
+	assert.equal(plugin.Config["~standard"].validate({ disableBackgroundRefresh: true }).value.refresh.enabled, false);
+	assert.match(plugin.Config["~standard"].validate({ refresh: { activeMs: 1 } }).issues[0].message, /refresh\.activeMs/);
 	assert.match(plugin.Config["~standard"].validate({ monitors: { relay: { adapter: "missing" } } }).issues[0].message, /adapter is unsupported/);
 	const routes = new Map();
 	const context = makeContext({
@@ -340,6 +347,43 @@ async function testBackgroundRefresh(root) {
 	assert.equal(unsubscribed, true, "scheduler cleanup must unsubscribe from AccountService policy changes");
 }
 
+async function testDisabledAccountRefresh(root) {
+	const home = join(root, "refresh-disabled");
+	const plugin = await freshModule("refresh-disabled", home);
+	const routes = new Map();
+	let adaptiveCalls = 0;
+	const accounts = {
+		validate: async () => {},
+		nextRefreshAt: async () => { adaptiveCalls += 1; throw new Error("disabled account scheduler must not request a deadline"); },
+		refreshDue: async () => { adaptiveCalls += 1; throw new Error("disabled account scheduler must not refresh accounts"); },
+		setActiveProviders: () => { adaptiveCalls += 1; },
+		subscribePolicyChanges: () => { adaptiveCalls += 1; return () => {}; },
+		providerViews: async () => [],
+		get: async () => null,
+		subscriptionAccounts: async () => []
+	};
+	const cleanups = [];
+	const ctx = makeContext({
+		sessions: { list: () => [] },
+		persistence: { listSnapshots: async () => [], list: async () => [] },
+		routes,
+		settings: { get: () => void 0 }
+	});
+	ctx.effect = (register) => {
+		const cleanup = register();
+		if (typeof cleanup === "function") cleanups.push(cleanup);
+		return cleanup;
+	};
+	await plugin.apply(ctx, { refresh: { enabled: false } }, { accounts });
+	const schedulerCleanup = cleanups.find((cleanup) => cleanup.ready instanceof Promise);
+	assert.notEqual(schedulerCleanup, void 0, "usage aggregation lifecycle must remain registered when account refresh is disabled");
+	await schedulerCleanup.ready;
+	assert.equal(adaptiveCalls, 0, "disabled mode must not start the adaptive account scheduler");
+	const cache = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.equal(cache.version, 4, "the surviving usage lifecycle must still fold and persist usage");
+	await schedulerCleanup();
+}
+
 async function testPersistedToLive(root) {
 	const plugin = await freshModule("transition", join(root, "transition"));
 	const id = "transition-session";
@@ -430,6 +474,7 @@ try {
 	await testConfigValidation(root);
 	await testLegacyZaiSubscriptionId(root);
 	await testBackgroundRefresh(root);
+	await testDisabledAccountRefresh(root);
 	await testPersistedToLive(root);
 	await testRevisionRewrite(root);
 	await testLiveLogShrink(root);

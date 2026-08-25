@@ -24,7 +24,13 @@ function tokenBuckets(overrides = {}) {
 }
 
 const official = resolveProviderIdentity(provider("deepseek-official", "https://api.deepseek.com"));
-const canonical = resolveProviderIdentity(provider("deepseek", "https://relay.invalid/v1"));
+const canonicalOfficialHost = resolveProviderIdentity(provider("deepseek", "https://api.deepseek.com"));
+const officialPath = resolveProviderIdentity(provider("deepseek-official", "https://api.deepseek.com/anthropic"));
+const canonicalCustomRelay = resolveProviderIdentity(provider("deepseek", "https://relay.invalid/v1"));
+const officialCustomRelay = resolveProviderIdentity(provider("deepseek-official", "https://relay.invalid/v1"));
+const malformedCanonical = resolveProviderIdentity(provider("deepseek", "not-a-url"));
+const canonicalWithoutBaseURL = resolveProviderIdentity(provider("deepseek"));
+const arbitraryWithoutBaseURL = resolveProviderIdentity(provider("arbitrary-route"));
 const officialHost = resolveProviderIdentity(provider("direct-deepseek", "https://api.deepseek.com/v1"));
 const openrouter = resolveProviderIdentity(provider("openrouter", "https://openrouter.ai/api/v1"));
 const customRelay = resolveProviderIdentity(provider("relay-a", "https://relay.example.com/v1", "DeepSeek"));
@@ -143,7 +149,13 @@ console.log("DeepSeek pricing catalog validates ok");
 
 {
 	assert.notEqual(estimate({ identity: official, model: "deepseek-v4-pro" }), null, "official DeepSeek route is priced");
-	assert.notEqual(estimate({ identity: canonical, model: "deepseek-v4-pro" }), null, "canonical DeepSeek route id is priced");
+	assert.notEqual(estimate({ identity: canonicalOfficialHost, model: "deepseek-v4-pro" }), null, "canonical DeepSeek id on api.deepseek.com is priced");
+	assert.notEqual(estimate({ identity: officialPath, model: "deepseek-v4-pro" }), null, "official DeepSeek path on api.deepseek.com is priced");
+	assert.equal(estimate({ identity: canonicalCustomRelay, model: "deepseek-v4-pro" }), null, "canonical DeepSeek id must not override a custom relay");
+	assert.equal(estimate({ identity: officialCustomRelay, model: "deepseek-v4-pro" }), null, "deepseek-official id must not override a custom relay");
+	assert.equal(estimate({ identity: malformedCanonical, model: "deepseek-v4-pro" }), null, "canonical DeepSeek id with a malformed explicit baseURL is unpriced");
+	assert.notEqual(estimate({ identity: canonicalWithoutBaseURL, model: "deepseek-v4-pro" }), null, "canonical DeepSeek id without a baseURL remains priced");
+	assert.equal(estimate({ identity: arbitraryWithoutBaseURL, model: "deepseek-v4-pro" }), null, "arbitrary route without a baseURL is unpriced");
 	assert.notEqual(estimate({ identity: officialHost, model: "deepseek-v4-pro" }), null, "resolver-confirmed api.deepseek.com route is priced");
 	const explicitOfficialHost = resolveProviderIdentity(provider("deepseek-official", "https://api.deepseek.com"), {
 		monitors: { "deepseek-official": { adapter: "deepseek-balance" } }

@@ -26,6 +26,20 @@ function routeEvent(seq, provider, model) {
 	};
 }
 
+function pricedUsageEvent(seq, time, provider, model, inputTokens) {
+	return {
+		seq,
+		time,
+		type: "assistant/message",
+		data: {
+			turn: `priced-${seq}`,
+			step: 0,
+			usage: { inputTokens, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 },
+			message: { source: { provider, model } }
+		}
+	};
+}
+
 async function freshModule(label, home) {
 	process.env.DSH_HOME = home;
 	return import(new URL(`../lib/index.js?test=${label}-${Date.now()}-${Math.random()}`, import.meta.url));
@@ -124,27 +138,34 @@ async function testSessionContext(root) {
 	const first = makeResponse();
 	await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, first);
 	assert.equal(first.status, 200);
-	assert.deepEqual(JSON.parse(first.body).context, {
+	const firstContext = JSON.parse(first.body).context;
+	assert.deepEqual({ ...firstContext, session: void 0 }, {
 		sessionId: "live-session",
 		providerId: "route-a",
 		providerFamily: "deepseek",
 		model: "shared-model",
 		accountId: "route-a",
-		updatedAt: Date.UTC(2026, 7, 23, 12, 0, 0)
+		updatedAt: Date.UTC(2026, 7, 23, 12, 0, 0),
+		session: void 0
 	});
+	assert.equal(firstContext.session.sessionId, "live-session");
+	assert.equal(firstContext.session.tokens, 0);
 	assert.doesNotMatch(first.body, /SECRET|apiKey|baseURL/i, "session context must not expose connection or credential fields");
 	assert.deepEqual(touches.at(-1), ["route-a", "active"], "session context must signal only its resolver-owned account identity");
 
 	const selectorSwitched = makeResponse();
 	await handler({ method: "GET", url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session&provider=route-b&model=shared-model`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, selectorSwitched);
-	assert.deepEqual(JSON.parse(selectorSwitched.body).context, {
+	const switchedContext = JSON.parse(selectorSwitched.body).context;
+	assert.deepEqual({ ...switchedContext, session: void 0 }, {
 		sessionId: "live-session",
 		providerId: "route-b",
 		providerFamily: "ollama",
 		model: "shared-model",
 		accountId: "route-b",
-		updatedAt: null
+		updatedAt: null,
+		session: void 0
 	}, "an accepted selector route must override the last request/header immediately");
+	assert.deepEqual(switchedContext.session, firstContext.session, "selector hints must not rewrite historical session billing");
 	assert.deepEqual(touches.at(-1), ["route-b", "active"], "selector route changes must update central scheduler activity");
 	const invalidSelectionQueries = [
 		"provider=route-b",
@@ -188,25 +209,29 @@ async function testSessionContext(root) {
 	assert.equal(JSON.parse(ambiguous.body).error, "session-required");
 }
 
-async function testV3CacheUpgradeRefoldsCurrentRoute(root) {
-	const home = join(root, "v3-cache-upgrade");
+async function testV4CacheUpgradeRefoldsBilling(root) {
+	const home = join(root, "v4-cache-upgrade");
 	const storage = join(home, "storages");
 	await mkdir(storage, { recursive: true });
 	const sessionId = "cached-live-session";
 	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
-		version: 3,
+		version: 4,
 		sessions: {
 			[sessionId]: {
 				kind: "live",
-				consumed: 1,
+				consumed: 2,
 				days: {},
 				lastSample: null,
 				currentModel: "route-a/deepseek-chat"
 			}
 		}
 	}), "utf8");
-	const plugin = await freshModule("v3-cache-upgrade", home);
-	const session = { id: sessionId, events: [routeEvent(0, "route-a", "deepseek-chat")] };
+	const plugin = await freshModule("v4-cache-upgrade", home);
+	const eventTime = Date.UTC(2026, 7, 24, 2, 0, 0);
+	const session = { id: sessionId, events: [
+		routeEvent(0, "route-a", "deepseek-v4-pro"),
+		pricedUsageEvent(1, eventTime, "route-a", "deepseek-v4-pro", 1_000_000)
+	] };
 	const settings = {
 		get: (name) => name === "llm-pi-ai" ? {
 			providers: {
@@ -220,17 +245,56 @@ async function testV3CacheUpgradeRefoldsCurrentRoute(root) {
 		settings
 	});
 
-	assert.deepEqual(await plugin.collectSessionContext(context, sessionId), {
+	const migratedContext = await plugin.collectSessionContext(context, sessionId);
+	assert.deepEqual({ ...migratedContext, session: void 0 }, {
 		sessionId,
 		providerId: "route-a",
 		providerFamily: "deepseek",
-		model: "deepseek-chat",
+		model: "deepseek-v4-pro",
 		accountId: "route-a",
-		updatedAt: Date.UTC(2026, 7, 23, 12, 0, 0)
-	}, "a v3 cache without currentRoute must be invalidated and refolded even when no event is new");
+		updatedAt: eventTime,
+		session: void 0
+	}, "a v4 cache without billing must be invalidated and refolded even when no event is new");
+	assert.equal(migratedContext.session.costComplete, true);
+	assert.equal(migratedContext.session.currency, "USD");
+	assert.equal(migratedContext.session.tokens, 1_000_000);
 	const migrated = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
-	assert.equal(migrated.version, 4, "the rewritten cache must use schema v4");
+	assert.equal(migrated.version, 5, "the rewritten cache must use schema v5");
+	assert.equal(typeof migrated.pricingFingerprint, "string");
 	assert.equal(migrated.sessions[sessionId].currentRoute.providerId, "route-a");
+	assert.equal(migrated.sessions[sessionId].billing.sampleCount, 1);
+}
+
+async function testPricingFingerprintInvalidatesDerivedCosts(root) {
+	const home = join(root, "pricing-fingerprint");
+	const storage = join(home, "storages");
+	await mkdir(storage, { recursive: true });
+	const sessionId = "fingerprint-session";
+	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
+		version: 5,
+		pricingFingerprint: "stale-catalog",
+		sessions: {
+			[sessionId]: {
+				kind: "live",
+				consumed: 1,
+				days: {},
+				lastSample: null,
+				currentModel: "deepseek-official/deepseek-v4-pro"
+			}
+		}
+	}), "utf8");
+	const plugin = await freshModule("pricing-fingerprint", home);
+	const eventTime = Date.UTC(2026, 7, 24, 2, 0, 0);
+	const session = { id: sessionId, events: [pricedUsageEvent(0, eventTime, "deepseek-official", "deepseek-v4-pro", 1_000_000)] };
+	const usage = await plugin.collectUsage(makeContext({
+		sessions: { list: () => [session] },
+		persistence: { listSnapshots: async () => [], list: async () => [] },
+		settings: { get: () => void 0 }
+	}));
+	assert.equal(usage.sessions[0].costComplete, true, "a stale pricing fingerprint must refold event-time costs");
+	assert.equal(usage.sessions[0].tokens, 1_000_000);
+	const rewritten = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
+	assert.notEqual(rewritten.pricingFingerprint, "stale-catalog");
 }
 
 async function testConfigValidation(root) {
@@ -241,6 +305,9 @@ async function testConfigValidation(root) {
 	});
 	assert.deepEqual(validated.issues, void 0);
 	assert.deepEqual(validated.value.refresh, { enabled: false, activeMs: 120000, detailMs: 180000, backgroundMs: 240000 });
+	assert.deepEqual(validated.value.budgets, { currency: "USD", daily: null, monthly: null });
+	assert.deepEqual(plugin.Config["~standard"].validate({ budgets: { currency: "CNY", daily: 5, monthly: 100 } }).value.budgets, { currency: "CNY", daily: 5, monthly: 100 });
+	assert.match(plugin.Config["~standard"].validate({ budgets: { daily: 0 } }).issues[0].message, /budgets\.daily/);
 	assert.equal(plugin.Config["~standard"].validate({ disableBackgroundRefresh: true }).value.refresh.enabled, false);
 	assert.match(plugin.Config["~standard"].validate({ refresh: { activeMs: 1 } }).issues[0].message, /refresh\.activeMs/);
 	assert.match(plugin.Config["~standard"].validate({ monitors: { relay: { adapter: "missing" } } }).issues[0].message, /adapter is unsupported/);
@@ -256,6 +323,37 @@ async function testConfigValidation(root) {
 		/unknown provider: missing/
 	);
 	assert.equal(routes.size, 0, "invalid provider config must fail before routes are registered");
+}
+
+async function testUsageBillingWire(root) {
+	const plugin = await freshModule("usage-billing-wire", join(root, "usage-billing-wire"));
+	const routes = new Map();
+	const eventTime = Date.now();
+	const event = pricedUsageEvent(0, eventTime, "deepseek-official", "deepseek-v4-pro", 1_000_000);
+	const context = makeContext({
+		sessions: { list: () => [{ id: "billed-session", title: "Billing test", events: [event] }] },
+		persistence: { listSnapshots: async () => [], list: async () => [] },
+		routes,
+		settings: { get: () => void 0 }
+	});
+	await plugin.apply(context, { budgets: { currency: "USD", daily: 0.000001, monthly: 0.000001 } }, { disableBackgroundRefresh: true });
+	const response = makeResponse();
+	await routes.get(plugin.USAGE_PATH)({ method: "GET", url: plugin.USAGE_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, response);
+	assert.equal(response.status, 200);
+	const payload = JSON.parse(response.body);
+	assert.equal(payload.total.tokens, 1_000_000);
+	assert.equal(payload.total.inputTokens, 1_000_000);
+	assert.equal(payload.total.costComplete, true);
+	assert.equal(payload.total.currency, "USD");
+	assert.equal(payload.days[0].models[0].tokens, 1_000_000, "legacy day/model token totals must remain unchanged");
+	assert.equal(payload.days[0].models[0].costComplete, true);
+	assert.deepEqual(payload.sessions[0].providers, ["deepseek-official"]);
+	assert.deepEqual(payload.sessions[0].models, ["deepseek-official/deepseek-v4-pro"]);
+	assert.equal(payload.sessions[0].title, "Billing test");
+	assert.equal(payload.sessions[0].estimatedCost, payload.total.estimatedCost);
+	assert.equal(payload.budgets.daily.level, "critical");
+	assert.equal(payload.budgets.monthly.level, "critical");
+	assert.doesNotMatch(response.body, /apiKey|credential|SECRET/i);
 }
 
 async function testLegacyZaiSubscriptionId(root) {
@@ -380,7 +478,7 @@ async function testDisabledAccountRefresh(root) {
 	await schedulerCleanup.ready;
 	assert.equal(adaptiveCalls, 0, "disabled mode must not start the adaptive account scheduler");
 	const cache = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
-	assert.equal(cache.version, 4, "the surviving usage lifecycle must still fold and persist usage");
+	assert.equal(cache.version, 5, "the surviving usage lifecycle must still fold and persist usage");
 	await schedulerCleanup();
 }
 
@@ -470,8 +568,10 @@ const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
 	await testSessionContext(root);
-	await testV3CacheUpgradeRefoldsCurrentRoute(root);
+	await testV4CacheUpgradeRefoldsBilling(root);
+	await testPricingFingerprintInvalidatesDerivedCosts(root);
 	await testConfigValidation(root);
+	await testUsageBillingWire(root);
 	await testLegacyZaiSubscriptionId(root);
 	await testBackgroundRefresh(root);
 	await testDisabledAccountRefresh(root);

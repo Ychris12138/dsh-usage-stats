@@ -18,11 +18,11 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 | --- | --- | --- |
 | 💳 | 统一账户卡片 | API 供应商显示余额，Token Plan 显示分窗口额度；面板一次只呈现当前供应商 |
 | 📊 | Token 用量分析 | 今日、本月、累计、缓存命中率、月历热图，以及按日期/供应商/模型下钻 |
-| 🔄 | 后台监测 | 服务端启动即刷新，之后每五分钟更新全部已配置账户与本地 Token 聚合 |
+| 🔄 | 后台监测 | 账户按 active/detail/background 自适应刷新；间隔可配置或完全关闭，本地 Token 聚合保持独立运行 |
 | 🧩 | 可扩展适配器 | 支持 New API、Sub2API、通用余额模板，以及声明式 JSON Pointer 自定义查询 |
 | 🔒 | 本机安全边界 | 五个端点仅接受回环 GET；凭据只在服务端解析并发往校验后的供应商地址 |
 
-界面支持中文和英文。浏览器只请求当前选择的 provider；后台刷新与面板是否打开无关。手动刷新会更新用量、供应商列表，并强制刷新当前账户，不会批量强制请求其他供应商。
+界面支持中文和英文。浏览器只请求当前选择的 provider；账户自动刷新由服务端统一调度。手动刷新会更新用量、供应商列表，并强制刷新当前账户，不会批量强制请求其他供应商。
 
 ## 快速安装 / Quick start
 
@@ -109,6 +109,27 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 ## 凭据与供应商配置 / Configuration
 
 凭据由 Harness 从 `~/.dsh/.credentials.yaml` 解析。安装器不会读取、创建或修改该文件。不要把真实 Key、Cookie 或管理令牌提交到 Git、公开 issue，或粘贴给编码 Agent。
+
+### 账户刷新 / Account refresh
+
+默认刷新间隔是 active 1 分钟、detail 2 分钟、background 15 分钟。严格限流的 New API 或公司中转可以调整全局策略，或完全关闭账户自动刷新：
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- insert:
+    - id: usage-stats
+      name: "@ychris12138/dsh-usage-stats"
+      config:
+        refresh:
+          enabled: false
+          activeMs: 60000
+          detailMs: 120000
+          backgroundMs: 900000
+```
+
+三个间隔必须是 `60000` 至 `86400000` 毫秒之间的整数。需要停止时使用 `refresh.enabled: false`，不要填写超大的 timeout。关闭后，每个相同 provider 配置仍允许首次查询；之后普通面板读取只返回缓存，不会因缓存过期访问上游。账户端点的 `refresh=1`（Retry）仍可显式刷新，provider/monitor 配置变化后也会为新配置重新查询一次。
+
+旧配置 `disableBackgroundRefresh: true` 继续等价于 `refresh.enabled: false`；两者同时存在时，显式的 `refresh.enabled` 优先。该开关只关闭账户上游自动刷新，不会关闭本地 Token 用量聚合。
 
 ### 余额型供应商
 

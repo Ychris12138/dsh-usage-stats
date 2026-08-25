@@ -80,21 +80,59 @@ const deepseek = {
 }
 
 {
+	assert.deepEqual(validateAccountConfig().refresh, {
+		enabled: true,
+		activeMs: 60000,
+		detailMs: 120000,
+		backgroundMs: 900000
+	});
+	assert.equal(validateAccountConfig({ disableBackgroundRefresh: true }).refresh.enabled, false, "the legacy disable alias must remain effective");
+	assert.equal(validateAccountConfig({ disableBackgroundRefresh: true, refresh: { enabled: true } }).refresh.enabled, true, "explicit refresh.enabled must override the legacy alias");
+	assert.deepEqual(validateAccountConfig({ refresh: { activeMs: 120000, detailMs: 180000, backgroundMs: 240000 } }).refresh, {
+		enabled: true,
+		activeMs: 120000,
+		detailMs: 180000,
+		backgroundMs: 240000
+	});
+	for (const invalid of [
+		{ refresh: null },
+		{ refresh: { enabled: "false" } },
+		{ refresh: { activeMs: 59999 } },
+		{ refresh: { detailMs: 60000.5 } },
+		{ refresh: { backgroundMs: Infinity } },
+		{ refresh: { backgroundMs: 86400001 } },
+		{ disableBackgroundRefresh: "true" }
+	]) assert.throws(() => validateAccountConfig(invalid), /refresh|disableBackgroundRefresh/);
+	console.log("public refresh config defaults, precedence, and bounds ok");
+}
+
+{
 	const active = refreshPolicy({ activity: "active", status: "ok", rateLimitFailures: 0, lastAttemptAt: now }, now);
 	const detail = refreshPolicy({ activity: "detail", status: "ok", rateLimitFailures: 0, lastAttemptAt: now }, now);
 	const background = refreshPolicy({ activity: "background", status: "ok", rateLimitFailures: 0, lastAttemptAt: now }, now);
-	assert.ok(active.nextRefreshAt < background.nextRefreshAt, "active providers must refresh sooner than background providers");
-	assert.ok(detail.nextRefreshAt < background.nextRefreshAt, "detail providers must refresh sooner than background providers");
+	assert.equal(active.delayMs, 60000);
+	assert.equal(detail.delayMs, 120000);
+	assert.equal(background.delayMs, 900000);
 	const first429 = refreshPolicy({ activity: "active", status: "rate-limited", rateLimitFailures: 1, lastAttemptAt: now }, now);
 	const second429 = refreshPolicy({ activity: "active", status: "rate-limited", rateLimitFailures: 2, lastAttemptAt: now }, now);
+	const third429 = refreshPolicy({ activity: "active", status: "rate-limited", rateLimitFailures: 3, lastAttemptAt: now }, now);
+	const fourth429 = refreshPolicy({ activity: "active", status: "rate-limited", rateLimitFailures: 4, lastAttemptAt: now }, now);
+	const fifth429 = refreshPolicy({ activity: "active", status: "rate-limited", rateLimitFailures: 5, lastAttemptAt: now }, now);
 	const failedRetry = refreshPolicy({ activity: "active", status: "unavailable", rateLimitFailures: 2, lastAttemptAt: now }, now);
 	const bounded429 = refreshPolicy({ activity: "active", status: "rate-limited", rateLimitFailures: 99, lastAttemptAt: now }, now);
-	assert.ok(first429.nextRefreshAt > active.nextRefreshAt, "429 must override the fast activity interval");
-	assert.ok(second429.nextRefreshAt > first429.nextRefreshAt, "consecutive 429 responses must increase backoff");
+	assert.equal(first429.delayMs, 300000);
+	assert.equal(second429.delayMs, 600000);
+	assert.equal(third429.delayMs, 1200000);
+	assert.equal(fourth429.delayMs, 2400000);
+	assert.equal(fifth429.delayMs, 3600000);
 	assert.equal(failedRetry.nextRefreshAt, second429.nextRefreshAt, "a non-success retry must preserve the existing rate-limit backoff");
-	assert.ok(bounded429.nextRefreshAt - now <= 3600000, "429 backoff must remain bounded");
+	assert.equal(bounded429.delayMs, 3600000, "429 backoff must remain bounded");
+	assert.equal(refreshPolicy({ activity: "detail", rateLimitFailures: 1, lastAttemptAt: now }, now).delayMs, 300000);
+	assert.equal(refreshPolicy({ activity: "background", rateLimitFailures: 1, lastAttemptAt: now }, now).delayMs, 900000, "429 must not shorten the normal background interval");
+	assert.equal(refreshPolicy({ activity: "active", rateLimitFailures: 1, lastAttemptAt: now }, now, { activeMs: 1800000 }).delayMs, 1800000, "429 must not shorten a custom normal interval");
+	assert.equal(refreshPolicy({ activity: "active", rateLimitFailures: 0, lastAttemptAt: now }, now).delayMs, 60000, "success/reset state must restore the normal interval");
 	assert.equal(refreshPolicy({ activity: "background", status: "pending", rateLimitFailures: 0, lastAttemptAt: null }, now).nextRefreshAt, now);
-	console.log("adaptive refresh policy and bounded 429 backoff ok");
+	console.log("adaptive refresh defaults and monotonic 429 backoff ok");
 }
 
 {
@@ -1024,6 +1062,106 @@ console.log("IPv4/IPv6 private-address classification ok");
 }
 
 {
+	let calls = 0;
+	const service = createAccountService({
+		credentials: credentials({ RELAY_A_KEY: "sk-relay" }),
+		getProviders: async () => [relay],
+		config: validateAccountConfig({
+			refresh: { activeMs: 120000, detailMs: 180000, backgroundMs: 240000 },
+			monitors: { "relay-a": { adapter: "general" } }
+		}),
+		deps: {
+			includeLegacyProviders: false,
+			now: () => now,
+			fetch: async () => {
+				calls += 1;
+				return jsonResponse({ balance: 42, currency: "USD" });
+			}
+		}
+	});
+	await service.get("relay-a");
+	assert.equal(await service.nextRefreshAt(), now + 240000, "production config must override the background interval");
+	service.touch("relay-a", "detail");
+	assert.equal(await service.nextRefreshAt(), now + 180000, "production config must override the detail interval");
+	service.touch("relay-a", "active");
+	assert.equal(await service.nextRefreshAt(), now + 120000, "production config must override the active interval");
+	assert.equal(calls, 1);
+	console.log("normalized refresh intervals reach AccountService policy ok");
+}
+
+{
+	let clock = now;
+	let calls = 0;
+	let provider = { ...relay };
+	const requested = [];
+	const service = createAccountService({
+		credentials: credentials({ RELAY_A_KEY: "sk-relay" }),
+		getProviders: async () => [provider],
+		config: validateAccountConfig({
+			refresh: { enabled: false },
+			monitors: { "relay-a": { adapter: "general" } }
+		}),
+		deps: {
+			includeLegacyProviders: false,
+			now: () => clock,
+			fetch: async (url) => {
+				calls += 1;
+				requested.push(String(url));
+				return jsonResponse({ balance: calls, currency: "USD" });
+			}
+		}
+	});
+	const first = await service.get("relay-a");
+	assert.equal(first.balance.remaining, 1, "disabled mode must allow one initial fetch when no cache exists");
+	clock += 7 * 86400000;
+	const cached = await service.get("relay-a");
+	assert.equal(cached.balance.remaining, 1);
+	assert.equal(calls, 1, "disabled mode must keep returning the same-config cache regardless of age");
+	assert.deepEqual(await service.refreshDue(), [], "disabled mode must not perform non-force due refreshes");
+	assert.equal(await service.nextRefreshAt(), null, "disabled mode has no adaptive account-refresh deadline");
+	const forced = await service.get("relay-a", { force: true });
+	assert.equal(forced.balance.remaining, 2, "force=true must remain an explicit refresh escape hatch");
+	provider = { ...provider, baseURL: "https://replacement.example.com/v1" };
+	const rebound = await service.get("relay-a");
+	assert.equal(rebound.balance.remaining, 3, "a changed configKey must fetch once instead of reusing disabled-mode cache");
+	await service.get("relay-a");
+	assert.equal(calls, 3, "the replacement config must then become the stable disabled-mode cache");
+	assert.deepEqual(requested, [
+		"https://relay.example.com/user/balance",
+		"https://relay.example.com/user/balance",
+		"https://replacement.example.com/user/balance"
+	]);
+	console.log("disabled refresh first-fetch, cache, force, and config-change semantics ok");
+}
+
+{
+	let clock = now;
+	let calls = 0;
+	const service = createAccountService({
+		credentials: credentials({ RELAY_A_KEY: "sk-relay" }),
+		getProviders: async () => [relay],
+		config: validateAccountConfig({
+			refresh: { backgroundMs: 60000 },
+			monitors: { "relay-a": { adapter: "general" } }
+		}),
+		deps: {
+			includeLegacyProviders: false,
+			now: () => clock,
+			fetch: async () => {
+				calls += 1;
+				return jsonResponse({ balance: calls, currency: "USD" });
+			}
+		}
+	});
+	await service.get("relay-a");
+	clock += 60000;
+	const refreshed = await service.get("relay-a");
+	assert.equal(refreshed.balance.remaining, 2);
+	assert.equal(calls, 2, "enabled mode must preserve automatic cache-expiry refreshes");
+	console.log("enabled refresh cache expiry behavior ok");
+}
+
+{
 	let phase = "ok";
 	let clock = now;
 	const service = createAccountService({
@@ -1084,17 +1222,17 @@ console.log("IPv4/IPv6 private-address classification ok");
 	assert.equal(limited.balance.remaining, 8);
 	assert.equal(limited.lastSuccessAt, successfulAt);
 	assert.equal(limited.reason, "rate-limited");
-	assert.equal(await service.nextRefreshAt(), clock + 300000, "the first 429 must schedule bounded backoff");
+	assert.equal(await service.nextRefreshAt(), clock + 900000, "the first 429 must not shorten the normal background interval");
 	clock += 300000;
 	const limitedAgain = await service.get("relay-a", { force: true });
 	assert.equal(limitedAgain.status, "rate-limited");
-	assert.equal(await service.nextRefreshAt(), clock + 600000, "consecutive 429 responses must increase backoff per provider");
+	assert.equal(await service.nextRefreshAt(), clock + 900000, "backoff below the normal interval must retain the normal background delay");
 	phase = "transient";
 	clock += 1000;
 	const failedRetry = await service.get("relay-a", { force: true });
 	assert.equal(failedRetry.status, "unavailable");
 	assert.equal(failedRetry.stale, true);
-	assert.equal(await service.nextRefreshAt(), clock + 600000, "a failed retry must not clear rate-limit backoff before recovery");
+	assert.equal(await service.nextRefreshAt(), clock + 900000, "a failed retry must not clear rate-limit backoff before recovery");
 	phase = "auth";
 	clock += 1000;
 	const unauthorized = await service.get("relay-a", { force: true });

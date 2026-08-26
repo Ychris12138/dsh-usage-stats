@@ -18,9 +18,10 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 | --- | --- | --- |
 | 💳 | 统一账户卡片 | API 供应商显示余额，Token Plan 显示分窗口额度；面板一次只呈现当前供应商 |
 | 📊 | Token 用量分析 | 今日、本月、累计、缓存命中率、月历热图，以及按日期/供应商/模型下钻 |
+| 💰 | 估算费用与预算 | 按事件时间匹配历史价格，提供当前会话、日/月与 session 维度费用；可选日/月预算预警 |
 | 🔄 | 后台监测 | 账户按 active/detail/background 自适应刷新；间隔可配置或完全关闭，本地 Token 聚合保持独立运行 |
 | 🧩 | 可扩展适配器 | 支持 New API、Sub2API、通用余额模板，以及声明式 JSON Pointer 自定义查询 |
-| 🔒 | 本机安全边界 | 五个端点仅接受回环 GET；凭据只在服务端解析并发往校验后的供应商地址 |
+| 🔒 | 本机安全边界 | 六个端点仅接受回环 GET；凭据只在服务端解析并发往校验后的供应商地址 |
 
 界面支持中文和英文。浏览器只请求当前选择的 provider；账户自动刷新由服务端统一调度。手动刷新会更新用量、供应商列表，并强制刷新当前账户，不会批量强制请求其他供应商。
 
@@ -130,6 +131,24 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 三个间隔必须是 `60000` 至 `86400000` 毫秒之间的整数。需要停止时使用 `refresh.enabled: false`，不要填写超大的 timeout。关闭后，每个相同 provider 配置仍允许首次查询；之后普通面板读取只返回缓存，不会因缓存过期访问上游。账户端点的 `refresh=1`（Retry）仍可显式刷新，provider/monitor 配置变化后也会为新配置重新查询一次。
 
 旧配置 `disableBackgroundRefresh: true` 继续等价于 `refresh.enabled: false`；两者同时存在时，显式的 `refresh.enabled` 优先。该开关只关闭账户上游自动刷新，不会关闭本地 Token 用量聚合。
+
+### 估算费用与预算 / Estimated cost and budgets
+
+预算是可选的非敏感配置，默认关闭。金额只在 provider、model、事件时间与货币均能由内置价格规则可靠确定时计算；未知中转、订阅路线、无价格的 cache write 或混合币种会整体显示 `—`，不会展示部分费用或进行汇率换算。
+
+```yaml
+# ~/.dsh/profiles/web/cordis.patch.yml
+- insert:
+    - id: usage-stats
+      name: "@ychris12138/dsh-usage-stats"
+      config:
+        budgets:
+          currency: USD
+          daily: 5
+          monthly: 100
+```
+
+预算使用本机日历日/月边界：低于 80% 为正常，达到 80% 为 warning，达到 100% 为 critical。`daily` / `monthly` 必须是正数或 `null`；当前版本不做 FX 换算，因此预算货币与可靠价格货币不兼容时状态保持 unknown。
 
 ### 余额型供应商
 
@@ -343,14 +362,16 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 - 自定义 monitor 默认要求 HTTPS、同源相对路径、手动 redirect 和 JSON 响应，body 上限为 1 MiB。
 - 发凭据前会筛选域名的 IPv4/IPv6 解析结果并固定一个允许的连接地址，优先使用公网地址；HTTPS 域名解析到 `198.18.0.0/15` 时可作为 Clash/Mihomo 等代理的 synthetic fake-IP 使用。字面量 `198.18/15`、其他私网/特殊地址仍默认拒绝，防止 DNS rebinding 绕过私网限制。
 - `usageBaseURL` 禁止内嵌 username/password；`Authorization`、`X-API-Key`、`API-Key` 等 header 必须由 credential ref 注入。
-- 五个端点仅接受 GET，并同时校验 peer socket 与 Host；支持 IPv4、IPv4-mapped IPv6 和 `[::1]:port`。
+- 六个端点仅接受 GET，并同时校验 peer socket 与 Host；支持 IPv4、IPv4-mapped IPv6 和 `[::1]:port`。
 - 用量缓存 `~/.dsh/storages/usage-stats-cache.json` 只保存聚合 Token、会话 id、不透明 revision 与折叠游标，不保存提示词、回复或文件路径。
 
 本机反向代理会让插件看到代理自身的回环地址。请勿把端点经反向代理暴露到局域网或公网；确需代理时必须在代理层增加可靠认证与访问控制。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
 ## 正确性与数据口径 / Correctness
 
-统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-reported `usage`，不是本地估算。相同 turn/step 的后续样本会替换旧样本，并按 `provider/model` 归集。
+Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-reported `usage`，不是本地估算。相同 turn/step 的后续样本会替换旧样本，并按 `provider/model` 归集。
+
+费用是明确标注的估算派生值：每个 usage 样本使用自己的事件时间、原始 provider/model 与四类 token bucket 匹配 `lib/pricing.js`；替换样本会先减去旧费用，再加入新费用。绝不会用“当前价格 × 历史累计 Token”。Current Session Pill 使用 DSH 原生 `tokenUsage` projection 触发重读，并只在 projection 与服务端 session buckets 完全一致时显示服务端事件级估算。
 
 - 活跃会话只处理新追加事件。
 - 持久化会话使用不透明 revision；未变化时不重复读取日志。
@@ -362,11 +383,12 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 
 | Method | Path | Response |
 | --- | --- | --- |
-| `GET` | `/api/usage-stats/usage` | 按日期/provider/model 聚合的 Token 与缓存命中率 |
+| `GET` | `/api/usage-stats/usage` | 按日期/provider/model 聚合的 Token、派生费用、session 明细与日/月预算状态 |
 | `GET` | `/api/usage-stats/providers` | provider 列表、account mode、adapter、状态与预警摘要 |
 | `GET` | `/api/usage-stats/account?provider=<id>` | 当前 provider 的统一余额或 Token Plan 快照；`refresh=1` 强制刷新 |
 | `GET` | `/api/usage-stats/balance?provider=<id>` | `0.1.x` 余额兼容路由 |
 | `GET` | `/api/usage-stats/subscriptions` | `0.1.x` Token Plan 兼容路由 |
+| `GET` | `/api/usage-stats/session-context?session=<id>` | 当前 live session 的 route/model/account 与同一增量 fold 的 session 费用快照 |
 
 非 GET 返回 `405`，非回环请求返回 `403`；所有响应均为 JSON 并带 `Cache-Control: no-cache`。
 

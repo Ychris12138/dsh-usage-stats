@@ -325,7 +325,8 @@ console.log("unified single-provider account card ok, balance:", deepseekMarkup.
 // Race regression (P1): usage and account must each keep their OWN staleness
 // counter, so an account request issued right after a usage request must NOT
 // invalidate the in-flight usage response.
-const { createLoader, fmtCurrency } = exports_;
+const { budgetWindowText, createLoader, fmtCurrency } = exports_;
+if (typeof budgetWindowText !== "function") throw new Error("budget display helper missing");
 const usageLoader = createLoader();
 const accountLoader = createLoader();
 const usageId = usageLoader.start();
@@ -343,6 +344,17 @@ if (!cny.includes("36.44")) throw new Error(`unexpected CNY format: ${cny}`);
 if (fmtCurrency(void 0, "CNY") !== "—") throw new Error("missing amount must render em dash");
 if (fmtCurrency("9.9", "USD").includes("¥")) throw new Error("USD must not render as ¥");
 console.log("currency formatting ok:", cny);
+const budgetTranslate = (key, params) => {
+	if (key === "budget.period.daily") return "Today";
+	if (key === "budget.level.warning") return "Near";
+	if (key === "budget.level.unknown") return "Unknown";
+	if (key === "budget.summary") return `${params.period}: ${params.spent} / ${params.limit} · ${params.level}`;
+	return key;
+};
+const warningBudget = budgetWindowText("daily", { limit: 10, currency: "USD", estimatedSpend: 8, costComplete: true, level: "warning" }, budgetTranslate);
+if (!warningBudget.includes("8.00") || !warningBudget.includes("10.00") || !warningBudget.includes("Near")) throw new Error(`known budget state must be visible: ${warningBudget}`);
+const unknownBudget = budgetWindowText("daily", { limit: 10, currency: "USD", estimatedSpend: null, costComplete: false, level: "unknown" }, budgetTranslate);
+if (!unknownBudget.includes("—") || !unknownBudget.includes("Unknown")) throw new Error("incomplete budget cost must stay unknown");
 
 // Collapsed-badge account value + warning policy (v0.2.0 unified account model).
 const { badgeAccountValue, badgeWarnOf } = exports_;
@@ -383,15 +395,17 @@ console.log("collapsed-badge account value + warning policy ok");
 const {
 	CurrentSessionPill,
 	CurrentSessionPillView,
+	currentSessionCostLabel,
 	formatResetCountdown,
 	loadSessionPillSnapshot,
 	requestUsageStatsPanel,
 	sessionContextSignalOf,
 	sessionPillViewOf,
 	modelSelectionSignalOf,
+	tokenUsageSignalOf,
 	subscribeUsageStatsPanel
 } = exports_;
-if ([CurrentSessionPill, CurrentSessionPillView, formatResetCountdown, loadSessionPillSnapshot, requestUsageStatsPanel, sessionContextSignalOf, sessionPillViewOf, modelSelectionSignalOf, subscribeUsageStatsPanel].some((entry) => typeof entry !== "function")) {
+if ([CurrentSessionPill, CurrentSessionPillView, currentSessionCostLabel, formatResetCountdown, loadSessionPillSnapshot, requestUsageStatsPanel, sessionContextSignalOf, sessionPillViewOf, modelSelectionSignalOf, tokenUsageSignalOf, subscribeUsageStatsPanel].some((entry) => typeof entry !== "function")) {
 	throw new Error("current-session pill exports are incomplete");
 }
 const resetTranslate = (key, params) => {
@@ -445,7 +459,7 @@ const unlimitedPill = sessionPillViewOf({
 	context: pillContext,
 	account: { ...balancePillSnapshot.account, balance: { remaining: null, currency: "USD", unlimited: true } }
 }, pillTranslate);
-if (unlimitedPill.value !== "∞") throw new Error("unlimited balance pill must render infinity");
+if (unlimitedPill.value !== "∞ · —") throw new Error("unlimited balance pill must render infinity plus unknown session cost");
 
 const subscriptionPill = sessionPillViewOf({
 	context: { ...pillContext, providerId: "opencode-go", accountId: "opencode-go" },
@@ -487,6 +501,37 @@ if (subscriptionPillWithReset.value !== subscriptionPill.value) throw new Error(
 const warningPill = sessionPillViewOf({ ...balancePillSnapshot, account: { ...balancePillSnapshot.account, alert: { level: "warning" } } }, pillTranslate);
 if (warningPill.tone !== "warning") throw new Error("warning alert tone must be preserved");
 
+const nativeTokenUsage = { uncachedInputTokens: 1_000_000, outputTokens: 100_000, cacheReadTokens: 250_000, cacheWriteTokens: 0 };
+const billedSession = {
+	sessionId: "session/one",
+	inputTokens: 1_000_000,
+	outputTokens: 100_000,
+	cacheReadTokens: 250_000,
+	cacheWriteTokens: 0,
+	tokens: 1_350_000,
+	estimatedCost: 0.37,
+	currency: "USD",
+	costComplete: true
+};
+const billedPill = sessionPillViewOf({
+	...balancePillSnapshot,
+	context: { ...pillContext, session: billedSession },
+	tokenUsage: nativeTokenUsage
+}, pillTranslate);
+if (!billedPill.value.includes("≈") || !billedPill.value.includes("0.37") || billedPill.tone !== "normal") {
+	throw new Error(`matching native projection must expose the server event-time estimate without changing account tone: ${JSON.stringify(billedPill)}`);
+}
+if (currentSessionCostLabel(billedSession, { ...nativeTokenUsage, outputTokens: 100_001 }) !== "—") {
+	throw new Error("projection/server bucket mismatch must fail closed");
+}
+if (currentSessionCostLabel({ ...billedSession, estimatedCost: null, currency: null, costComplete: false }, nativeTokenUsage) !== "—") {
+	throw new Error("incomplete server billing must render an em dash");
+}
+if (tokenUsageSignalOf({ uncachedInputTokens: 1, outputTokens: 23, cacheReadTokens: 4, cacheWriteTokens: 5 })
+	=== tokenUsageSignalOf({ uncachedInputTokens: 12, outputTokens: 3, cacheReadTokens: 4, cacheWriteTokens: 5 })) {
+	throw new Error("tokenUsage refresh signatures must not collide");
+}
+
 const statusKeys = new Map([
 	["not-configured", "subscription.status.notConfigured"],
 	["unauthorized", "subscription.status.unauthorized"],
@@ -502,10 +547,10 @@ for (const [status, expected] of statusKeys) {
 		context: pillContext,
 		account: { ...balancePillSnapshot.account, status, alert: { level: "critical" } }
 	}, pillTranslate);
-	if (view.value !== expected || view.tone !== "neutral") throw new Error(`${status} pill must be a neutral status, got ${JSON.stringify(view)}`);
+	if (view.value !== `${expected} · —` || view.tone !== "neutral") throw new Error(`${status} pill must be a neutral status, got ${JSON.stringify(view)}`);
 }
 const unknownProviderPill = sessionPillViewOf({ context: { ...pillContext, providerId: "relay-a", accountId: "relay-a" }, account: null, status: "unsupported" }, pillTranslate);
-if (unknownProviderPill.providerLabel !== "relay-a" || unknownProviderPill.value !== "sessionPill.status.unsupported" || unknownProviderPill.tone !== "neutral") {
+if (unknownProviderPill.providerLabel !== "relay-a" || unknownProviderPill.value !== "sessionPill.status.unsupported · —" || unknownProviderPill.tone !== "neutral") {
 	throw new Error("unknown/no-adapter provider must remain a neutral server identity");
 }
 
@@ -593,11 +638,27 @@ let lifecycleProvider = "deepseek-official";
 let resolveSwitchedContext;
 let holdSwitchedContext = false;
 const lifecycleRequests = [];
+const projectionSubscribers = new Set();
+let lifecycleProjection = nativeTokenUsage;
+const useLifecycleProjection = () => react.useSyncExternalStore(
+	(notify) => { projectionSubscribers.add(notify); return () => projectionSubscribers.delete(notify); },
+	() => lifecycleProjection,
+	() => lifecycleProjection
+);
+const lifecycleSession = () => ({
+	...billedSession,
+	inputTokens: lifecycleProjection.uncachedInputTokens,
+	outputTokens: lifecycleProjection.outputTokens,
+	cacheReadTokens: lifecycleProjection.cacheReadTokens,
+	cacheWriteTokens: lifecycleProjection.cacheWriteTokens,
+	tokens: lifecycleProjection.uncachedInputTokens + lifecycleProjection.outputTokens + lifecycleProjection.cacheReadTokens + lifecycleProjection.cacheWriteTokens,
+	estimatedCost: lifecycleProjection.uncachedInputTokens / 1_000_000 * 0.37
+});
 const lifecycleRequest = async (path) => {
 	lifecycleRequests.push(path);
 	if (path.startsWith("/api/usage-stats/session-context")) {
 		if (holdSwitchedContext) return new Promise((resolve) => { resolveSwitchedContext = resolve; });
-		return { ok: true, context: { ...pillContext, providerId: lifecycleProvider, accountId: lifecycleProvider } };
+		return { ok: true, context: { ...pillContext, providerId: lifecycleProvider, accountId: lifecycleProvider, session: lifecycleSession() } };
 	}
 	return {
 		ok: true,
@@ -612,6 +673,7 @@ await act(async () => {
 		sessionId: "session-one",
 		session: baseSession,
 		modelDirectory,
+		useProjection: useLifecycleProjection,
 		request: lifecycleRequest,
 		t: (key) => key
 	}));
@@ -620,6 +682,19 @@ await act(async () => {
 });
 if (pillRenderer.root.findAllByProps({ "data-current-session-pill": true }).length !== 1) throw new Error("successful mount must create exactly one pill");
 if (pillRenderer.root.findByType("button").props["data-provider"] !== "deepseek-official") throw new Error("initial lifecycle provider missing");
+if (!JSON.stringify(pillRenderer.toJSON()).includes("0.37")) throw new Error("initial native projection must expose matching estimated cost");
+
+const beforeProjectionRefresh = lifecycleRequests.filter((path) => path.startsWith("/api/usage-stats/session-context")).length;
+await act(async () => {
+	lifecycleProjection = { ...nativeTokenUsage, uncachedInputTokens: 2_000_000 };
+	for (const subscriber of projectionSubscribers) subscriber();
+	await Promise.resolve();
+	await Promise.resolve();
+});
+if (lifecycleRequests.filter((path) => path.startsWith("/api/usage-stats/session-context")).length !== beforeProjectionRefresh + 1) {
+	throw new Error("native tokenUsage projection changes must trigger exactly one billing snapshot reload");
+}
+if (!JSON.stringify(pillRenderer.toJSON()).includes("0.74")) throw new Error("projection-driven reload must update the estimated cost");
 
 lifecycleProvider = "opencode-go";
 holdSwitchedContext = true;
@@ -631,7 +706,7 @@ await act(async () => {
 if (pillRenderer.toJSON() !== null) throw new Error("provider switch must not leave the previous session/account pill clickable while loading");
 holdSwitchedContext = false;
 await act(async () => {
-	resolveSwitchedContext({ ok: true, context: { ...pillContext, providerId: "opencode-go", accountId: "opencode-go" } });
+	resolveSwitchedContext({ ok: true, context: { ...pillContext, providerId: "opencode-go", accountId: "opencode-go", session: lifecycleSession() } });
 	await Promise.resolve();
 	await Promise.resolve();
 });
@@ -675,7 +750,15 @@ globalThis.fetch = async (path) => {
 				]
 			};
 			if (String(path).includes("/account")) return { ok: true, account: { id: "opencode-go", displayName: "OpenCode Go", mode: "subscription", status: "ok", windows: [{ kind: "weekly", remainingPercent: 18 }], alert: { level: "warning" } } };
-			return { ok: true, days: [], total: { tokens: 0 } };
+			return {
+				ok: true,
+				days: [],
+				total: { tokens: 0 },
+				budgets: {
+					daily: { limit: 10, currency: "USD", estimatedSpend: 8, costComplete: true, level: "warning" },
+					monthly: { limit: null, currency: "USD", estimatedSpend: 8, costComplete: true, level: "disabled" }
+				}
+			};
 		}
 	};
 };
@@ -699,6 +782,10 @@ if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).
 const selectedPicker = integrationRenderer.root.findByType("select");
 if (selectedPicker.props.value !== "opencode-go") throw new Error(`pill click must select its provider in the existing panel, got ${selectedPicker.props.value}`);
 if (!integrationRequests.some((path) => path.includes("/account?provider=opencode-go&activity=detail"))) throw new Error("the open detail panel must signal its provider to the central scheduler");
+if (integrationRenderer.root.findAllByProps({ "data-budget-period": "daily" }).length !== 1
+	|| integrationRenderer.root.findByProps({ "data-budget-period": "daily" }).props["data-budget-level"] !== "warning") {
+	throw new Error("configured budget state must integrate into the existing usage panel");
+}
 await act(async () => { integrationRenderer.unmount(); });
 globalThis.fetch = originalFetch;
 

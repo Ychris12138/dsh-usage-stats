@@ -1,5 +1,7 @@
 # dsh-usage-stats
 
+<!-- stable-version: 0.2.10 -->
+
 [![GitHub Release](https://img.shields.io/github/v/release/Ychris12138/dsh-usage-stats?display_name=tag&sort=semver&color=1f6feb)](https://github.com/Ychris12138/dsh-usage-stats/releases/latest)
 [![CI](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml)
 [![License](https://img.shields.io/badge/license-MIT-2da44e)](LICENSE)
@@ -8,7 +10,7 @@
 
 Provider balances, subscription quotas, and token-usage analytics for the DeepSeek Harness Web GUI (`dsh web`).
 
-![dsh-usage-stats v0.2.0 interface preview](docs/images/usage-panel.svg)
+![dsh-usage-stats interface preview](docs/images/usage-panel.svg)
 
 > 展示图使用脱敏演示数据；插件不会把 API Key、Cookie、管理 PAT 或上游原始响应发送到浏览器。
 
@@ -21,7 +23,8 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 | 💰 | 估算费用与预算 | 按事件时间匹配历史价格，提供当前会话、日/月与 session 维度费用；可选日/月预算预警 |
 | 🔄 | 后台监测 | 账户按 active/detail/background 自适应刷新；间隔可配置或完全关闭，本地 Token 聚合保持独立运行 |
 | 🧩 | 可扩展适配器 | 支持 New API、Sub2API、通用余额模板，以及声明式 JSON Pointer 自定义查询 |
-| 🔒 | 本机安全边界 | 六个端点仅接受回环 GET；凭据只在服务端解析并发往校验后的供应商地址 |
+| 📦 | 安全导出 | 提供 daily/session CSV 与版本化 JSON；Unicode、CSV 公式前缀和不完整费用均安全处理 |
+| 🔒 | 本机安全边界 | 九个端点仅接受回环 GET；凭据只在服务端解析并发往校验后的供应商地址 |
 
 界面支持中文和英文。浏览器只请求当前选择的 provider；账户自动刷新由服务端统一调度。手动刷新会更新用量、供应商列表，并强制刷新当前账户，不会批量强制请求其他供应商。
 
@@ -29,9 +32,13 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 
 需要 DeepSeek Harness `web` profile（`@deepseek-ai/dsh >= 0.1.0-rc.6`）。
 
+稳定版优先安装 npm 上的精确版本；这也是 DSH Desktop Market 使用的同一个包：
+
 ```bash
-dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"
+dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.2.10"
 ```
+
+只有测试尚未发布的 source/RC 时才使用 `dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"`。GitHub `main` 可能领先 npm stable，不应把 source 安装当作市场安装验收。
 
 然后重启已经运行的 `dsh web`，并在浏览器中硬刷新。侧边栏底部会出现“用量/余额”（Usage/Balance）入口。
 
@@ -42,14 +49,14 @@ dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"
 - `catalog/catalog-source.json` — 来源 manifest（`catalog-source.schema.json` v1.0.0）
 - `catalog/v1/plugins.json` — 标准 provider page（`catalog-provider-page.schema.json` v1.0.0）
 
-**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`（当前可用）。要启用 GUI「安装」按钮，需先发布：
+**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`。当前 stable/catalog 版本是 `0.2.10`；每个新版本都按以下顺序发布：
 
-1. 仓库包身份已统一为 `@ychris12138/dsh-usage-stats`；每次发版需同步 `package.json` / `package-lock.json` / `catalog/v1/plugins.json` 的版本。
+1. 运行 `npm run release:sync -- <version>` 同步 `package.json` / `package-lock.json` / `catalog/v1/plugins.json`，再由 `npm run check:release` 阻止身份或版本漂移。
 2. 发布 scoped 公共包：`npm publish --access public`。
 3. 把 `catalog/v1/plugins.json` 内容发布到 `https://ychris12138.github.io/dsh-usage-stats/v1/plugins`（GitHub Pages，manifest 与 endpoint 必须同源、HTTPS 443、无凭据）。
 4. 在 DSH 插件市场 → 来源管理 → 添加来源，粘贴 manifest URL：`https://ychris12138.github.io/dsh-usage-stats/catalog-source.json`，选择后即可走「可恢复安装边界」GUI 安装。
 
-> 若最终包名不同，请同步修改 `catalog-source.json` 的 `providerId`/`transport.endpoint` 与 `catalog/v1/plugins.json` 的身份字段。发布前目录条目可浏览但安装保持禁用（fail-closed，属预期）。
+> 目录若先指向尚未发布的版本，市场安装会 fail-closed，这是预期行为。只有 npm、Pages catalog 与 Desktop Market 实际安装全部验证后，才算完成发布。
 
 升级或卸载：
 
@@ -149,6 +156,21 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 ```
 
 预算使用本机日历日/月边界：低于 80% 为正常，达到 80% 为 warning，达到 100% 为 critical。`daily` / `monthly` 必须是正数或 `null`；当前版本不做 FX 换算，因此预算货币与可靠价格货币不兼容时状态保持 unknown。
+
+### 界面设置 / Display settings
+
+Current Session Pill 默认开启。只隐藏 composer 附近的 Pill、保留侧边栏账户面板时：
+
+```yaml
+- insert:
+    - id: usage-stats
+      name: "@ychris12138/dsh-usage-stats"
+      config:
+        display:
+          currentSessionPill: false
+```
+
+面板的当前 provider 会保存在浏览器的命名空间 localStorage 中；刷新页面或重启 DSH 后恢复。若该 provider 已被删除，插件会清除旧值并使用原有的 DeepSeek/已配置 provider fallback。该选择不会写入 DSH 设置、服务端缓存或新 API。
 
 ### 余额型供应商
 
@@ -304,6 +326,16 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
 3. 使用 `‹` / `›` 切换月份，点击热图日期查看当天的 provider/model 明细。
 4. 标题栏刷新会更新 Token、provider 列表，并强制刷新当前账户。
 
+### 安全导出 / Secret-free export
+
+三个下载端点只导出聚合后的白名单字段，不包含 credential ref/value、Authorization、Cookie、上游原始响应、prompt/reply 或文件路径：
+
+- `/api/usage-stats/export/daily.csv`：每天 × provider/model 的四类 Token 与完整费用估算。
+- `/api/usage-stats/export/sessions.csv`：session 标题、provider/model 集合、Token、完整费用估算和最后活动时间。
+- `/api/usage-stats/export.json`：带 `schemaVersion` 的完整聚合数据、公开 pricing provenance、预算和安全账户状态。
+
+CSV 使用 UTF-8、RFC 4180 引号与 spreadsheet formula 防护；Unicode 标题可直接打开。费用只在 `costComplete=true` 时导出，未知/混合币种保持空白或 `null`，不会输出部分金额。
+
 “最近 14 天”按本地日历计算，只显示窗口内存在用量的日期；未来时间戳不会计入。同一模型来自不同 provider 时会分别统计，例如 `deepseek-official · deepseek-chat` 与 `ark · deepseek-chat`。
 
 ## Agent 友好安装 / Agent-friendly installation
@@ -323,12 +355,13 @@ Constraints:
 
 Procedure:
 1. Confirm node, npx, and dsh are available.
-2. Prefer `dsh plugin --profile web update "@ychris12138/dsh-usage-stats"` when already installed; otherwise use `dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"`.
-3. If unavailable, use: npx --yes github:Ychris12138/dsh-usage-stats
-4. Do not combine bundle installation with an existing manual dsh-usage-stats Cordis entry.
-5. For npx, require a verified package and exactly one Cordis entry, then run again with --check.
-6. Report the installation path and resolved profile paths.
-7. If dsh web is running, report that a restart is needed and stop.
+2. Prefer the exact npm stable used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.2.10"` (or update the existing scoped package).
+3. Use `github:Ychris12138/dsh-usage-stats` only when I explicitly ask to test unreleased source/RC code.
+4. If dsh plugin is unavailable, use the compatible source installer only with my approval: `npx --yes github:Ychris12138/dsh-usage-stats`.
+5. Do not combine bundle installation with an existing manual dsh-usage-stats Cordis entry.
+6. For npx, require a verified package and exactly one Cordis entry, then run again with --check.
+7. Report the exact package identity/version, installation path, and resolved profile paths.
+8. If dsh web is running, report that a restart is needed and stop.
 
 Optional account setup (never handle secret values yourself):
 - OpenRouter account balance requires OPENROUTER_MANAGEMENT_KEY, not the inference key.
@@ -362,7 +395,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 - 自定义 monitor 默认要求 HTTPS、同源相对路径、手动 redirect 和 JSON 响应，body 上限为 1 MiB。
 - 发凭据前会筛选域名的 IPv4/IPv6 解析结果并固定一个允许的连接地址，优先使用公网地址；HTTPS 域名解析到 `198.18.0.0/15` 时可作为 Clash/Mihomo 等代理的 synthetic fake-IP 使用。字面量 `198.18/15`、其他私网/特殊地址仍默认拒绝，防止 DNS rebinding 绕过私网限制。
 - `usageBaseURL` 禁止内嵌 username/password；`Authorization`、`X-API-Key`、`API-Key` 等 header 必须由 credential ref 注入。
-- 六个端点仅接受 GET，并同时校验 peer socket 与 Host；支持 IPv4、IPv4-mapped IPv6 和 `[::1]:port`。
+- 九个端点仅接受 GET，并同时校验 peer socket 与 Host；支持 IPv4、IPv4-mapped IPv6 和 `[::1]:port`。
 - 用量缓存 `~/.dsh/storages/usage-stats-cache.json` 只保存聚合 Token、会话 id、不透明 revision 与折叠游标，不保存提示词、回复或文件路径。
 
 本机反向代理会让插件看到代理自身的回环地址。请勿把端点经反向代理暴露到局域网或公网；确需代理时必须在代理层增加可靠认证与访问控制。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
@@ -389,8 +422,11 @@ Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-rep
 | `GET` | `/api/usage-stats/balance?provider=<id>` | `0.1.x` 余额兼容路由 |
 | `GET` | `/api/usage-stats/subscriptions` | `0.1.x` Token Plan 兼容路由 |
 | `GET` | `/api/usage-stats/session-context?session=<id>` | 当前 live session 的 route/model/account 与同一增量 fold 的 session 费用快照 |
+| `GET` | `/api/usage-stats/export/daily.csv` | secret-free daily provider/model CSV |
+| `GET` | `/api/usage-stats/export/sessions.csv` | secret-free session CSV |
+| `GET` | `/api/usage-stats/export.json` | versioned usage、budget、pricing provenance 与 account-safe JSON |
 
-非 GET 返回 `405`，非回环请求返回 `403`；所有响应均为 JSON 并带 `Cache-Control: no-cache`。
+非 GET 返回 `405`，非回环请求返回 `403`。API JSON 使用 `Cache-Control: no-cache`；下载响应使用 `Cache-Control: no-store` 与固定文件名。
 
 ## 开发与验证 / Development
 
@@ -398,7 +434,7 @@ Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-rep
 npm install
 npm run check
 npm test
-npm pack --dry-run
+npm pack --json
 ```
 
 `npm test` 完全离线，覆盖 bundle、客户端渲染与请求竞态、服务端安全边界、余额/Token Plan adapter、缓存和安装器幂等性。真实数据验证需先运行 `dsh web`：
@@ -412,7 +448,7 @@ node scripts/check-balance.mjs
 
 ## 兼容性与致谢 / Compatibility & credits
 
-当前版本为 `0.2.0`。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
+当前 npm stable 为 `0.2.10`；`v0.3.0` release candidate 的完整门禁见 [`docs/release-checklist.md`](docs/release-checklist.md)，变更摘要见 [`docs/release-notes-v0.3.0.md`](docs/release-notes-v0.3.0.md)。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
 
 - [Javis603/token-monitor](https://github.com/Javis603/token-monitor)：参考多 provider 配额归一化与 Z.ai 限额解析。
 - [xiaoqi20/dsh-opencode-go-usage](https://github.com/xiaoqi20/dsh-opencode-go-usage)：参考 DSH 凭据接入、OpenCode `auth.json` 回退与 Bearer usage endpoint。

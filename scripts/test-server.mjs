@@ -49,8 +49,9 @@ async function freshModule(label, home) {
 function makeResponse() {
 	return {
 		status: null,
+		headers: {},
 		body: "",
-		writeHead(status) { this.status = status; },
+		writeHead(status, headers = {}) { this.status = status; this.headers = headers; },
 		end(body = "") { this.body = body; }
 	};
 }
@@ -168,6 +169,21 @@ async function testSessionContext(root) {
 	}, "an accepted selector route must override the last request/header immediately");
 	assert.deepEqual(switchedContext.session, firstContext.session, "selector hints must not rewrite historical session billing");
 	assert.deepEqual(touches.at(-1), ["route-b", "active"], "selector route changes must update central scheduler activity");
+	const hiddenRoutes = new Map();
+	const touchCountBeforeHidden = touches.length;
+	await plugin.apply(makeContext({ sessions, persistence, routes: hiddenRoutes, settings }), {
+		display: { currentSessionPill: false }
+	}, { disableBackgroundRefresh: true, accounts });
+	const hidden = makeResponse();
+	await hiddenRoutes.get(plugin.SESSION_CONTEXT_PATH)({
+		method: "GET",
+		url: `${plugin.SESSION_CONTEXT_PATH}?session=live-session`,
+		headers: { host: "localhost:3080" },
+		socket: { remoteAddress: "127.0.0.1" }
+	}, hidden);
+	assert.equal(hidden.status, 200);
+	assert.deepEqual(JSON.parse(hidden.body), { ok: true, context: null, display: { currentSessionPill: false } });
+	assert.equal(touches.length, touchCountBeforeHidden, "a hidden Pill must not touch the account scheduler");
 	const invalidSelectionQueries = [
 		"provider=route-b",
 		"provider=route-b&model=",
@@ -363,7 +379,17 @@ async function testConfigValidation(root) {
 	assert.deepEqual(validated.issues, void 0);
 	assert.deepEqual(validated.value.refresh, { enabled: false, activeMs: 120000, detailMs: 180000, backgroundMs: 240000 });
 	assert.deepEqual(validated.value.budgets, { currency: "USD", daily: null, monthly: null });
+	assert.deepEqual(validated.value.display, { currentSessionPill: true });
+	assert.deepEqual(validated.value.monitors, {}, "release hardening must not insert account monitors into normalized user config");
+	const legacyMonitor = plugin.Config["~standard"].validate({ monitors: {
+		relay: { adapter: "general", usageBaseURL: "https://relay.example.com", credentialRef: "RELAY_KEY" }
+	} }).value.monitors.relay;
+	assert.equal(legacyMonitor.adapter, "general");
+	assert.equal(legacyMonitor.credentialRef, "RELAY_KEY", "existing v0.2.10 monitor references must remain compatible");
+	assert.deepEqual(plugin.Config["~standard"].validate({ display: { currentSessionPill: false } }).value.display, { currentSessionPill: false });
 	assert.deepEqual(plugin.Config["~standard"].validate({ budgets: { currency: "CNY", daily: 5, monthly: 100 } }).value.budgets, { currency: "CNY", daily: 5, monthly: 100 });
+	assert.match(plugin.Config["~standard"].validate({ display: { currentSessionPill: "no" } }).issues[0].message, /display\.currentSessionPill/);
+	assert.match(plugin.Config["~standard"].validate({ display: [] }).issues[0].message, /display must be an object/);
 	assert.match(plugin.Config["~standard"].validate({ budgets: { daily: 0 } }).issues[0].message, /budgets\.daily/);
 	assert.equal(plugin.Config["~standard"].validate({ disableBackgroundRefresh: true }).value.refresh.enabled, false);
 	assert.match(plugin.Config["~standard"].validate({ refresh: { activeMs: 1 } }).issues[0].message, /refresh\.activeMs/);
@@ -376,10 +402,107 @@ async function testConfigValidation(root) {
 		settings: { get: () => void 0 }
 	});
 	await assert.rejects(
+		() => plugin.apply(context, { display: [] }, { disableBackgroundRefresh: true }),
+		/display must be an object/
+	);
+	assert.equal(routes.size, 0, "malformed display settings must fail before routes are registered");
+	await assert.rejects(
 		() => plugin.apply(context, { monitors: { missing: { adapter: "general" } } }, { disableBackgroundRefresh: true }),
 		/unknown provider: missing/
 	);
 	assert.equal(routes.size, 0, "invalid provider config must fail before routes are registered");
+}
+
+async function testExportRoutes(root) {
+	const plugin = await freshModule("export-routes", join(root, "export-routes"));
+	const routes = new Map();
+	const secret = "SECRET_EXPORT_CREDENTIAL";
+	const eventTime = Date.UTC(2026, 7, 26, 12, 0, 0);
+	const context = makeContext({
+		sessions: { list: () => [{
+			id: "export-session",
+			title: "=1+1 中文,\"quoted\"",
+			events: [pricedUsageEvent(0, eventTime, "deepseek-official", "deepseek-v4-pro", 1_000_000)]
+		}] },
+		persistence: { listSnapshots: async () => [], list: async () => [] },
+		routes,
+		settings: {
+			get: (name) => name === "llm-deepseek" ? {
+				apiKeyEnv: secret,
+				baseURL: `https://api.deepseek.com/v1?token=${secret}`
+			} : void 0
+		}
+	});
+	await plugin.apply(context, {}, { disableBackgroundRefresh: true });
+	assert.equal(routes.size, 9, "v0.3 release candidate must register six API views plus three exports");
+
+	const request = (path) => ({ method: "GET", url: path, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } });
+	const daily = makeResponse();
+	await routes.get(plugin.DAILY_EXPORT_PATH)(request(plugin.DAILY_EXPORT_PATH), daily);
+	assert.equal(daily.status, 200);
+	assert.equal(daily.headers["content-type"], "text/csv; charset=utf-8");
+	assert.equal(daily.headers["content-disposition"], 'attachment; filename="dsh-usage-daily.csv"');
+	assert.match(daily.body, /^\uFEFF"date","provider","model"/);
+	assert.doesNotMatch(daily.body, new RegExp(secret));
+
+	const sessions = makeResponse();
+	await routes.get(plugin.SESSIONS_EXPORT_PATH)(request(plugin.SESSIONS_EXPORT_PATH), sessions);
+	assert.equal(sessions.status, 200);
+	assert.match(sessions.body, /"'=1\+1 中文,""quoted"""/);
+	assert.doesNotMatch(sessions.body, new RegExp(secret));
+
+	const full = makeResponse();
+	await routes.get(plugin.JSON_EXPORT_PATH)(request(plugin.JSON_EXPORT_PATH), full);
+	assert.equal(full.status, 200);
+	assert.equal(full.headers["content-type"], "application/json; charset=utf-8");
+	const exported = JSON.parse(full.body);
+	assert.equal(exported.schemaVersion, "1.0.0");
+	assert.equal(exported.usage.sessions[0].title, "=1+1 中文,\"quoted\"");
+	assert.ok(Array.isArray(exported.accounts));
+	assert.doesNotMatch(full.body, new RegExp(secret));
+	assert.doesNotMatch(full.body, /apiKey|credential|authorization/i);
+
+	const foreign = makeResponse();
+	await routes.get(plugin.JSON_EXPORT_PATH)({ ...request(plugin.JSON_EXPORT_PATH), socket: { remoteAddress: "198.51.100.4" } }, foreign);
+	assert.equal(foreign.status, 403, "exports must preserve the loopback peer fence");
+	const post = makeResponse();
+	await routes.get(plugin.DAILY_EXPORT_PATH)({ ...request(plugin.DAILY_EXPORT_PATH), method: "POST" }, post);
+	assert.equal(post.status, 405, "exports must remain GET-only");
+
+	const failingRoutes = new Map();
+	const failingAccounts = {
+		validate: async () => {},
+		providerViews: async () => { throw new Error(`Authorization: Bearer ${secret}`); }
+	};
+	await plugin.apply(makeContext({
+		sessions: { list: () => [] },
+		persistence: { listSnapshots: async () => [], list: async () => [] },
+		routes: failingRoutes,
+		settings: { get: () => void 0 }
+	}), {}, { accounts: failingAccounts, disableBackgroundRefresh: true });
+	const failed = makeResponse();
+	await failingRoutes.get(plugin.JSON_EXPORT_PATH)(request(plugin.JSON_EXPORT_PATH), failed);
+	assert.equal(failed.status, 500);
+	assert.deepEqual(JSON.parse(failed.body), { ok: false, error: "internal", message: "export failed" });
+	assert.doesNotMatch(failed.body, new RegExp(secret), "export error responses must not reflect upstream diagnostics");
+}
+
+async function testMalformedCacheRebuild(root) {
+	const home = join(root, "malformed-cache");
+	const storage = join(home, "storages");
+	await mkdir(storage, { recursive: true });
+	await writeFile(join(storage, "usage-stats-cache.json"), "{malformed v0.2.10 cache", "utf8");
+	const plugin = await freshModule("malformed-cache", home);
+	const context = makeContext({
+		sessions: { list: () => [{ id: "recovered", events: [usageEvent(1, 17)] }] },
+		persistence: { listSnapshots: async () => [], list: async () => [] },
+		settings: { get: () => void 0 }
+	});
+	const usage = await plugin.collectUsage(context);
+	assert.equal(usage.total.tokens, 17, "a malformed cache must rebuild from authoritative session events");
+	const rebuilt = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
+	assert.equal(rebuilt.version, 5);
+	assert.equal(rebuilt.sessions.recovered.consumed, 1);
 }
 
 async function testUsageBillingWire(root) {
@@ -630,6 +753,8 @@ try {
 	await testRuntimeProviderPricingIdentityChange(root);
 	await testConfigValidation(root);
 	await testUsageBillingWire(root);
+	await testExportRoutes(root);
+	await testMalformedCacheRebuild(root);
 	await testLegacyZaiSubscriptionId(root);
 	await testBackgroundRefresh(root);
 	await testDisabledAccountRefresh(root);

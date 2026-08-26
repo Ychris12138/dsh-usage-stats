@@ -37,7 +37,8 @@ globalThis.document = { querySelector: () => null, createElement: () => ({ datas
 const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "lib", "client.js"), "utf8");
 if (!source.includes("/api/usage-stats/account")) throw new Error("client must use the unified account endpoint");
 if (source.includes('fetchJson("/api/usage-stats/subscriptions")')) throw new Error("client must not bulk-fetch every subscription provider");
-if (!source.includes('host.style.flexDirection = "column"')) throw new Error("client must stack the host footer-actions container vertically (#21)");
+if (/host\.style\.flexDirection\s*=\s*["']column["']/.test(source)) throw new Error("client must not change the shared footer host flex direction (#82)");
+if (!/host\.style\.flexWrap\s*=\s*["']wrap["']/.test(source)) throw new Error("client must wrap row-oriented footer actions (#21/#82)");
 if (!source.includes('document.addEventListener("pointerdown"')) throw new Error("open panel must listen for outside pointerdown");
 if (!source.includes('event.key === "Escape"')) throw new Error("open panel must dismiss on Escape");
 if (!source.includes("ref: panelRef")) throw new Error("portaled panel must expose a ref for outside-click detection");
@@ -70,6 +71,41 @@ const exports_ = captured.factory((spec) => {
 });
 
 if (typeof exports_.apply !== "function") throw new Error("missing apply export");
+
+const { enableFooterActionWrapping } = exports_;
+if (typeof enableFooterActionWrapping !== "function") throw new Error("footer action wrapping policy must be testable");
+const originalGetComputedStyle = window.getComputedStyle;
+window.getComputedStyle = (node) => node.computedStyle;
+const fullWidthSibling = () => ({ style: { flex: "0 0 100%" } });
+const rowHost = {
+	style: { flexDirection: "", flexWrap: "" },
+	computedStyle: { display: "flex", flexDirection: "row", flexWrap: "nowrap" },
+	children: [fullWidthSibling(), fullWidthSibling()]
+};
+const restoreRowHost = enableFooterActionWrapping(rowHost);
+assert.equal(rowHost.style.flexWrap, "wrap", "row + nowrap must wrap full-width footer actions onto separate lines");
+assert.equal(rowHost.style.flexDirection, "", "the shared host row direction must remain untouched");
+assert.deepEqual(rowHost.children.map((node) => node.style.flex), ["0 0 100%", "0 0 100%"], "sibling full-width flex semantics must remain untouched");
+assert.equal(typeof restoreRowHost, "function");
+restoreRowHost();
+assert.equal(rowHost.style.flexWrap, "", "unmount cleanup must restore the previous inline flexWrap");
+
+const wrappedHost = {
+	style: { flexDirection: "", flexWrap: "wrap" },
+	computedStyle: { display: "flex", flexDirection: "row", flexWrap: "wrap" }
+};
+assert.equal(enableFooterActionWrapping(wrappedHost), undefined, "an already wrapped host must not be modified");
+assert.equal(wrappedHost.style.flexWrap, "wrap");
+
+const columnHost = {
+	style: { flexDirection: "column", flexWrap: "nowrap" },
+	computedStyle: { display: "flex", flexDirection: "column", flexWrap: "nowrap" }
+};
+assert.equal(enableFooterActionWrapping(columnHost), undefined, "a column host must be left untouched");
+assert.equal(columnHost.style.flexDirection, "column");
+assert.equal(columnHost.style.flexWrap, "nowrap");
+window.getComputedStyle = originalGetComputedStyle;
+console.log("shared footer action row/wrap policy ok");
 
 const {
 	SELECTED_PROVIDER_STORAGE_KEY,

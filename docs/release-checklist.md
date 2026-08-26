@@ -2,12 +2,10 @@
 
 This is the release gate for `@ychris12138/dsh-usage-stats`. Completing the checklist prepares a release; it does not authorize npm publishing, tagging, or creating a GitHub Release.
 
-## 1. Release candidate identity
+## 1. Release candidate baseline
 
-- [ ] Start from a reviewed, clean `main`; record the exact commit SHA.
-- [ ] Run `npm run release:sync -- <version>` once to update `package.json`, `package-lock.json`, and the Community Market catalog together.
-- [ ] Remove release-candidate wording/status from the target version's release notes after the final version sync.
-- [ ] Confirm `npm run check:release` reports the scoped package identity and target version.
+- [ ] Start from the reviewed release-candidate PR merged into a clean `main`; record this commit as `RC_BASE_SHA` for provenance only.
+- [ ] Do not publish or tag `RC_BASE_SHA`: the release version has not been committed yet.
 - [ ] Confirm `cordis.patch.yml` quotes `@ychris12138/dsh-usage-stats` and `lib/client.js` registers the same identity through `__ModuleLoader__.load()`.
 - [ ] Confirm the release notes describe estimated costs as estimates and list every unsupported/fail-closed case.
 
@@ -53,14 +51,56 @@ npm pack --json
 - [ ] Recheck #53 only in an available enterprise proxy environment; record evidence, but do not infer a fix without reproduction.
 - [ ] Recheck #14 with a real MiniMax Coding Plan account: both current and weekly windows plus reset information. Record the sanitized response shape if it fails.
 
-## 6. Publish and market closeout
+## 6. Create the immutable release commit
 
-Do not run this section until the release candidate PR is approved and the maintainer explicitly authorizes publishing.
+Do not run this section until every release-candidate gate above passes and the maintainer approves preparing the release commit.
+
+- [ ] Create a release branch from the reviewed `main` at `RC_BASE_SHA`.
+- [ ] Run `npm run release:sync -- 0.3.0` once to update `package.json`, `package-lock.json`, the Community Market catalog, and documented stable-version references together.
+- [ ] Remove release-candidate wording/status from the v0.3.0 release notes.
+- [ ] Run the release gates again against the synchronized version:
+
+```bash
+npm run check
+npm test
+npm pack --json
+```
+
+- [ ] Inspect the final pack manifest, then commit all version/release metadata changes with `chore: prepare v0.3.0 release`.
+- [ ] Record that commit as `RELEASE_SHA`; this replaces `RC_BASE_SHA` as the only publish/tag identity.
+- [ ] Confirm the working tree is clean and `HEAD` equals `RELEASE_SHA`.
+- [ ] Confirm the committed package version, not merely the working-tree version:
+
+```bash
+test "$(git show "$RELEASE_SHA:package.json" | jq -r .version)" = "0.3.0"
+```
+
+The release invariant is:
+
+```text
+npm published source commit
+== v0.3.0 tag commit
+== GitHub Release commit
+== package/catalog version commit
+== RELEASE_SHA
+```
+
+## 7. Publish and market closeout
+
+Do not run this section until the immutable release commit exists and the maintainer explicitly authorizes publishing.
 
 - [ ] `npm whoami` returns the expected publisher.
-- [ ] `npm publish --access public --registry=https://registry.npmjs.org/` succeeds.
+- [ ] From a clean checkout/worktree at exactly `RELEASE_SHA`, run `npm publish --access public --registry=https://registry.npmjs.org/`.
 - [ ] `npm view "@ychris12138/dsh-usage-stats" version --registry=https://registry.npmjs.org/` equals the target version.
-- [ ] Only after npm verification: create the signed/annotated tag and GitHub Release from the recorded `main` SHA.
+- [ ] Merge or push the release commit to `main` according to the chosen branch workflow; verify `main` contains the exact `RELEASE_SHA` without recreating the release changes.
+- [ ] Only after npm and `main` verification: create the signed/annotated `v0.3.0` tag pointing explicitly to `RELEASE_SHA`.
+- [ ] Verify the tag resolves to the published source commit:
+
+```bash
+test "$(git rev-parse v0.3.0^{commit})" = "$RELEASE_SHA"
+```
+
+- [ ] Create the GitHub Release from `v0.3.0`; verify it resolves to `RELEASE_SHA`.
 - [ ] Verify the public Pages `catalog-source.json` and `/v1/plugins` response content type, package name, and exact version.
 - [ ] Install the exact npm version through DSH Desktop Community Market and restart the host.
 - [ ] Close the npm/market release issue only after the Desktop Market installation succeeds.

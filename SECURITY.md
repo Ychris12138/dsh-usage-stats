@@ -12,6 +12,8 @@ Never include DeepSeek API keys, credentials files, session contents, raw logs, 
 
 ## Scope
 
-Security fixes target the latest version on the default branch. The five HTTP endpoints are designed for direct loopback use only; exposing them through a reverse proxy is outside the supported security model unless the proxy adds authentication and access control.
+Security fixes target the latest version on the default branch. The nine HTTP endpoints are designed for direct loopback use only; exposing them through a reverse proxy is outside the supported security model unless the proxy adds authentication and access control.
+
+CSV and JSON exports are fixed, versioned projections of normalized usage and account-safe metadata. They do not serialize plugin/provider configuration, credential references or values, raw upstream responses, prompts, replies, or file paths. CSV text fields are quoted and guarded against spreadsheet-formula execution; incomplete monetary derivations remain blank/null.
 
 Declarative account monitors are trusted local configuration, but they still default to HTTPS, same-origin relative paths, manual redirects, JSON-only responses, and a 1 MiB response limit. Before sending credentials, the plugin filters IPv4/IPv6 DNS answers and pins one validated address for the connection. Public addresses are preferred. For HTTPS hostnames only, an IPv4 address in `198.18.0.0/15` may be accepted as a proxy-synthetic fake-IP mapping for Clash/Mihomo-style TUN DNS. Literal targets in that range remain blocked by default, and other private or special-use addresses still require explicit `allowPrivateNetwork` opt-in. Enabling cross-origin, insecure HTTP, or private-network access expands the trust boundary and should be done only for an endpoint you control.

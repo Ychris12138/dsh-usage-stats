@@ -25,7 +25,13 @@ const Stub = () => null;
 const primitives = new Proxy({}, { get: () => Stub });
 
 let captured = null;
-globalThis.window = { __ModuleLoader__: { load: (entry) => { captured = entry; } } };
+const storedValues = new Map();
+const localStorage = {
+	getItem: (key) => storedValues.get(key) ?? null,
+	setItem: (key, value) => { storedValues.set(key, String(value)); },
+	removeItem: (key) => { storedValues.delete(key); }
+};
+globalThis.window = { __ModuleLoader__: { load: (entry) => { captured = entry; } }, localStorage };
 globalThis.document = { querySelector: () => null, createElement: () => ({ dataset: {}, appendChild: () => {} }), head: { appendChild: () => {} } };
 
 const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "lib", "client.js"), "utf8");
@@ -64,6 +70,34 @@ const exports_ = captured.factory((spec) => {
 });
 
 if (typeof exports_.apply !== "function") throw new Error("missing apply export");
+
+const {
+	SELECTED_PROVIDER_STORAGE_KEY,
+	authoritativeProviderList,
+	readSelectedProvider,
+	reconcileSelectedProvider,
+	writeSelectedProvider
+} = exports_;
+assert.equal(SELECTED_PROVIDER_STORAGE_KEY, "@ychris12138/dsh-usage-stats:selected-provider:v1");
+assert.equal(authoritativeProviderList({ ok: false, providers: [] }), null, "a transient provider error must not become an authoritative empty list");
+assert.equal(authoritativeProviderList(null), null);
+writeSelectedProvider("opencode-go", localStorage);
+assert.equal(readSelectedProvider(localStorage), "opencode-go");
+const providerChoicesForStorage = [
+	{ id: "deepseek-official", configured: true },
+	{ id: "opencode-go", configured: true }
+];
+assert.deepEqual(authoritativeProviderList({ ok: true, providers: providerChoicesForStorage }), providerChoicesForStorage);
+assert.equal(reconcileSelectedProvider("opencode-go", providerChoicesForStorage, localStorage), "opencode-go", "a valid persisted provider must be restored");
+writeSelectedProvider("removed-provider", localStorage);
+assert.equal(reconcileSelectedProvider("removed-provider", providerChoicesForStorage, localStorage), "deepseek-official", "a removed provider must use the existing fallback");
+assert.equal(readSelectedProvider(localStorage), null, "a removed provider must be cleared from storage");
+writeSelectedProvider("bad\0provider", localStorage);
+assert.equal(readSelectedProvider(localStorage), null, "malformed provider ids must not be persisted");
+const deniedStorage = { getItem: () => { throw new Error("denied"); }, setItem: () => { throw new Error("denied"); }, removeItem: () => { throw new Error("denied"); } };
+assert.equal(readSelectedProvider(deniedStorage), null);
+writeSelectedProvider("deepseek-official", deniedStorage);
+console.log("client display setting and provider persistence policy ok");
 
 const { shouldDismissPanel, safeDiagnosticReason } = exports_;
 const panelNode = { contains: (target) => target === "panel-child" };
@@ -606,6 +640,13 @@ const switchedPillLoad = await loadSessionPillSnapshot("session/one", fetchPill)
 if (firstPillLoad.account.id !== "deepseek-official" || switchedPillLoad.account.id !== "opencode-go") throw new Error("session provider switch must resolve a fresh account snapshot");
 if (requests[0] !== "/api/usage-stats/session-context?session=session%2Fone") throw new Error(`session context request must carry the explicit encoded session id: ${requests[0]}`);
 if (!requests.includes("/api/usage-stats/account?provider=opencode-go&activity=active")) throw new Error("pill must reuse the unified account endpoint and mark the server-owned active provider");
+const hiddenRequests = [];
+const hiddenPillLoad = await loadSessionPillSnapshot("session/hidden", async (path) => {
+	hiddenRequests.push(path);
+	return { ok: true, context: null, display: { currentSessionPill: false } };
+});
+assert.equal(hiddenPillLoad, null, "the server-owned display switch must hide the Pill");
+assert.deepEqual(hiddenRequests, ["/api/usage-stats/session-context?session=session%2Fhidden"], "a hidden Pill must not query the account endpoint");
 await loadSessionPillSnapshot("session/one", fetchPill, { provider: "route:two", model: "same/model" });
 if (!requests.includes("/api/usage-stats/session-context?session=session%2Fone&provider=route%3Atwo&model=same%2Fmodel")) {
 	throw new Error("the formal model-selector route must be encoded as a session-context hint");
@@ -779,6 +820,9 @@ await act(async () => {
 	await Promise.resolve();
 });
 if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).length !== 1) throw new Error("pill click must open the existing account panel");
+const exportLinks = integrationRenderer.root.findAll((node) => typeof node.props?.["data-export-format"] === "string");
+assert.deepEqual(exportLinks.map((node) => node.props["data-export-format"]), ["daily-csv", "sessions-csv", "json"], "the panel must expose all three secret-free downloads without a new fetch loop");
+for (const link of exportLinks) if (link.type !== "a" || typeof link.props.download !== "string" || link.props.className !== "usg_exportLink") throw new Error("exports must be styled browser downloads");
 const selectedPicker = integrationRenderer.root.findByType("select");
 if (selectedPicker.props.value !== "opencode-go") throw new Error(`pill click must select its provider in the existing panel, got ${selectedPicker.props.value}`);
 if (!integrationRequests.some((path) => path.includes("/account?provider=opencode-go&activity=detail"))) throw new Error("the open detail panel must signal its provider to the central scheduler");

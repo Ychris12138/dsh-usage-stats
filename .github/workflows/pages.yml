@@ -28,20 +28,7 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Validate catalog metadata
-        shell: bash
-        run: |
-          set -euo pipefail
-          node <<'NODE'
-          const fs = require('fs');
-          const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-          const page = JSON.parse(fs.readFileSync('catalog/v1/plugins.json', 'utf8'));
-          const source = JSON.parse(fs.readFileSync('catalog/catalog-source.json', 'utf8'));
-          if (pkg.name !== '@ychris12138/dsh-usage-stats') throw new Error('unexpected npm package identity');
-          if (page.revision !== pkg.version) throw new Error('catalog revision does not match package version');
-          if (page.items?.[0]?.latestVersion !== pkg.version) throw new Error('catalog latestVersion does not match package version');
-          if (page.items?.[0]?.package?.name !== pkg.name) throw new Error('catalog package name does not match package name');
-          if (source.transport?.endpoint !== 'https://ychris12138.github.io/dsh-usage-stats/v1/plugins') throw new Error('unexpected catalog endpoint');
-          NODE
+        run: npm run check:release
 
       - name: Build static catalog site
         shell: bash

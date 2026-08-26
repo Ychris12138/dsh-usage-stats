@@ -1,4 +1,4 @@
-# v0.3.0 release notes (release candidate)
+# v0.3.0 release notes
 
 `v0.3.0` turns dsh-usage-stats from an account/Token dashboard into a route-aware usage and cost observability layer while preserving the v0.2.x credential and loopback security boundaries.
 
@@ -11,6 +11,7 @@
 - New API balance display respects the instance's USD/CNY quota settings. Unsupported display types and invalid CNY exchange rates do not masquerade as money.
 - Daily CSV, session CSV, and versioned JSON exports use explicit secret-free projections, preserve Unicode, escape CSV safely, and omit incomplete cost amounts.
 - The account panel remembers its last valid provider in namespaced browser localStorage and falls back safely if that provider is removed.
+- Sidebar footer actions preserve the shared row layout and wrap full-width entries safely, preventing overlap or oversized entries when dsh-usage-stats is installed alongside other footer plugins (#82).
 
 ## Cost accuracy statement
 
@@ -22,7 +23,3 @@ All monetary values are **estimates**, not invoices. A sample is priced only whe
 - Older usage-cache schemas are invalidated and refolded from authoritative session events. Malformed cache JSON is ignored and rebuilt; it must not block DSH startup.
 - Existing account monitor configuration is normalized without writing credentials or inserting new monitor entries.
 - Browser provider selection is local UI state only; it creates no endpoint and no server-side setting.
-
-## Release status
-
-This document describes the `v0.3.0` release candidate. The package version remains `0.2.10` until maintainer review and the complete RC checklist pass. npm publish, tag creation, GitHub Release creation, Pages verification, and Desktop Market installation are separate final release steps.

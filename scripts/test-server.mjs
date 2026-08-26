@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { pricingFingerprint } from "../lib/billing.js";
 
 function usageEvent(seq, inputTokens) {
 	return {
@@ -270,9 +271,15 @@ async function testPricingFingerprintInvalidatesDerivedCosts(root) {
 	const storage = join(home, "storages");
 	await mkdir(storage, { recursive: true });
 	const sessionId = "fingerprint-session";
+	const oldFingerprint = JSON.parse(pricingFingerprint({ providers: [{
+		id: "deepseek-official",
+		displayName: "DeepSeek",
+		baseURL: "https://api.deepseek.com"
+	}] }));
+	oldFingerprint.pricingCatalog = [];
 	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
 		version: 5,
-		pricingFingerprint: "stale-catalog",
+		pricingFingerprint: JSON.stringify(oldFingerprint),
 		sessions: {
 			[sessionId]: {
 				kind: "live",
@@ -291,10 +298,60 @@ async function testPricingFingerprintInvalidatesDerivedCosts(root) {
 		persistence: { listSnapshots: async () => [], list: async () => [] },
 		settings: { get: () => void 0 }
 	}));
-	assert.equal(usage.sessions[0].costComplete, true, "a stale pricing fingerprint must refold event-time costs");
+	assert.equal(usage.sessions[0].costComplete, true, "a catalog-only fingerprint change with unchanged provider identity may safely refold event-time costs");
 	assert.equal(usage.sessions[0].tokens, 1_000_000);
 	const rewritten = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
-	assert.notEqual(rewritten.pricingFingerprint, "stale-catalog");
+	assert.notEqual(rewritten.pricingFingerprint, JSON.stringify(oldFingerprint));
+	assert.equal(rewritten.pricingIdentityCutoffAll, null, "catalog-only changes must not invent a provider identity cutoff");
+}
+
+async function testRuntimeProviderPricingIdentityChange(root) {
+	const home = join(root, "runtime-provider-pricing-identity");
+	const plugin = await freshModule("runtime-provider-pricing-identity", home);
+	const eventTime = Date.UTC(2026, 7, 24, 2, 0, 0);
+	const oldSession = { id: "old-route-session", events: [pricedUsageEvent(0, eventTime, "route-a", "deepseek-v4-pro", 1_000_000)] };
+	const liveSessions = [oldSession];
+	let baseURL = "https://api.deepseek.com/v1";
+	const settings = {
+		get: (name) => name === "llm-pi-ai" ? {
+			providers: { "route-a": { displayName: "Route A", baseURL } }
+		} : void 0
+	};
+	const context = makeContext({
+		sessions: { list: () => liveSessions },
+		persistence: { listSnapshots: async () => [], list: async () => [] },
+		settings
+	});
+
+	const official = await plugin.collectUsage(context);
+	assert.equal(official.sessions.find((session) => session.sessionId === oldSession.id).costComplete, true);
+	const officialCache = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+
+	baseURL = "https://username:password@relay.invalid/v1?token=SECRET";
+	const custom = await plugin.collectUsage(context);
+	assert.equal(custom.sessions.find((session) => session.sessionId === oldSession.id).estimatedCost, null,
+		"official to custom must invalidate the already-loaded in-memory billing cache");
+	const customCacheText = await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8");
+	const customCache = JSON.parse(customCacheText);
+	assert.notEqual(customCache.pricingFingerprint, officialCache.pricingFingerprint);
+	assert.equal(Number.isFinite(customCache.pricingIdentityCutoffs["route-a"]), true);
+	assert.doesNotMatch(customCache.pricingFingerprint, /username|password|token=|SECRET/i,
+		"runtime fingerprint must never persist URL credentials or query secrets");
+
+	baseURL = "https://api.deepseek.com/v1";
+	const restoredOfficial = await plugin.collectUsage(context);
+	assert.equal(restoredOfficial.sessions.find((session) => session.sessionId === oldSession.id).estimatedCost, null,
+		"custom to official must not reinterpret historical custom-relay usage as official usage");
+	const restoredCache = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.notEqual(restoredCache.pricingFingerprint, customCache.pricingFingerprint);
+	assert.equal(restoredCache.pricingIdentityCutoffs["route-a"] >= customCache.pricingIdentityCutoffs["route-a"], true);
+
+	const futureAt = restoredCache.pricingIdentityCutoffs["route-a"] + 1;
+	liveSessions.push({ id: "new-official-session", events: [pricedUsageEvent(0, futureAt, "route-a", "deepseek-v4-pro", 1_000_000)] });
+	const future = await plugin.collectUsage(context);
+	assert.equal(future.sessions.find((session) => session.sessionId === oldSession.id).costComplete, false);
+	assert.equal(future.sessions.find((session) => session.sessionId === "new-official-session").costComplete, true,
+		"events after the observed identity transition may use the new official pricing identity");
 }
 
 async function testConfigValidation(root) {
@@ -570,6 +627,7 @@ try {
 	await testSessionContext(root);
 	await testV4CacheUpgradeRefoldsBilling(root);
 	await testPricingFingerprintInvalidatesDerivedCosts(root);
+	await testRuntimeProviderPricingIdentityChange(root);
 	await testConfigValidation(root);
 	await testUsageBillingWire(root);
 	await testLegacyZaiSubscriptionId(root);

@@ -3,11 +3,13 @@ import assert from "node:assert/strict";
 import {
 	applyCostSample,
 	budgetLevel,
+	changedProviderPricingRoutes,
 	costSampleOf,
 	createCostAccumulator,
 	createUsageCostEstimator,
 	parseCostAccumulator,
 	pricingFingerprint,
+	providerPricingIdentityProjection,
 	renderBudgetSummary,
 	renderCost,
 	serializeCostAccumulator,
@@ -27,6 +29,33 @@ const openrouter = { id: "openrouter", displayName: "OpenRouter", baseURL: "http
 const customRelay = { id: "deepseek", displayName: "Corporate Relay", baseURL: "https://relay.invalid/v1" };
 const estimator = createUsageCostEstimator([official, openrouter, customRelay]);
 assert.match(pricingFingerprint(), /providerIdentityPolicy/, "derived-cost cache identity must include provider classification policy");
+
+{
+	const routeOfficial = { id: "route-a", displayName: "Route A", baseURL: "https://api.deepseek.com/v1" };
+	const routeCustom = { ...routeOfficial, baseURL: "https://relay.invalid/v1" };
+	const stableA = pricingFingerprint({ providers: [routeOfficial, openrouter] });
+	const stableB = pricingFingerprint({ providers: [openrouter, { ...routeOfficial }] });
+	const custom = pricingFingerprint({ providers: [routeCustom, openrouter] });
+	assert.equal(stableA, stableB, "provider pricing identity order and object identity must not affect the fingerprint");
+	assert.deepEqual(changedProviderPricingRoutes(stableA, stableB), []);
+	assert.deepEqual(changedProviderPricingRoutes(stableA, custom), ["route-a"], "official to custom must change the affected route identity");
+	assert.deepEqual(changedProviderPricingRoutes(custom, stableA), ["route-a"], "custom to official must change the affected route identity");
+	assert.equal(changedProviderPricingRoutes("legacy-catalog-only", stableA), null, "unprovable old identity must request a global fail-closed transition");
+	assert.deepEqual(providerPricingIdentityProjection([routeOfficial]), [{
+		routeId: "route-a",
+		providerFamily: "deepseek",
+		pricingFamily: "deepseek",
+		confidence: "canonical-host",
+		baseURL: { state: "hostname", hostname: "api.deepseek.com" }
+	}]);
+	assert.equal(providerPricingIdentityProjection([{ id: "deepseek" }])[0].baseURL.state, "absent");
+	assert.equal(providerPricingIdentityProjection([{ id: "deepseek", baseURL: "not a URL" }])[0].baseURL.state, "malformed");
+	const credentialURLFingerprint = pricingFingerprint({
+		providers: [{ ...routeOfficial, baseURL: "https://username:password@api.deepseek.com/v1?token=secret" }]
+	});
+	assert.doesNotMatch(credentialURLFingerprint, /username|password|token=|secret/i, "fingerprint must retain only the normalized hostname, never URL credentials/query data");
+	console.log("runtime provider pricing fingerprint is deterministic and secret-free");
+}
 
 const buckets = (inputTokens, outputTokens = 0, cacheReadTokens = 0, cacheWriteTokens = 0) => ({
 	inputTokens,

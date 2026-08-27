@@ -22,7 +22,8 @@ const { act } = TestRenderer;
 
 // Fake primitives: every named export is a no-op component (returns its props as children is not needed).
 const Stub = () => null;
-const primitives = new Proxy({}, { get: () => Stub });
+const PassThrough = ({ children }) => children;
+const primitives = new Proxy({}, { get: (_target, key) => key === "Tooltip" ? PassThrough : Stub });
 
 let captured = null;
 const storedValues = new Map();
@@ -125,6 +126,8 @@ const providerChoicesForStorage = [
 ];
 assert.deepEqual(authoritativeProviderList({ ok: true, providers: providerChoicesForStorage }), providerChoicesForStorage);
 assert.equal(reconcileSelectedProvider("opencode-go", providerChoicesForStorage, localStorage), "opencode-go", "a valid persisted provider must be restored");
+assert.equal(reconcileSelectedProvider("opencode-go", [], localStorage), "opencode-go", "an empty/transient provider list must not erase the current selection");
+assert.equal(readSelectedProvider(localStorage), "opencode-go", "a transient empty provider list must not clear persisted selection");
 writeSelectedProvider("removed-provider", localStorage);
 assert.equal(reconcileSelectedProvider("removed-provider", providerChoicesForStorage, localStorage), "deepseek-official", "a removed provider must use the existing fallback");
 assert.equal(readSelectedProvider(localStorage), null, "a removed provider must be cleared from storage");
@@ -924,6 +927,19 @@ for (const link of exportLinks) if (link.type !== "a" || typeof link.props.downl
 const selectedPicker = integrationRenderer.root.findByType("select");
 if (selectedPicker.props.value !== "opencode-go") throw new Error(`pill click must select its provider in the existing panel, got ${selectedPicker.props.value}`);
 if (!integrationRequests.some((path) => path.includes("/account?provider=opencode-go&activity=detail"))) throw new Error("the open detail panel must signal its provider to the central scheduler");
+const closeAction = integrationRenderer.root.findByProps({ "aria-label": "action.close" });
+await act(async () => {
+	closeAction.props.onClick();
+	await Promise.resolve();
+});
+if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).length !== 0) throw new Error("close action must dismiss the account panel");
+await act(async () => {
+	integrationRenderer.root.findByProps({ "data-usage-stats-badge": true }).props.onClick();
+	await Promise.resolve();
+	await Promise.resolve();
+});
+const reopenedPicker = integrationRenderer.root.findByType("select");
+if (reopenedPicker.props.value !== "opencode-go") throw new Error(`closing and reopening must preserve the selected provider, got ${reopenedPicker.props.value}`);
 if (integrationRenderer.root.findAllByProps({ "data-budget-period": "daily" }).length !== 1
 	|| integrationRenderer.root.findByProps({ "data-budget-period": "daily" }).props["data-budget-level"] !== "warning") {
 	throw new Error("configured budget state must integrate into the existing usage panel");

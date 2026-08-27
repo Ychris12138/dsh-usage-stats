@@ -164,7 +164,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 
 ### 界面设置 / Display settings
 
-Current Session Pill 默认开启。只隐藏 composer 附近的 Pill、保留侧边栏账户面板时：
+模型选择器前方的 current-session inline summary 默认开启。只隐藏这段行内摘要、保留侧边栏账户面板时：
 
 ```yaml
 - insert:
@@ -174,6 +174,8 @@ Current Session Pill 默认开启。只隐藏 composer 附近的 Pill、保留�
         display:
           currentSessionPill: false
 ```
+
+`display.currentSessionPill` 保留为 v0.3.0 兼容配置键；在当前版本中，它控制的是 zero-chrome current-session inline summary。设为 `false` 时摘要不会显示；首次 session-context 请求会在服务端立即短路，不会继续读取 account endpoint 或折叠 usage。
 
 面板的当前 provider 会保存在浏览器的命名空间 localStorage 中；刷新页面或重启 DSH 后恢复。若该 provider 已被删除，插件会清除旧值并使用原有的 DeepSeek/已配置 provider fallback。该选择不会写入 DSH 设置、服务端缓存或新 API。
 
@@ -411,7 +413,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 
 Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-reported `usage`，不是本地估算。相同 turn/step 的后续样本会替换旧样本，并按 `provider/model` 归集。
 
-费用是明确标注的估算派生值：每个 usage 样本使用自己的事件时间、原始 provider/model 与四类 token bucket 匹配 `lib/pricing.js`；替换样本会先减去旧费用，再加入新费用。绝不会用“当前价格 × 历史累计 Token”。Current Session Pill 使用 DSH 原生 `tokenUsage` projection 触发重读，并只在 projection 与服务端 session buckets 完全一致时显示服务端事件级估算。
+费用是明确标注的估算派生值：每个 usage 样本使用自己的事件时间、原始 provider/model 与四类 token bucket 匹配 `lib/pricing.js`；替换样本会先减去旧费用，再加入新费用。绝不会用“当前价格 × 历史累计 Token”。Current-session inline summary 使用 DSH 原生 `tokenUsage` projection 触发重读，并只在 projection 与服务端 session buckets 完全一致时显示服务端事件级估算。
 
 - 活跃会话只处理新追加事件。
 - 持久化会话使用不透明 revision；未变化时不重复读取日志。

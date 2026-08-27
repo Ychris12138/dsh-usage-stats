@@ -54,15 +54,36 @@ if (!source.includes('translate("panel.badge")')) throw new Error("badge must ke
 if (!source.includes("badgeAmountText !== null &&")) throw new Error("badge amount must be a separate middle element");
 if (!source.includes("S.badgeAmount")) throw new Error("badge amount element is missing its class");
 if (!source.includes("badgeCount !== null && react_jsx_runtime.jsx(\"span\", { className: S.badgeCount")) throw new Error("badge must keep the today token count on the right");
-if (!source.includes('.slots.inject("conversation.input.right"')) throw new Error("current-session pill must use the formal composer control slot");
-const pillSource = source.slice(source.indexOf("//#region CurrentSessionPill"), source.indexOf("//#endregion", source.indexOf("//#region CurrentSessionPill")));
-if (pillSource.includes("setInterval") || pillSource.includes("setTimeout")) throw new Error("current-session pill must not add an independent polling loop");
-if (pillSource.includes("MutationObserver") || pillSource.includes("addEventListener")) throw new Error("current-session pill must use slot session snapshots instead of DOM observers/listeners");
+if (!source.includes('.slots.inject("conversation.input.right"')) throw new Error("current-session inline summary must use the formal composer right slot");
+if (source.includes('.slots.inject("conversation.input.model"')) throw new Error("usage stats must never register or replace the host model single slot");
+const inlineSource = source.slice(source.indexOf("//#region CurrentSessionInline"), source.indexOf("//#endregion", source.indexOf("//#region CurrentSessionInline")));
+if (inlineSource.includes("setInterval") || inlineSource.includes("setTimeout")) throw new Error("current-session inline summary must not add an independent polling loop");
+if (inlineSource.includes("MutationObserver") || inlineSource.includes("addEventListener") || inlineSource.includes("querySelector")) throw new Error("current-session inline summary must use slot session snapshots instead of host DOM manipulation");
 if (source.includes("data-orcarouter-integration") || source.includes("OrcaRouterIntegrationCard")) throw new Error("OrcaRouter must stay a compact provider choice, not a standalone panel card");
-const pillCss = source.match(/\.usg_sessionPill\{([^\"]+)/)?.[1] ?? "";
-if (!pillCss.includes("flex:0 1 auto") || !pillCss.includes("min-width:0") || /position:(?:fixed|absolute)/.test(pillCss)) {
-	throw new Error("current-session pill must shrink in its formal slot and never overlay another UI layer");
+if (source.includes("data-current-session-pill") || source.includes(".usg_sessionPill{")) throw new Error("the legacy capsule DOM/CSS must not remain active");
+const inlineCss = source.match(/\.usg_sessionInline\{([^\"]+)/)?.[1] ?? "";
+for (const declaration of [
+	"background:none",
+	"border:0",
+	"border-radius:0",
+	"padding:0",
+	"margin:0",
+	"display:inline-flex",
+	"min-width:0",
+	"max-width:clamp(56px,18vw,170px)",
+	"flex:0 1 auto",
+	"overflow:hidden",
+	"white-space:nowrap",
+	"text-overflow:ellipsis",
+	"font-size:11px",
+	"line-height:18px"
+]) {
+	if (!inlineCss.includes(declaration)) throw new Error(`zero-chrome inline CSS is missing ${declaration}`);
 }
+if (/(?:^|;)height:|(?:^|;)width:|position:(?:fixed|absolute)/.test(inlineCss)) throw new Error("inline summary must not claim fixed dimensions or overlay positioning");
+if (!source.includes(".usg_sessionInline:focus-visible{outline:")) throw new Error("keyboard users must retain a visible inline-summary focus ring");
+if (!source.includes("@media(max-width:540px){.usg_sessionInlineProvider,.usg_sessionInlineProviderSeparator{display:none}}")) throw new Error("narrow layouts must drop the provider label before competing with host controls");
+if (!source.includes("@media(max-width:480px){.usg_sessionInline{display:none}}")) throw new Error("very narrow layouts must yield the entire optional summary to host controls");
 new Function(source)(); // executes the window.__ModuleLoader__.load call
 
 if (captured === null) throw new Error("loader did not capture the bundle");
@@ -199,15 +220,15 @@ exports_.apply(ctx);
 if (registrations.length !== 2) throw new Error(`expected sidebar + composer slot injections, got ${registrations.length}`);
 const registrationBySlot = new Map(registrations);
 if (!registrationBySlot.has("sidebar.footer.action")) throw new Error("sidebar footer slot registration missing");
-if (!registrationBySlot.has("conversation.input.right")) throw new Error("current-session pill slot registration missing");
+if (!registrationBySlot.has("conversation.input.right")) throw new Error("current-session inline slot registration missing");
 for (const registerFn of registrationBySlot.values()) {
 	const disposer = registerFn();
 	if (typeof disposer !== "function") throw new Error("slot registration must return a disposer");
 }
-const pillEntry = registeredEntries.find((entry) => entry.options.name === "conversation.input.right");
-if (pillEntry?.options.id !== "usage-stats-current-session-pill") throw new Error("pill list entry needs a stable unique id");
-if (typeof pillEntry.component !== "function") throw new Error("pill slot must register a component");
-if (pillEntry.options.inject("session-a").modelDirectory !== modelDirectory) throw new Error("pill must subscribe to the host model-selection store");
+const inlineEntry = registeredEntries.find((entry) => entry.options.name === "conversation.input.right");
+if (inlineEntry?.options.id !== "usage-stats-current-session-inline") throw new Error("inline summary entry needs a semantic unique id");
+if (typeof inlineEntry.component !== "function") throw new Error("inline slot must register a component");
+if (inlineEntry.options.inject("session-a").modelDirectory !== modelDirectory) throw new Error("inline summary must subscribe to the host model-selection store");
 // Missing mount point: the host may never invoke a slot injection callback.
 // apply() must still complete without attempting any DOM fallback or throwing.
 exports_.apply({
@@ -513,10 +534,12 @@ const okButStale = { mode: "balance", status: "ok", stale: true, balance: { rema
 if (badgeAccountValue(okButStale) !== null) throw new Error("ok-but-stale snapshot must not render a numeric badge");
 console.log("collapsed-badge account value + warning policy ok");
 
-// Current Session Pill: one server-resolved provider/account snapshot is
-// reduced to a compact, neutral-by-default view model. No provider inference
+// Current Session Inline: one server-resolved provider/account snapshot is
+// reduced to compact, neutral-by-default inline metadata. No provider inference
 // or client-owned warning thresholds are allowed here.
 const {
+	CurrentSessionInline,
+	CurrentSessionInlineView,
 	CurrentSessionPill,
 	CurrentSessionPillView,
 	currentSessionCostLabel,
@@ -529,9 +552,11 @@ const {
 	tokenUsageSignalOf,
 	subscribeUsageStatsPanel
 } = exports_;
-if ([CurrentSessionPill, CurrentSessionPillView, currentSessionCostLabel, formatResetCountdown, loadSessionPillSnapshot, requestUsageStatsPanel, sessionContextSignalOf, sessionPillViewOf, modelSelectionSignalOf, tokenUsageSignalOf, subscribeUsageStatsPanel].some((entry) => typeof entry !== "function")) {
-	throw new Error("current-session pill exports are incomplete");
+if ([CurrentSessionInline, CurrentSessionInlineView, CurrentSessionPill, CurrentSessionPillView, currentSessionCostLabel, formatResetCountdown, loadSessionPillSnapshot, requestUsageStatsPanel, sessionContextSignalOf, sessionPillViewOf, modelSelectionSignalOf, tokenUsageSignalOf, subscribeUsageStatsPanel].some((entry) => typeof entry !== "function")) {
+	throw new Error("current-session inline exports are incomplete");
 }
+assert.equal(CurrentSessionPill, CurrentSessionInline, "the legacy component export must remain a compatibility alias");
+assert.equal(CurrentSessionPillView, CurrentSessionInlineView, "the legacy view export must remain a compatibility alias");
 const resetTranslate = (key, params) => {
 	if (key === "duration.minutes") return `${params.minutes}m`;
 	if (key === "duration.hoursMinutes") return `${params.hours}h ${params.minutes}m`;
@@ -678,13 +703,27 @@ if (unknownProviderPill.providerLabel !== "relay-a" || unknownProviderPill.value
 	throw new Error("unknown/no-adapter provider must remain a neutral server identity");
 }
 
-let openedProvider = null;
-const pillElement = CurrentSessionPillView({ snapshot: balancePillSnapshot, translate: pillTranslate, onOpen: (id) => { openedProvider = id; } });
-if (pillElement.type !== "button" || pillElement.props["data-current-session-pill"] !== true) throw new Error("pill view needs one stable button root");
+const openedProviders = [];
+const pillElement = CurrentSessionInlineView({ snapshot: balancePillSnapshot, translate: pillTranslate, onOpen: (id) => { openedProviders.push(id); } });
+if (pillElement.type !== "button" || pillElement.props.className !== "usg_sessionInline" || pillElement.props["data-current-session-inline"] !== true || pillElement.props["data-current-session-pill"] !== void 0) throw new Error("inline view needs one semantic zero-chrome button root");
 pillElement.props.onClick();
-if (openedProvider !== "deepseek-official") throw new Error(`pill click must open the account panel at its provider, got ${openedProvider}`);
+assert.deepEqual(openedProviders, ["deepseek-official"], "one inline click must open the account panel exactly once at its provider");
 const balancePillMarkup = renderToStaticMarkup(pillElement);
-const subscriptionPillElement = CurrentSessionPillView({
+const orcaInlineElement = CurrentSessionInlineView({
+	snapshot: {
+		context: { ...pillContext, providerId: "orcarouter", accountId: "orcarouter" },
+		account: { id: "orcarouter", displayName: "OrcaRouter", mode: "balance", status: "ok", balance: { remaining: 6, currency: "USD", unlimited: false }, alert: { level: "normal" } }
+	},
+	translate: pillTranslate,
+	onOpen: () => {}
+});
+const orcaInlineMarkup = renderToStaticMarkup(orcaInlineElement);
+const inlineText = (markup) => markup.replace(/<[^>]+>/g, "").replaceAll("&amp;", "&");
+assert.equal(inlineText(orcaInlineMarkup), `OrcaRouter · ${fmtCurrency(6, "USD")} · —`, "balance inline summary must retain provider, remaining balance, and unknown cost");
+assert.equal(orcaInlineElement.props["aria-label"], orcaInlineElement.props.title, "responsive visual reduction must retain the complete accessible summary");
+assert.equal(orcaInlineElement.props.children[2].props.children, fmtCurrency(6, "USD"), "account metadata must remain independently reducible from the provider and cost");
+assert.equal(orcaInlineElement.props.children[4].props.children, "—", "session cost must remain independently reducible from account metadata");
+const subscriptionPillElement = CurrentSessionInlineView({
 	snapshot: {
 		context: { ...pillContext, providerId: "opencode-go", accountId: "opencode-go" },
 		account: { id: "opencode-go", displayName: "OpenCode Go", mode: "subscription", status: "ok", windows: [{ kind: "weekly", remainingPercent: 8 }], alert: { level: "critical" } }
@@ -693,21 +732,22 @@ const subscriptionPillElement = CurrentSessionPillView({
 	onOpen: () => {}
 });
 const subscriptionPillMarkup = renderToStaticMarkup(subscriptionPillElement);
-const subscriptionPillWithResetElement = CurrentSessionPillView({
+if (!inlineText(subscriptionPillMarkup).startsWith("OpenCode Go · ") || !inlineText(subscriptionPillMarkup).endsWith(" · —")) throw new Error("subscription inline summary must retain provider, tightest quota, and cost");
+const subscriptionPillWithResetElement = CurrentSessionInlineView({
 	snapshot: subscriptionPillWithResetSnapshot,
 	translate: pillTranslate,
 	now: resetNow,
 	onOpen: () => {}
 });
 if (!subscriptionPillWithResetElement.props.title.includes("reset:") || subscriptionPillWithResetElement.props["aria-label"] !== subscriptionPillWithResetElement.props.title) {
-	throw new Error("known resetsAt must be exposed consistently through the pill title and aria-label");
+	throw new Error("known resetsAt must be exposed consistently through the inline title and aria-label");
 }
 if (subscriptionPillElement.props.title.includes("reset:") || subscriptionPillElement.props["aria-label"].includes("reset:")) {
-	throw new Error("missing resetsAt must leave the pill title and aria-label free of invented reset information");
+	throw new Error("missing resetsAt must leave the inline title and aria-label free of invented reset information");
 }
-if (!balancePillMarkup.includes('data-tone="normal"') || !subscriptionPillMarkup.includes('data-tone="critical"')) throw new Error("pill alert tones missing from markup");
-if (balancePillMarkup.includes("MUST_NOT_RENDER") || balancePillMarkup.includes("secret.invalid")) throw new Error("pill must not render credential or connection fields");
-if (pillElement.type !== subscriptionPillElement.type || balancePillMarkup === subscriptionPillMarkup) throw new Error("provider switch must update the existing pill root");
+if (!balancePillMarkup.includes('data-tone="normal"') || !subscriptionPillMarkup.includes('data-tone="critical"')) throw new Error("inline alert tones missing from markup");
+if (balancePillMarkup.includes("MUST_NOT_RENDER") || balancePillMarkup.includes("secret.invalid")) throw new Error("inline summary must not render credential or connection fields");
+if (pillElement.type !== subscriptionPillElement.type || balancePillMarkup === subscriptionPillMarkup) throw new Error("provider switch must update the existing inline root");
 
 const requests = [];
 let currentProvider = "deepseek-official";
@@ -729,14 +769,14 @@ currentProvider = "opencode-go";
 const switchedPillLoad = await loadSessionPillSnapshot("session/one", fetchPill);
 if (firstPillLoad.account.id !== "deepseek-official" || switchedPillLoad.account.id !== "opencode-go") throw new Error("session provider switch must resolve a fresh account snapshot");
 if (requests[0] !== "/api/usage-stats/session-context?session=session%2Fone") throw new Error(`session context request must carry the explicit encoded session id: ${requests[0]}`);
-if (!requests.includes("/api/usage-stats/account?provider=opencode-go&activity=active")) throw new Error("pill must reuse the unified account endpoint and mark the server-owned active provider");
+if (!requests.includes("/api/usage-stats/account?provider=opencode-go&activity=active")) throw new Error("inline summary must reuse the unified account endpoint and mark the server-owned active provider");
 const hiddenRequests = [];
 const hiddenPillLoad = await loadSessionPillSnapshot("session/hidden", async (path) => {
 	hiddenRequests.push(path);
 	return { ok: true, context: null, display: { currentSessionPill: false } };
 });
-assert.equal(hiddenPillLoad, null, "the server-owned display switch must hide the Pill");
-assert.deepEqual(hiddenRequests, ["/api/usage-stats/session-context?session=session%2Fhidden"], "a hidden Pill must not query the account endpoint");
+assert.equal(hiddenPillLoad, null, "the server-owned display switch must hide the inline summary");
+assert.deepEqual(hiddenRequests, ["/api/usage-stats/session-context?session=session%2Fhidden"], "a hidden inline summary must stop before the account endpoint");
 await loadSessionPillSnapshot("session/one", fetchPill, { provider: "route:two", model: "same/model" });
 if (!requests.includes("/api/usage-stats/session-context?session=session%2Fone&provider=route%3Atwo&model=same%2Fmodel")) {
 	throw new Error("the formal model-selector route must be encoded as a session-context hint");
@@ -746,7 +786,7 @@ const noContext = await loadSessionPillSnapshot("blank", async () => {
 	noContextRequests += 1;
 	return { ok: true, context: null };
 });
-if (noContext !== null || noContextRequests !== 1) throw new Error("a session without route context must silently omit the pill and skip account lookup");
+if (noContext !== null || noContextRequests !== 1) throw new Error("a session without route context must silently omit the inline summary and skip account lookup");
 const unsupportedLoad = await loadSessionPillSnapshot("unknown", async (path) => path.includes("session-context")
 	? { ok: true, context: { ...pillContext, providerId: "relay-a", accountId: "relay-a" } }
 	: { ok: false, error: "unknown-provider" });
@@ -800,7 +840,7 @@ const lifecycleRequest = async (path) => {
 };
 let pillRenderer;
 await act(async () => {
-	pillRenderer = TestRenderer.create(react.createElement(CurrentSessionPill, {
+	pillRenderer = TestRenderer.create(react.createElement(CurrentSessionInline, {
 		sessionId: "session-one",
 		session: baseSession,
 		modelDirectory,
@@ -811,7 +851,7 @@ await act(async () => {
 	await Promise.resolve();
 	await Promise.resolve();
 });
-if (pillRenderer.root.findAllByProps({ "data-current-session-pill": true }).length !== 1) throw new Error("successful mount must create exactly one pill");
+if (pillRenderer.root.findAllByProps({ "data-current-session-inline": true }).length !== 1) throw new Error("successful mount must create exactly one inline summary");
 if (pillRenderer.root.findByType("button").props["data-provider"] !== "deepseek-official") throw new Error("initial lifecycle provider missing");
 if (!JSON.stringify(pillRenderer.toJSON()).includes("0.37")) throw new Error("initial native projection must expose matching estimated cost");
 
@@ -834,15 +874,15 @@ await act(async () => {
 	for (const subscriber of modelSubscribers) subscriber();
 	await Promise.resolve();
 });
-if (pillRenderer.toJSON() !== null) throw new Error("provider switch must not leave the previous session/account pill clickable while loading");
+if (pillRenderer.toJSON() !== null) throw new Error("provider switch must not leave the previous session/account summary clickable while loading");
 holdSwitchedContext = false;
 await act(async () => {
 	resolveSwitchedContext({ ok: true, context: { ...pillContext, providerId: "opencode-go", accountId: "opencode-go", session: lifecycleSession() } });
 	await Promise.resolve();
 	await Promise.resolve();
 });
-const switchedButtons = pillRenderer.root.findAllByProps({ "data-current-session-pill": true });
-if (switchedButtons.length !== 1 || switchedButtons[0].props["data-provider"] !== "opencode-go") throw new Error("provider switch must update the existing single pill root");
+const switchedButtons = pillRenderer.root.findAllByProps({ "data-current-session-inline": true });
+if (switchedButtons.length !== 1 || switchedButtons[0].props["data-provider"] !== "opencode-go") throw new Error("provider switch must update the existing single inline root");
 if (!lifecycleRequests.includes("/api/usage-stats/session-context?session=session-one&provider=opencode-go&model=same-model")) {
 	throw new Error("model-directory notifications must refresh session-context with the current route hint");
 }
@@ -859,7 +899,7 @@ requestUsageStatsPanel("deepseek-official");
 stopFirstOpener();
 if (openedBy.join(",") !== "second:opencode-go,first:deepseek-official") throw new Error(`panel opener lifecycle must target one newest mounted subscriber and then fall back: ${openedBy.join(",")}`);
 
-// Mount the real existing panel plus the pill and verify a click opens that
+// Mount the real existing panel plus the inline summary and verify a click opens that
 // panel with the current provider selected. Network and timers are inert test
 // doubles; production still uses the panel's existing refresh/cache path.
 const originalFetch = globalThis.fetch;
@@ -905,7 +945,7 @@ const panelTranslate = (key) => key === "orcarouter.choiceSuffix" ? "（赞助�
 await act(async () => {
 	integrationRenderer = TestRenderer.create(react.createElement(react.Fragment, {},
 		react.createElement(UsageStatsPanel, { wide: true, t: panelTranslate }),
-		react.createElement(CurrentSessionPillView, {
+		react.createElement(CurrentSessionInlineView, {
 			snapshot: { ...balancePillSnapshot, context: { ...pillContext, providerId: "opencode-go", accountId: "opencode-go" } },
 			translate: pillTranslate
 		})
@@ -913,17 +953,17 @@ await act(async () => {
 	await Promise.resolve();
 });
 await act(async () => {
-	integrationRenderer.root.findByProps({ "data-current-session-pill": true }).props.onClick();
+	integrationRenderer.root.findByProps({ "data-current-session-inline": true }).props.onClick();
 	await flushPanelEffects();
 });
-if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).length !== 1) throw new Error("pill click must open the existing account panel");
+if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).length !== 1) throw new Error("inline summary click must open the existing account panel");
 assert.equal(integrationRequests.filter((request) => request.path.includes("/integrations/orcarouter") && request.method === "GET").length, 1, "opening the panel must read the secret-free OrcaRouter integration status once");
 assert.equal(integrationRequests.some((request) => request.path.includes("/integrations/orcarouter") && request.method === "POST"), false, "opening the panel must never mutate OrcaRouter settings");
 const exportLinks = integrationRenderer.root.findAll((node) => typeof node.props?.["data-export-format"] === "string");
 assert.deepEqual(exportLinks.map((node) => node.props["data-export-format"]), ["daily-csv", "sessions-csv", "json"], "the panel must expose all three secret-free downloads without a new fetch loop");
 for (const link of exportLinks) if (link.type !== "a" || typeof link.props.download !== "string" || link.props.className !== "usg_exportLink") throw new Error("exports must be styled browser downloads");
 const selectedPicker = integrationRenderer.root.findByType("select");
-if (selectedPicker.props.value !== "opencode-go") throw new Error(`pill click must select its provider in the existing panel, got ${selectedPicker.props.value}`);
+if (selectedPicker.props.value !== "opencode-go") throw new Error(`inline summary click must select its provider in the existing panel, got ${selectedPicker.props.value}`);
 const providerOptionLabels = selectedPicker.props.children.map((option) => option.props.children);
 if (!providerOptionLabels.includes("OrcaRouter（赞助集成）")) throw new Error(`provider picker must expose the compact OrcaRouter sponsorship label, got ${JSON.stringify(providerOptionLabels)}`);
 assert.equal(selectedPicker.props.children.filter((option) => option.props.value === "orcarouter").length, 1, "an installed OrcaRouter must appear exactly once as a real provider");
@@ -1038,5 +1078,5 @@ assert.equal(failedRenderer.root.findAllByProps({ "data-orcarouter-action-error"
 await act(async () => { failedRenderer.unmount(); });
 globalThis.fetch = originalFetch;
 
-console.log("current-session pill rendering, switching, hook lifecycle, and request policy ok");
+console.log("current-session inline rendering, switching, hook lifecycle, and request policy ok");
 console.log("SMOKE TEST PASSED");

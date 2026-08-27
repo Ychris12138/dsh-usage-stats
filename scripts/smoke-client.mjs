@@ -153,6 +153,48 @@ const markup = renderToStaticMarkup(react.createElement(UsageStatsPanel, { wide:
 if (!markup.includes("用量/余额") && !markup.includes("panel.badge")) throw new Error("badge label missing from markup");
 console.log("render ok, markup length:", markup.length);
 
+const { OrcaRouterIntegrationCard, addOrcaRouterIntegration, loadOrcaRouterIntegration } = exports_;
+if ([OrcaRouterIntegrationCard, addOrcaRouterIntegration, loadOrcaRouterIntegration].some((entry) => typeof entry !== "function")) {
+	throw new Error("OrcaRouter integration exports are incomplete");
+}
+const orcaRequests = [];
+const orcaRequest = async (path, options) => {
+	orcaRequests.push([path, options]);
+	return { ok: true, integration: options === void 0
+		? { available: true, installed: false }
+		: { available: true, installed: true, added: true } };
+};
+assert.deepEqual(await loadOrcaRouterIntegration(orcaRequest), { available: true, installed: false });
+assert.deepEqual(await addOrcaRouterIntegration(orcaRequest), { available: true, installed: true, added: true });
+assert.equal(orcaRequests[0][0], "/api/usage-stats/integrations/orcarouter");
+assert.deepEqual(orcaRequests[1], ["/api/usage-stats/integrations/orcarouter", {
+	method: "POST",
+	headers: {
+		accept: "application/json",
+		"content-type": "application/json",
+		"x-dsh-usage-stats-action": "add-orcarouter"
+	},
+	body: "{}"
+}], "the explicit add must use the guarded non-simple POST contract");
+let cardAdds = 0;
+const cardMarkup = renderToStaticMarkup(react.createElement(OrcaRouterIntegrationCard, {
+	integration: { available: true, installed: false },
+	pending: false,
+	error: null,
+	translate: (key) => key,
+	onAdd: () => { cardAdds += 1; }
+}));
+if (!cardMarkup.includes("data-orcarouter-integration") || !cardMarkup.includes("orcarouter.add") || !cardMarkup.includes('rel="sponsored noopener noreferrer"')) {
+	throw new Error("the optional sponsored integration card must expose its explicit action and disclosure link semantics");
+}
+const cardElement = OrcaRouterIntegrationCard({
+	integration: { available: true, installed: false }, pending: false, error: null, translate: (key) => key, onAdd: () => { cardAdds += 1; }
+});
+const cardButton = cardElement.props.children.find((child) => child?.type === "button");
+cardButton.props.onClick();
+assert.equal(cardAdds, 1, "the provider preset may only be added by an explicit click");
+console.log("optional OrcaRouter integration request and card policy ok");
+
 // Apply against a stub client context.
 const registrations = [];
 const registeredEntries = [];
@@ -810,15 +852,23 @@ if (openedBy.join(",") !== "second:opencode-go,first:deepseek-official") throw n
 // doubles; production still uses the panel's existing refresh/cache path.
 const originalFetch = globalThis.fetch;
 const integrationRequests = [];
+const integrationRequestOptions = [];
 document.addEventListener = () => {};
 document.removeEventListener = () => {};
 window.setInterval = () => 1;
 window.clearInterval = () => {};
-globalThis.fetch = async (path) => {
+globalThis.fetch = async (path, options = {}) => {
 	integrationRequests.push(String(path));
+	integrationRequestOptions.push(options);
 	return {
 		ok: true,
 		json: async () => {
+			if (String(path).includes("/integrations/orcarouter")) return {
+				ok: true,
+				integration: options.method === "POST"
+					? { available: true, installed: true, added: true }
+					: { available: true, installed: false }
+			};
 			if (String(path).includes("/providers")) return {
 				ok: true,
 				providers: [
@@ -856,6 +906,18 @@ await act(async () => {
 	await Promise.resolve();
 });
 if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).length !== 1) throw new Error("pill click must open the existing account panel");
+const orcaCard = integrationRenderer.root.findByProps({ "data-orcarouter-integration": true });
+assert.equal(orcaCard.props["data-installed"], false);
+await act(async () => {
+	orcaCard.findByProps({ "data-orcarouter-add": true }).props.onClick();
+	await Promise.resolve();
+	await Promise.resolve();
+});
+assert.equal(integrationRenderer.root.findByProps({ "data-orcarouter-integration": true }).props["data-installed"], true, "successful explicit add must update the card in place");
+const orcaPostIndex = integrationRequests.findIndex((path, index) => path.includes("/integrations/orcarouter") && integrationRequestOptions[index]?.method === "POST");
+if (orcaPostIndex === -1 || integrationRequestOptions[orcaPostIndex].headers["x-dsh-usage-stats-action"] !== "add-orcarouter") {
+	throw new Error("the mounted panel must use the guarded OrcaRouter POST action");
+}
 const exportLinks = integrationRenderer.root.findAll((node) => typeof node.props?.["data-export-format"] === "string");
 assert.deepEqual(exportLinks.map((node) => node.props["data-export-format"]), ["daily-csv", "sessions-csv", "json"], "the panel must expose all three secret-free downloads without a new fetch loop");
 for (const link of exportLinks) if (link.type !== "a" || typeof link.props.download !== "string" || link.props.className !== "usg_exportLink") throw new Error("exports must be styled browser downloads");

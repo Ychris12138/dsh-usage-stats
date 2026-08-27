@@ -433,7 +433,7 @@ Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-rep
 | `GET` | `/api/usage-stats/export/sessions.csv` | secret-free session CSV |
 | `GET` | `/api/usage-stats/export.json` | versioned usage、budget、pricing provenance 与 account-safe JSON |
 | `GET` | `/api/usage-stats/integrations/orcarouter` | 仅返回 OrcaRouter preset 是否可写/已存在的 secret-free 布尔状态 |
-| `POST` | `/api/usage-stats/integrations/orcarouter` | 用户显式点击后，以 revision-guarded path mutation 幂等加入 preset；要求 `application/json` 与 `X-DSH-Usage-Stats-Action: add-orcarouter` |
+| `POST` | `/api/usage-stats/integrations/orcarouter` | 用户明确请求后，以 revision-guarded path mutation 幂等加入 preset；要求 `application/json` 与 `X-DSH-Usage-Stats-Action: add-orcarouter` |
 
 除上述 OrcaRouter POST 外，非 GET 返回 `405`；非回环请求返回 `403`。API JSON 使用 `Cache-Control: no-cache`；下载响应使用 `Cache-Control: no-store` 与固定文件名。
 

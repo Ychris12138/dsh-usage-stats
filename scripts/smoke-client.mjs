@@ -72,6 +72,13 @@ for (const forbidden of [
 ]) {
 	if (source.includes(forbidden)) throw new Error(`composer UI/runtime must be absent from the client bundle: ${forbidden}`);
 }
+const dayTokensRule = /\.usg_dayTokens\{([^}]*)\}/.exec(source)?.[1] ?? "";
+if (!dayTokensRule.includes("min-width:84px")) throw new Error("Last 14 days token column must retain an 84px minimum width (#75)");
+if (!dayTokensRule.includes("text-align:right")) throw new Error("Last 14 days token column must be right aligned (#75)");
+if (!dayTokensRule.includes("flex:none") || !dayTokensRule.includes("font-variant-numeric:tabular-nums")) throw new Error("Last 14 days token alignment must preserve the existing flex and numeric typography");
+if (/(?:^|;)width:84px(?:;|$)/.test(dayTokensRule)) throw new Error("Last 14 days token column must use min-width rather than a fixed width in narrow layouts");
+const dayDateRule = /\.usg_dayDate\{([^}]*)\}/.exec(source)?.[1] ?? "";
+if (!dayDateRule.includes("flex:0 1 104px") || !dayDateRule.includes("min-width:0") || !dayDateRule.includes("overflow:hidden")) throw new Error("the date column must shrink before the aligned token column can overflow a narrow panel");
 new Function(source)(); // executes the window.__ModuleLoader__.load call
 
 if (captured === null) throw new Error("loader did not capture the bundle");
@@ -367,6 +374,29 @@ if (!deepseekMarkup.includes("usg_accountCard") || !goMarkup.includes("usg_accou
 if (!deepseekMarkup.includes("data-account-mode=\"balance\"") || !deepseekMarkup.includes("DeepSeek") || deepseekMarkup.includes("progressbar")) throw new Error("DeepSeek must render only monetary balance data");
 if (!goMarkup.includes("data-account-mode=\"subscription\"") || !goMarkup.includes("OpenCode Go")) throw new Error("OpenCode Go must render the subscription account mode");
 if ((goMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !goMarkup.includes("width:12%")) throw new Error("OpenCode Go must render three quota meters");
+const renderOpenCodePercent = (usedPercent) => renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "opencode-go", displayName: "OpenCode Go", accountMode: "subscription", subscriptionId: "opencode-go" },
+	account: {
+		id: "opencode-go",
+		displayName: "OpenCode Go",
+		mode: "subscription",
+		status: "ok",
+		windows: [{ kind: "session", usedPercent, remainingPercent: 100 - usedPercent }]
+	},
+	accountLoading: false,
+	accountError: null,
+	translate: translateAccount,
+	onRetry: () => {}
+}));
+const hasQuotaText = (markup, value) => markup.includes(`>subscription.used:${value}<`);
+const preciseGoMarkup = renderOpenCodePercent(99.84);
+if (!hasQuotaText(preciseGoMarkup, "99.8")) throw new Error("OpenCode Go 99.84% must display as exactly 99.8% (#84)");
+if (!preciseGoMarkup.includes('aria-valuenow="99.84"') || !preciseGoMarkup.includes("width:99.84%")) throw new Error("OpenCode Go display precision must not mutate the progress-bar percentage");
+if (!hasQuotaText(renderOpenCodePercent(83.26), "83.3")) throw new Error("OpenCode Go quota display must round to one decimal place");
+if (!hasQuotaText(renderOpenCodePercent(99.85), "99.9")) throw new Error("OpenCode Go quota display must use decimal half-up rounding");
+const wholeGoMarkup = renderOpenCodePercent(100);
+if (!hasQuotaText(wholeGoMarkup, "100") || hasQuotaText(wholeGoMarkup, "100.0")) throw new Error("OpenCode Go integer quota must not gain a .0 suffix");
+if (!hasQuotaText(renderOpenCodePercent(80), "80")) throw new Error("OpenCode Go 80% quota must remain an integer without a .0 suffix");
 const invalidMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
 	provider: { id: "minimax", displayName: "MiniMax", accountMode: "subscription" },
 	account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [], reason: "all-addresses-unreachable" },

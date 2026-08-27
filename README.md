@@ -105,6 +105,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | --- | --- | --- | --- |
 | DeepSeek | 余额 | provider `apiKeyEnv` | `/user/balance` |
 | OpenRouter | 余额 | `OPENROUTER_MANAGEMENT_KEY` | `/api/v1/credits` |
+| OrcaRouter | 余额 | `ORCAROUTER_API_KEY` | `/v1/balance`（旧部署回退到账单摘要接口） |
 | Moonshot / Kimi API | 余额 | provider `apiKeyEnv` | `/v1/users/me/balance` |
 | OpenCode Go | 订阅 | `OPENCODE_GO_API_KEY` 或本地 `auth.json` | `/zen/go/v1/usage` |
 | Z.ai / 智谱 | 订阅 | `ZAI_API_KEY` | Coding Plan quota/subscription |
@@ -193,6 +194,8 @@ OPENROUTER_MANAGEMENT_KEY: sk-or-v1-your-management-key
 ```
 
 插件按 `total_credits - total_usage` 显示 OpenRouter 余额，并同时展示累计已用和总 credits。普通 Key 的 `/api/v1/key` 只描述单个 Key 的 spending limit，不会被当作账户余额。自定义引用可在 `monitors.openrouter` 中设置 `adapter: openrouter-balance` 与 `credentialRef`。
+
+OrcaRouter 优先读取其余额接口 `/v1/balance`，将 paid、free 和 promo credits 汇总为当前可用余额；旧部署没有该接口时，回退到官方文档提供的 OpenAI-compatible 账单摘要接口（订阅端点总额度 + usage 端点累计用量，按美分换算）。任一可用路径返回无法识别的数据时会显示明确的错误状态，不会把未知结果当作 0；无限额度哨兵值会显示为 `∞`，OrcaRouter 路由仍不参与本插件的模型价格估算。
 
 ### Token Plan 供应商
 

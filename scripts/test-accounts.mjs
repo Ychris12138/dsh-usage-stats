@@ -65,6 +65,7 @@ const deepseek = {
 		["openrouter-balance", "official"],
 		["moonshot-balance", "official"],
 		["zai-balance", "official"],
+		["orcarouter-balance", "official"],
 		["opencode-go", "official"],
 		["zai-token-plan", "official"],
 		["kimi-token-plan", "official"],
@@ -427,6 +428,62 @@ console.log("IPv4/IPv6 private-address classification ok");
 	assert.equal(account.balance.used, 25.75);
 	assert.equal(account.balance.total, 25.75);
 	console.log("OpenRouter management credential and zero balance contract ok");
+}
+
+{
+	const provider = { id: "orcarouter", displayName: "OrcaRouter", apiKeyEnv: "ORCAROUTER_API_KEY", baseURL: "https://api.orcarouter.ai/v1" };
+	const spec = resolveAccountSpec(provider, validateAccountConfig());
+	assert.equal(spec.adapter, "orcarouter-balance");
+	assert.equal(spec.mode, "balance");
+	const calls = [];
+	const account = await queryAccount(spec, credentials({ ORCAROUTER_API_KEY: "sk-orca-test" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), init });
+			assert.equal(init.headers.authorization, "Bearer sk-orca-test");
+			return jsonResponse({ object: "balance", unit: "USD", paid_balance: 1.25, free_credit: [{ model: "orcarouter/free", balance_usd: 6 }], promo_credits: [{ balance: 0.5, unit: "USD" }] });
+		}
+	});
+	assert.deepEqual(calls.map((call) => call.url), ["https://api.orcarouter.ai/v1/balance"]);
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 7.75);
+	assert.equal(account.balance.used, void 0);
+	assert.equal(account.balance.total, void 0);
+	assert.equal(account.balance.currency, "USD");
+	assert.equal(account.balance.expiresAt, null, "an access_until value of zero means no expiry");
+	assert.equal(JSON.stringify(account).includes("sk-orca-test"), false, "OrcaRouter credentials must not cross the account snapshot boundary");
+	console.log("OrcaRouter wallet account adapter ok");
+}
+
+{
+	const provider = { id: "orcarouter", displayName: "OrcaRouter", apiKeyEnv: "ORCAROUTER_API_KEY", baseURL: "https://api.orcarouter.ai/v1" };
+	const spec = resolveAccountSpec(provider, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ ORCAROUTER_API_KEY: "sk-orca-test" }), {
+		now: () => now,
+		fetch: async () => jsonResponse({ object: "balance", unit: "USD", paid_balance: 0, free_credit: [{ balance_usd: 6 }], promo_credits: [] })
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 6);
+	assert.equal(account.balance.unlimited, false);
+	console.log("OrcaRouter wallet account display semantics ok");
+}
+
+{
+	const provider = { id: "orcarouter", displayName: "OrcaRouter", apiKeyEnv: "ORCAROUTER_API_KEY", baseURL: "https://api.orcarouter.ai/v1" };
+	const spec = resolveAccountSpec(provider, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ ORCAROUTER_API_KEY: "sk-orca-test" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/balance")) return jsonResponse({}, 404);
+			if (String(url).endsWith("/subscription")) return jsonResponse({ soft_limit_usd: 12.5, hard_limit_usd: 12.5, system_hard_limit_usd: 12.5 });
+			return jsonResponse({ total_usage: 275 });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 9.75);
+	assert.equal(account.balance.used, 2.75);
+	assert.equal(account.balance.total, 12.5);
+	console.log("OrcaRouter OpenAI billing fallback account semantics ok");
 }
 
 {

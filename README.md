@@ -24,7 +24,7 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 | --- | --- | --- |
 | 💳 | 统一账户卡片 | API 供应商显示余额，Token Plan 显示分窗口额度；面板一次只呈现当前供应商 |
 | 📊 | Token 用量分析 | 今日、本月、累计、缓存命中率、月历热图，以及按日期/供应商/模型下钻 |
-| 💰 | 估算费用与预算 | 按事件时间匹配历史价格，提供当前会话、日/月与 session 维度费用；可选日/月预算预警 |
+| 💰 | 估算费用与预算 | 按事件时间匹配历史价格，提供日/月费用、session 级聚合及可选预算预警 |
 | 🔄 | 后台监测 | 账户按 active/detail/background 自适应刷新；间隔可配置或完全关闭，本地 Token 聚合保持独立运行 |
 | 🧩 | 可扩展适配器 | 支持 New API、Sub2API、通用余额模板，以及声明式 JSON Pointer 自定义查询 |
 | 📦 | 安全导出 | 提供 daily/session CSV 与版本化 JSON；Unicode、CSV 公式前缀和不完整费用均安全处理 |

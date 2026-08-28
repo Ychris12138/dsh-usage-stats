@@ -30,7 +30,7 @@ npm pack --json
 - [ ] Confirm a valid old cache is migrated/refolded and retains exact token totals.
 - [ ] Replace the cache with malformed JSON; confirm the plugin rebuilds from authoritative session events without blocking DSH startup.
 - [ ] Confirm existing account monitors remain compatible and no new provider/monitor is inserted into user configuration.
-- [ ] Confirm `display.currentSessionPill` defaults on and `false` removes the inline current-session summary without affecting the sidebar panel or issuing its account request.
+- [ ] Confirm legacy `display.currentSessionPill: true` and `false` configurations both start successfully and neither registers composer UI.
 - [ ] Confirm a persisted provider selection survives browser refresh and DSH restart; removing that provider clears the saved id and uses the existing fallback.
 
 ## 4. Export and security
@@ -45,8 +45,9 @@ npm pack --json
 
 - [ ] Test the latest supported `@deepseek-ai/dsh` Desktop/Web release candidate with an isolated profile.
 - [ ] Confirm DSH starts without `Failed to load plugins` or loader identity errors.
-- [ ] Confirm client bundle load, sidebar entry, panel open/close, provider switching, zero-chrome current-session summary, cost/budget states, and manual Retry.
-- [ ] Test light and dark themes; confirm a missing composer mount point degrades silently.
+- [ ] Confirm client bundle load, sidebar entry, panel open/close, provider switching, cost/budget states, and manual Retry.
+- [ ] At 700 / 500 / 400 / 320 px, confirm dsh-usage-stats registers no `conversation.input.*` component or composer DOM and leaves native Permission / Model / Context / Submit layout untouched. Record any remaining sub-400 px overlap as DSH host behavior rather than changing host controls from this plugin.
+- [ ] Test the sidebar action and panel in light and dark themes.
 - [ ] With `refresh.enabled: false`, confirm one first account fetch, no expiry-driven upstream requests, manual Retry, and a fresh fetch after provider configuration changes.
 - [ ] Recheck #53 only in an available enterprise proxy environment; record evidence, but do not infer a fix without reproduction.
 - [ ] Recheck #14 with a real MiniMax Coding Plan account: both current and weekly windows plus reset information. Record the sanitized response shape if it fails.

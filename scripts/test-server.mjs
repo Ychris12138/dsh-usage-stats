@@ -483,6 +483,7 @@ async function testConfigValidation(root) {
 	} }).value.monitors.relay;
 	assert.equal(legacyMonitor.adapter, "general");
 	assert.equal(legacyMonitor.credentialRef, "RELAY_KEY", "existing v0.2.10 monitor references must remain compatible");
+	assert.deepEqual(plugin.Config["~standard"].validate({ display: { currentSessionPill: true } }).value.display, { currentSessionPill: true }, "legacy enabled display key must remain an accepted no-op");
 	assert.deepEqual(plugin.Config["~standard"].validate({ display: { currentSessionPill: false } }).value.display, { currentSessionPill: false });
 	assert.deepEqual(plugin.Config["~standard"].validate({ budgets: { currency: "CNY", daily: 5, monthly: 100 } }).value.budgets, { currency: "CNY", daily: 5, monthly: 100 });
 	assert.match(plugin.Config["~standard"].validate({ display: { currentSessionPill: "no" } }).issues[0].message, /display\.currentSessionPill/);

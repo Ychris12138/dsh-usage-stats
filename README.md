@@ -162,21 +162,6 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 
 预算使用本机日历日/月边界：低于 80% 为正常，达到 80% 为 warning，达到 100% 为 critical。`daily` / `monthly` 必须是正数或 `null`；当前版本不做 FX 换算，因此预算货币与可靠价格货币不兼容时状态保持 unknown。
 
-### 界面设置 / Display settings
-
-模型选择器前方的 current-session inline summary 默认开启。只隐藏这段行内摘要、保留侧边栏账户面板时：
-
-```yaml
-- insert:
-    - id: usage-stats
-      name: "@ychris12138/dsh-usage-stats"
-      config:
-        display:
-          currentSessionPill: false
-```
-
-`display.currentSessionPill` 保留为 v0.3.0 兼容配置键；在当前版本中，它控制的是 zero-chrome current-session inline summary。设为 `false` 时摘要不会显示；首次 session-context 请求会在服务端立即短路，不会继续读取 account endpoint 或折叠 usage。
-
 面板的当前 provider 会保存在浏览器的命名空间 localStorage 中；刷新页面或重启 DSH 后恢复。若该 provider 已被删除，插件会清除旧值并使用原有的 DeepSeek/已配置 provider fallback。该选择不会写入 DSH 设置、服务端缓存或新 API。
 
 ### 余额型供应商
@@ -413,7 +398,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 
 Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-reported `usage`，不是本地估算。相同 turn/step 的后续样本会替换旧样本，并按 `provider/model` 归集。
 
-费用是明确标注的估算派生值：每个 usage 样本使用自己的事件时间、原始 provider/model 与四类 token bucket 匹配 `lib/pricing.js`；替换样本会先减去旧费用，再加入新费用。绝不会用“当前价格 × 历史累计 Token”。Current-session inline summary 使用 DSH 原生 `tokenUsage` projection 触发重读，并只在 projection 与服务端 session buckets 完全一致时显示服务端事件级估算。
+费用是明确标注的估算派生值：每个 usage 样本使用自己的事件时间、原始 provider/model 与四类 token bucket 匹配 `lib/pricing.js`；替换样本会先减去旧费用，再加入新费用。绝不会用“当前价格 × 历史累计 Token”。每个 session 的派生费用继续进入 `usage.sessions`、session CSV、JSON export 与整体 billing aggregation；插件不会向 DSH composer 注入 session UI。
 
 - 活跃会话只处理新追加事件。
 - 持久化会话使用不透明 revision；未变化时不重复读取日志。
@@ -460,6 +445,8 @@ node scripts/check-balance.mjs
 ## 兼容性与致谢 / Compatibility & credits
 
 当前 npm stable 为 `0.3.0`；`v0.3.0` 的完整发布门禁见 [`docs/release-checklist.md`](docs/release-checklist.md)，变更摘要见 [`docs/release-notes-v0.3.0.md`](docs/release-notes-v0.3.0.md)。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
+
+`display.currentSessionPill` 作为 v0.3.0 legacy boolean 配置键继续被接受，避免旧配置导致启动失败；当前客户端不再注册任何 composer UI，因此该键不再产生可见效果。`session-context` 服务端 API 暂时保留原有响应语义，供 v0.3.0 API compatibility 与后续集成使用。
 
 - [Javis603/token-monitor](https://github.com/Javis603/token-monitor)：参考多 provider 配额归一化与 Z.ai 限额解析。
 - [xiaoqi20/dsh-opencode-go-usage](https://github.com/xiaoqi20/dsh-opencode-go-usage)：参考 DSH 凭据接入、OpenCode `auth.json` 回退与 Bearer usage endpoint。

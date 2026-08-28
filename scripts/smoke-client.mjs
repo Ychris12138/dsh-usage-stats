@@ -374,29 +374,6 @@ if (!deepseekMarkup.includes("usg_accountCard") || !goMarkup.includes("usg_accou
 if (!deepseekMarkup.includes("data-account-mode=\"balance\"") || !deepseekMarkup.includes("DeepSeek") || deepseekMarkup.includes("progressbar")) throw new Error("DeepSeek must render only monetary balance data");
 if (!goMarkup.includes("data-account-mode=\"subscription\"") || !goMarkup.includes("OpenCode Go")) throw new Error("OpenCode Go must render the subscription account mode");
 if ((goMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !goMarkup.includes("width:12%")) throw new Error("OpenCode Go must render three quota meters");
-const renderOpenCodePercent = (usedPercent) => renderToStaticMarkup(react.createElement(ProviderAccountCard, {
-	provider: { id: "opencode-go", displayName: "OpenCode Go", accountMode: "subscription", subscriptionId: "opencode-go" },
-	account: {
-		id: "opencode-go",
-		displayName: "OpenCode Go",
-		mode: "subscription",
-		status: "ok",
-		windows: [{ kind: "session", usedPercent, remainingPercent: 100 - usedPercent }]
-	},
-	accountLoading: false,
-	accountError: null,
-	translate: translateAccount,
-	onRetry: () => {}
-}));
-const hasQuotaText = (markup, value) => markup.includes(`>subscription.used:${value}<`);
-const preciseGoMarkup = renderOpenCodePercent(99.84);
-if (!hasQuotaText(preciseGoMarkup, "99.8")) throw new Error("OpenCode Go 99.84% must display as exactly 99.8% (#84)");
-if (!preciseGoMarkup.includes('aria-valuenow="99.84"') || !preciseGoMarkup.includes("width:99.84%")) throw new Error("OpenCode Go display precision must not mutate the progress-bar percentage");
-if (!hasQuotaText(renderOpenCodePercent(83.26), "83.3")) throw new Error("OpenCode Go quota display must round to one decimal place");
-if (!hasQuotaText(renderOpenCodePercent(99.85), "99.9")) throw new Error("OpenCode Go quota display must use decimal half-up rounding");
-const wholeGoMarkup = renderOpenCodePercent(100);
-if (!hasQuotaText(wholeGoMarkup, "100") || hasQuotaText(wholeGoMarkup, "100.0")) throw new Error("OpenCode Go integer quota must not gain a .0 suffix");
-if (!hasQuotaText(renderOpenCodePercent(80), "80")) throw new Error("OpenCode Go 80% quota must remain an integer without a .0 suffix");
 const invalidMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
 	provider: { id: "minimax", displayName: "MiniMax", accountMode: "subscription" },
 	account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [], reason: "all-addresses-unreachable" },

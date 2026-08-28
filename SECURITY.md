@@ -12,7 +12,7 @@ Never include DeepSeek API keys, credentials files, session contents, raw logs, 
 
 ## Scope
 
-Security fixes target the latest version on the default branch. The nine HTTP endpoints are designed for direct loopback use only; exposing them through a reverse proxy is outside the supported security model unless the proxy adds authentication and access control.
+Security fixes target the latest version on the default branch. The nine read-only data endpoints and the optional OrcaRouter integration route are designed for direct loopback use only; exposing them through a reverse proxy is outside the supported security model unless the proxy adds authentication and access control. The integration route's `GET` response contains only availability booleans. Its `POST` performs the user's explicit, revision-guarded `llm-pi-ai.providers.orcarouter` path mutation and additionally requires JSON plus the non-simple `X-DSH-Usage-Stats-Action: add-orcarouter` header; plugin startup never performs this write.
 
 CSV and JSON exports are fixed, versioned projections of normalized usage and account-safe metadata. They do not serialize plugin/provider configuration, credential references or values, raw upstream responses, prompts, replies, or file paths. CSV text fields are quoted and guarded against spreadsheet-formula execution; incomplete monetary derivations remain blank/null.
 

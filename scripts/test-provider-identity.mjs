@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 
 import { resolveAccountSpec } from "../lib/accounts.js";
+import { estimateTokenCost } from "../lib/pricing.js";
 import { resolveProviderIdentity } from "../lib/provider-identity.js";
 import { applyUsageDelta, createUsageState, currentSessionContext } from "../lib/usage.js";
 
@@ -89,6 +90,31 @@ function assistantEvent(seq, providerId, model, time = Date.UTC(2026, 7, 23, 12,
 	assert.equal(absent.providerFamily, "unknown");
 	assert.equal(absent.accountAdapter, null);
 	assert.equal(absent.baseURL, null);
+}
+
+{
+	const canonical = resolveProviderIdentity(provider("orcarouter", "https://relay.invalid/v1"));
+	assert.deepEqual(canonical, {
+		routeId: "orcarouter",
+		displayName: "orcarouter",
+		providerFamily: "orcarouter",
+		accountAdapter: "orcarouter-balance",
+		pricingFamily: "unknown",
+		baseURL: "https://relay.invalid/v1",
+		confidence: "canonical-id"
+	});
+	const hostname = resolveProviderIdentity(provider("my-orca", "https://api.orcarouter.ai/v1"));
+	assert.equal(hostname.providerFamily, "orcarouter");
+	assert.equal(hostname.accountAdapter, "orcarouter-balance", "OrcaRouter uses its wallet/billing balance adapter");
+	assert.equal(hostname.pricingFamily, "unknown", "OrcaRouter routes must never inherit an upstream model's pricing");
+	assert.equal(hostname.confidence, "canonical-host");
+	assert.equal(estimateTokenCost({
+		identity: canonical,
+		model: "deepseek-v4-pro",
+		timestamp: Date.UTC(2026, 7, 27, 3, 0, 0),
+		buckets: { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+	}), null, "an upstream-looking model name must not opt an OrcaRouter route into DeepSeek pricing");
+	assert.equal(resolveAccountSpec(provider("orcarouter", "https://api.orcarouter.ai/v1")).adapter, "orcarouter-balance", "OrcaRouter uses its wallet/billing balance adapter");
 }
 
 {

@@ -56,12 +56,13 @@ function makeResponse() {
 	};
 }
 
-function makeContext({ sessions, persistence, routes, settings } = {}) {
+function makeContext({ sessions, persistence, routes, settings, diagnostics } = {}) {
 	return {
 		logger: { warn: () => {} },
 		credentials: { resolve: async () => void 0 },
 		webServer: { register: (entry) => { routes?.set(entry.path, entry.handler); return () => {}; } },
 		effect: (register) => register(),
+		__usageStatsDiagnostics: diagnostics,
 		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : name === "settings" ? settings : void 0
 	};
 }
@@ -323,6 +324,106 @@ async function testSessionContext(root) {
 	assert.equal(JSON.parse(ambiguous.body).error, "session-required");
 }
 
+async function testModernLiveSessionAPI(root) {
+	const plugin = await freshModule("modern-live-session", join(root, "modern-live-session"));
+	const routes = new Map();
+	const id = "modern-live-session";
+	let events = [routeEvent(0, "route-a", "modern-model"), usageEvent(1, 5)];
+	const snapshotCalls = [];
+	const session = {
+		id,
+		get seq() { return events.length; },
+		snapshotEvents(fromSeq = 0) {
+			snapshotCalls.push(fromSeq);
+			return Object.freeze(events.slice(fromSeq));
+		},
+		get events() {
+			throw new Error("modern DSH sessions must never read the removed events property");
+		}
+	};
+	const sessions = { list: () => [session], get: (sessionId) => sessionId === id ? session : void 0 };
+	const persistence = { listSnapshots: async () => [], list: async () => [] };
+	const context = makeContext({ sessions, persistence, routes });
+	const accounts = {
+		validate: async () => {},
+		providerViews: async () => [],
+		get: async () => null,
+		subscriptionAccounts: async () => []
+	};
+	await plugin.apply(context, {}, { disableBackgroundRefresh: true, accounts });
+
+	const first = await plugin.collectUsage(context);
+	assert.equal(first.total.tokens, 5, "modern snapshot API must fold the initial live tail");
+	assert.deepEqual(snapshotCalls, [0]);
+	const unchanged = await plugin.collectUsage(context);
+	assert.equal(unchanged.total.tokens, 5, "an unchanged modern live log must not refold");
+	assert.deepEqual(snapshotCalls, [0]);
+
+	events = [...events, usageEvent(2, 7)];
+	const appended = await plugin.collectUsage(context);
+	assert.equal(appended.total.tokens, 12, "modern snapshot API must fold only appended events");
+	assert.deepEqual(snapshotCalls, [0, 2]);
+
+	events = events.slice(0, 2);
+	const shrunk = await plugin.collectUsage(context);
+	assert.equal(shrunk.total.tokens, 5, "modern live log shrink must refold from seq zero");
+	assert.deepEqual(snapshotCalls, [0, 2, 0]);
+
+	const response = makeResponse();
+	await routes.get(plugin.USAGE_PATH)({
+		method: "GET",
+		url: plugin.USAGE_PATH,
+		headers: { host: "localhost:3080" },
+		socket: { remoteAddress: "127.0.0.1" }
+	}, response);
+	assert.equal(response.status, 200, "the HTTP usage route must support modern live sessions");
+	assert.equal(JSON.parse(response.body).total.tokens, 5);
+}
+
+async function testLegacyLiveSessionAPI(root) {
+	const plugin = await freshModule("legacy-live-session", join(root, "legacy-live-session"));
+	const routes = new Map();
+	const id = "legacy-live-session";
+	let events = [routeEvent(0, "route-a", "legacy-model"), usageEvent(1, 5)];
+	const session = {
+		id,
+		get seq() { return events.length; },
+		get events() { return events; }
+	};
+	const sessions = { list: () => [session], get: (sessionId) => sessionId === id ? session : void 0 };
+	const persistence = { listSnapshots: async () => [], list: async () => [] };
+	const context = makeContext({ sessions, persistence, routes });
+	const accounts = {
+		validate: async () => {},
+		providerViews: async () => [],
+		get: async () => null,
+		subscriptionAccounts: async () => []
+	};
+	await plugin.apply(context, {}, { disableBackgroundRefresh: true, accounts });
+
+	const first = await plugin.collectUsage(context);
+	assert.equal(first.total.tokens, 5, "legacy rc.7 session shape must fold the initial live log");
+	assert.equal(typeof session.snapshotEvents, "undefined", "the legacy regression fixture must not expose snapshotEvents");
+
+	events = [...events, usageEvent(2, 7)];
+	const appended = await plugin.collectUsage(context);
+	assert.equal(appended.total.tokens, 12, "legacy sessions must fold appended events");
+
+	events = events.slice(0, 2);
+	const shrunk = await plugin.collectUsage(context);
+	assert.equal(shrunk.total.tokens, 5, "legacy live log shrink must refold from seq zero");
+
+	const response = makeResponse();
+	await routes.get(plugin.USAGE_PATH)({
+		method: "GET",
+		url: plugin.USAGE_PATH,
+		headers: { host: "localhost:3080" },
+		socket: { remoteAddress: "127.0.0.1" }
+	}, response);
+	assert.equal(response.status, 200, "the HTTP usage route must support rc.7 legacy live sessions");
+	assert.equal(JSON.parse(response.body).total.tokens, 5);
+}
+
 async function testV4CacheUpgradeRefoldsBilling(root) {
 	const home = join(root, "v4-cache-upgrade");
 	const storage = join(home, "storages");
@@ -416,6 +517,36 @@ async function testPricingFingerprintInvalidatesDerivedCosts(root) {
 	const rewritten = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
 	assert.notEqual(rewritten.pricingFingerprint, JSON.stringify(oldFingerprint));
 	assert.equal(rewritten.pricingIdentityCutoffAll, null, "catalog-only changes must not invent a provider identity cutoff");
+}
+
+async function testPricingFingerprintInvalidationWritesWithoutLive(root) {
+	const home = join(root, "pricing-fingerprint-no-live");
+	const storage = join(home, "storages");
+	await mkdir(storage, { recursive: true });
+	const oldFingerprint = pricingFingerprint({
+		providers: [{ id: "deepseek-official", displayName: "DeepSeek", baseURL: "https://api.deepseek.com" }],
+		config: { monitors: {} }
+	});
+	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
+		version: 5,
+		pricingFingerprint: oldFingerprint,
+		sessions: {}
+	}), "utf8");
+	const plugin = await freshModule("pricing-fingerprint-no-live", home);
+	const diagnostics = zeroDiagnostics();
+	const context = makeContext({
+		sessions: { list: () => [] },
+		persistence: {
+			listSnapshots: async () => { throw new Error("UI invalidation must not scan persisted sessions"); },
+			list: async () => { throw new Error("UI invalidation must not list persisted sessions"); }
+		},
+		settings: { get: (name) => name === "llm-deepseek" ? { baseURL: "https://relay.invalid/v1" } : void 0 },
+		diagnostics
+	});
+	await plugin.collectUsage(context, { monitors: {} }, { scanPersisted: false });
+	const rewritten = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
+	assert.notEqual(rewritten.pricingFingerprint, oldFingerprint, "a runtime pricing identity change must invalidate the disk fingerprint without live sessions");
+	assert.equal(diagnostics.cacheWrites, 1, "pricing invalidation must be persisted even when no session is attached");
 }
 
 async function testRuntimeProviderPricingIdentityChange(root) {
@@ -755,9 +886,149 @@ async function testDisabledAccountRefresh(root) {
 	assert.notEqual(schedulerCleanup, void 0, "usage aggregation lifecycle must remain registered when account refresh is disabled");
 	await schedulerCleanup.ready;
 	assert.equal(adaptiveCalls, 0, "disabled mode must not start the adaptive account scheduler");
-	const cache = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
-	assert.equal(cache.version, 5, "the surviving usage lifecycle must still fold and persist usage");
+	assert.equal(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8").catch(() => null), null, "an unchanged empty collection must not create a cache write");
 	await schedulerCleanup();
+}
+
+function zeroDiagnostics() {
+	return {
+		listSnapshots: 0,
+		list: 0,
+		readFrom: 0,
+		aggregateRebuilds: 0,
+		cacheWrites: 0
+	};
+}
+
+async function testUsageScanDedup(root) {
+	const request = (path) => ({
+		method: "GET",
+		url: path,
+		headers: { host: "localhost:3080" },
+		socket: { remoteAddress: "127.0.0.1" }
+	});
+
+	// H1: warm cache + ten UI polls must not enumerate or read persisted logs,
+	// rebuild the aggregate, or write the cache again.
+	{
+		const plugin = await freshModule("scan-h1", join(root, "scan-h1"));
+		const routes = new Map();
+		const diagnostics = zeroDiagnostics();
+		const persistence = {
+			listSnapshots: async () => [{ header: { id: "warm-persisted" }, revision: "r1" }],
+			list: async () => [],
+			readFrom: async () => ({ events: [usageEvent(1, 10)] })
+		};
+		const accounts = { validate: async () => {}, providerViews: async () => [], get: async () => null, subscriptionAccounts: async () => [] };
+		const context = makeContext({
+			sessions: { list: () => [] }, persistence, routes, diagnostics,
+			settings: { get: () => void 0 }
+		});
+		await plugin.apply(context, {}, { disableBackgroundRefresh: true, accounts });
+		await plugin.collectUsage(context);
+		Object.keys(diagnostics).forEach((key) => { diagnostics[key] = 0; });
+		for (let index = 0; index < 10; index += 1) {
+			const response = makeResponse();
+			await routes.get(plugin.USAGE_PATH)(request(plugin.USAGE_PATH), response);
+			assert.equal(response.status, 200);
+			assert.equal(JSON.parse(response.body).total.tokens, 10);
+		}
+		assert.deepEqual(diagnostics, zeroDiagnostics(), "warm UI polls must be read-only against persisted state");
+	}
+
+	// H2: one live append is folded from the tail only and causes exactly one
+	// aggregate rebuild and one atomic cache write.
+	{
+		const plugin = await freshModule("scan-h2", join(root, "scan-h2"));
+		const routes = new Map();
+		const diagnostics = zeroDiagnostics();
+		let events = [usageEvent(0, 5)];
+		const session = { id: "live-append", get events() { return events; } };
+		const persistence = { listSnapshots: async () => [], list: async () => [] };
+		const accounts = { validate: async () => {}, providerViews: async () => [], get: async () => null, subscriptionAccounts: async () => [] };
+		const context = makeContext({ sessions: { list: () => [session] }, persistence, routes, diagnostics, settings: { get: () => void 0 } });
+		await plugin.apply(context, {}, { disableBackgroundRefresh: true, accounts });
+		assert.equal((await plugin.collectUsage(context)).total.tokens, 5);
+		Object.keys(diagnostics).forEach((key) => { diagnostics[key] = 0; });
+		events = [...events, usageEvent(1, 7)];
+		const response = makeResponse();
+		await routes.get(plugin.USAGE_PATH)(request(plugin.USAGE_PATH), response);
+		assert.equal(response.status, 200);
+		assert.equal(JSON.parse(response.body).total.tokens, 12);
+		assert.deepEqual(diagnostics, {
+			listSnapshots: 0,
+			list: 0,
+			readFrom: 0,
+			aggregateRebuilds: 1,
+			cacheWrites: 1
+		}, "a live append must not trigger a persisted scan");
+	}
+
+	// H3/H4: a large unchanged snapshot set is cheap, while one changed
+	// revision does one read/rebuild/write and preserves exact totals.
+	{
+		const plugin = await freshModule("scan-large", join(root, "scan-large"));
+		const diagnostics = zeroDiagnostics();
+		const ids = Array.from({ length: 10_000 }, (_, index) => `persisted-${index}`);
+		const revisions = new Map(ids.map((id) => [id, "r1"]));
+		const persistence = {
+			listSnapshots: async () => ids.map((id) => ({ header: { id }, revision: revisions.get(id) })),
+			list: async () => [],
+			readFrom: async (id) => revisions.get(id) === "r2" ? { events: [usageEvent(1, 7)] } : { events: [] }
+		};
+		const context = makeContext({ sessions: { list: () => [] }, persistence, diagnostics, settings: { get: () => void 0 } });
+		assert.equal((await plugin.collectUsage(context)).total.tokens, 0);
+		Object.keys(diagnostics).forEach((key) => { diagnostics[key] = 0; });
+		assert.equal((await plugin.collectUsage(context)).total.tokens, 0);
+		assert.deepEqual(diagnostics, {
+			listSnapshots: 1,
+			list: 0,
+			readFrom: 0,
+			aggregateRebuilds: 0,
+			cacheWrites: 0
+		}, "ten thousand unchanged snapshots must not rebuild or write");
+
+		revisions.set("persisted-0", "r2");
+		Object.keys(diagnostics).forEach((key) => { diagnostics[key] = 0; });
+		const changed = await plugin.collectUsage(context);
+		assert.equal(changed.total.tokens, 7);
+		assert.deepEqual(diagnostics, {
+			listSnapshots: 1,
+			list: 0,
+			readFrom: 1,
+			aggregateRebuilds: 1,
+			cacheWrites: 1
+		}, "one changed revision must perform one read/rebuild/write");
+	}
+}
+
+async function testScanModeSingleFlight(root) {
+	const collectPair = async (label, firstMode, secondMode) => {
+		const plugin = await freshModule(`scan-lock-${label}`, join(root, `scan-lock-${label}`));
+		const diagnostics = zeroDiagnostics();
+		const persistence = {
+			listSnapshots: async () => [],
+			list: async () => [],
+			readFrom: async () => ({ events: [] })
+		};
+		const context = makeContext({
+			sessions: { list: () => [] },
+			persistence,
+			diagnostics,
+			settings: { get: () => void 0 }
+		});
+		const first = plugin.collectUsage(context, { monitors: {} }, { scanPersisted: firstMode });
+		const second = plugin.collectUsage(context, { monitors: {} }, { scanPersisted: secondMode });
+		await Promise.all([first, second]);
+		assert.equal(diagnostics.listSnapshots, 1, `${label}: exactly one full collection must enumerate persisted snapshots`);
+	};
+
+	// A full refresh arriving behind a live-only UI request must wait for the
+	// first run and then execute its own persisted pass.
+	await collectPair("live-first", false, true);
+	// A live-only request arriving behind a full refresh may share the full run
+	// and must not trigger a second persisted enumeration.
+	await collectPair("full-first", true, false);
 }
 
 async function testPersistedToLive(root) {
@@ -879,8 +1150,11 @@ try {
 	await testRouteFence(root);
 	await testOrcaRouterIntegrationRoute(root);
 	await testSessionContext(root);
+	await testModernLiveSessionAPI(root);
+	await testLegacyLiveSessionAPI(root);
 	await testV4CacheUpgradeRefoldsBilling(root);
 	await testPricingFingerprintInvalidatesDerivedCosts(root);
+	await testPricingFingerprintInvalidationWritesWithoutLive(root);
 	await testRuntimeProviderPricingIdentityChange(root);
 	await testConfigValidation(root);
 	await testUsageBillingWire(root);
@@ -889,6 +1163,8 @@ try {
 	await testLegacyZaiSubscriptionId(root);
 	await testBackgroundRefresh(root);
 	await testDisabledAccountRefresh(root);
+	await testUsageScanDedup(root);
+	await testScanModeSingleFlight(root);
 	await testPersistedToLive(root);
 	await testRevisionRewrite(root);
 	await testFallbackIncremental(root);

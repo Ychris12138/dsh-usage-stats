@@ -323,6 +323,62 @@ async function testSessionContext(root) {
 	assert.equal(JSON.parse(ambiguous.body).error, "session-required");
 }
 
+async function testModernLiveSessionAPI(root) {
+	const plugin = await freshModule("modern-live-session", join(root, "modern-live-session"));
+	const routes = new Map();
+	const id = "modern-live-session";
+	let events = [routeEvent(0, "route-a", "modern-model"), usageEvent(1, 5)];
+	const snapshotCalls = [];
+	const session = {
+		id,
+		get seq() { return events.length; },
+		snapshotEvents(fromSeq = 0) {
+			snapshotCalls.push(fromSeq);
+			return Object.freeze(events.slice(fromSeq));
+		},
+		get events() {
+			throw new Error("modern DSH sessions must never read the removed events property");
+		}
+	};
+	const sessions = { list: () => [session], get: (sessionId) => sessionId === id ? session : void 0 };
+	const persistence = { listSnapshots: async () => [], list: async () => [] };
+	const context = makeContext({ sessions, persistence, routes });
+	const accounts = {
+		validate: async () => {},
+		providerViews: async () => [],
+		get: async () => null,
+		subscriptionAccounts: async () => []
+	};
+	await plugin.apply(context, {}, { disableBackgroundRefresh: true, accounts });
+
+	const first = await plugin.collectUsage(context);
+	assert.equal(first.total.tokens, 5, "modern snapshot API must fold the initial live tail");
+	assert.deepEqual(snapshotCalls, [0]);
+	const unchanged = await plugin.collectUsage(context);
+	assert.equal(unchanged.total.tokens, 5, "an unchanged modern live log must not refold");
+	assert.deepEqual(snapshotCalls, [0]);
+
+	events = [...events, usageEvent(2, 7)];
+	const appended = await plugin.collectUsage(context);
+	assert.equal(appended.total.tokens, 12, "modern snapshot API must fold only appended events");
+	assert.deepEqual(snapshotCalls, [0, 2]);
+
+	events = events.slice(0, 2);
+	const shrunk = await plugin.collectUsage(context);
+	assert.equal(shrunk.total.tokens, 5, "modern live log shrink must refold from seq zero");
+	assert.deepEqual(snapshotCalls, [0, 2, 0]);
+
+	const response = makeResponse();
+	await routes.get(plugin.USAGE_PATH)({
+		method: "GET",
+		url: plugin.USAGE_PATH,
+		headers: { host: "localhost:3080" },
+		socket: { remoteAddress: "127.0.0.1" }
+	}, response);
+	assert.equal(response.status, 200, "the HTTP usage route must support modern live sessions");
+	assert.equal(JSON.parse(response.body).total.tokens, 5);
+}
+
 async function testV4CacheUpgradeRefoldsBilling(root) {
 	const home = join(root, "v4-cache-upgrade");
 	const storage = join(home, "storages");
@@ -879,6 +935,7 @@ try {
 	await testRouteFence(root);
 	await testOrcaRouterIntegrationRoute(root);
 	await testSessionContext(root);
+	await testModernLiveSessionAPI(root);
 	await testV4CacheUpgradeRefoldsBilling(root);
 	await testPricingFingerprintInvalidatesDerivedCosts(root);
 	await testRuntimeProviderPricingIdentityChange(root);

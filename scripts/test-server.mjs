@@ -380,6 +380,50 @@ async function testModernLiveSessionAPI(root) {
 	assert.equal(JSON.parse(response.body).total.tokens, 5);
 }
 
+async function testLegacyLiveSessionAPI(root) {
+	const plugin = await freshModule("legacy-live-session", join(root, "legacy-live-session"));
+	const routes = new Map();
+	const id = "legacy-live-session";
+	let events = [routeEvent(0, "route-a", "legacy-model"), usageEvent(1, 5)];
+	const session = {
+		id,
+		get seq() { return events.length; },
+		get events() { return events; }
+	};
+	const sessions = { list: () => [session], get: (sessionId) => sessionId === id ? session : void 0 };
+	const persistence = { listSnapshots: async () => [], list: async () => [] };
+	const context = makeContext({ sessions, persistence, routes });
+	const accounts = {
+		validate: async () => {},
+		providerViews: async () => [],
+		get: async () => null,
+		subscriptionAccounts: async () => []
+	};
+	await plugin.apply(context, {}, { disableBackgroundRefresh: true, accounts });
+
+	const first = await plugin.collectUsage(context);
+	assert.equal(first.total.tokens, 5, "legacy rc.7 session shape must fold the initial live log");
+	assert.equal(typeof session.snapshotEvents, "undefined", "the legacy regression fixture must not expose snapshotEvents");
+
+	events = [...events, usageEvent(2, 7)];
+	const appended = await plugin.collectUsage(context);
+	assert.equal(appended.total.tokens, 12, "legacy sessions must fold appended events");
+
+	events = events.slice(0, 2);
+	const shrunk = await plugin.collectUsage(context);
+	assert.equal(shrunk.total.tokens, 5, "legacy live log shrink must refold from seq zero");
+
+	const response = makeResponse();
+	await routes.get(plugin.USAGE_PATH)({
+		method: "GET",
+		url: plugin.USAGE_PATH,
+		headers: { host: "localhost:3080" },
+		socket: { remoteAddress: "127.0.0.1" }
+	}, response);
+	assert.equal(response.status, 200, "the HTTP usage route must support rc.7 legacy live sessions");
+	assert.equal(JSON.parse(response.body).total.tokens, 5);
+}
+
 async function testV4CacheUpgradeRefoldsBilling(root) {
 	const home = join(root, "v4-cache-upgrade");
 	const storage = join(home, "storages");
@@ -958,6 +1002,35 @@ async function testUsageScanDedup(root) {
 	}
 }
 
+async function testScanModeSingleFlight(root) {
+	const collectPair = async (label, firstMode, secondMode) => {
+		const plugin = await freshModule(`scan-lock-${label}`, join(root, `scan-lock-${label}`));
+		const diagnostics = zeroDiagnostics();
+		const persistence = {
+			listSnapshots: async () => [],
+			list: async () => [],
+			readFrom: async () => ({ events: [] })
+		};
+		const context = makeContext({
+			sessions: { list: () => [] },
+			persistence,
+			diagnostics,
+			settings: { get: () => void 0 }
+		});
+		const first = plugin.collectUsage(context, { monitors: {} }, { scanPersisted: firstMode });
+		const second = plugin.collectUsage(context, { monitors: {} }, { scanPersisted: secondMode });
+		await Promise.all([first, second]);
+		assert.equal(diagnostics.listSnapshots, 1, `${label}: exactly one full collection must enumerate persisted snapshots`);
+	};
+
+	// A full refresh arriving behind a live-only UI request must wait for the
+	// first run and then execute its own persisted pass.
+	await collectPair("live-first", false, true);
+	// A live-only request arriving behind a full refresh may share the full run
+	// and must not trigger a second persisted enumeration.
+	await collectPair("full-first", true, false);
+}
+
 async function testPersistedToLive(root) {
 	const plugin = await freshModule("transition", join(root, "transition"));
 	const id = "transition-session";
@@ -1078,6 +1151,7 @@ try {
 	await testOrcaRouterIntegrationRoute(root);
 	await testSessionContext(root);
 	await testModernLiveSessionAPI(root);
+	await testLegacyLiveSessionAPI(root);
 	await testV4CacheUpgradeRefoldsBilling(root);
 	await testPricingFingerprintInvalidatesDerivedCosts(root);
 	await testPricingFingerprintInvalidationWritesWithoutLive(root);
@@ -1090,6 +1164,7 @@ try {
 	await testBackgroundRefresh(root);
 	await testDisabledAccountRefresh(root);
 	await testUsageScanDedup(root);
+	await testScanModeSingleFlight(root);
 	await testPersistedToLive(root);
 	await testRevisionRewrite(root);
 	await testFallbackIncremental(root);

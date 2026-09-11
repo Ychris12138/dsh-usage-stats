@@ -401,7 +401,9 @@ Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-rep
 费用是明确标注的估算派生值：每个 usage 样本使用自己的事件时间、原始 provider/model 与四类 token bucket 匹配 `lib/pricing.js`；替换样本会先减去旧费用，再加入新费用。绝不会用“当前价格 × 历史累计 Token”。每个 session 的派生费用继续进入 `usage.sessions`、session CSV、JSON export 与整体 billing aggregation；插件不会向 DSH composer 注入 session UI。
 
 - 活跃会话只处理新追加事件。
-- 持久化会话使用不透明 revision；未变化时不重复读取日志。
+- 持久化会话使用不透明 revision（Harness 的 `list()`；旧版 `listSnapshots()` 仍兼容）；未变化时不重复读取日志。
+- 持久化日志通过 Harness 的 `open(id, "read")` 读句柄读取（旧版 `readFrom()` 仍兼容），每次读完立即关闭句柄。
+- 已退出 live store 的会话（例如已结束的 sub-agent 运行）在下一次聚合时按 id 补读持久化日志，其 Token 计入日/模型总量，无需等待后台全量扫描。
 - seq 缺口、日志重写或 live/persisted 切换时完整重折叠该会话。
 - 聚合采用 single-flight，并在同一临界区原子保存缓存。
 - `validate:live` 会逐会话比较 raw artifact、`session.history`、插件端点与官方 token projection；缺文件或不一致会返回非零。
@@ -445,6 +447,8 @@ node scripts/check-balance.mjs
 ## 兼容性与致谢 / Compatibility & credits
 
 当前 npm stable 为 `0.3.2`；`v0.3.2` 的完整发布门禁见 [`docs/release-checklist.md`](docs/release-checklist.md)，变更摘要见 [`docs/release-notes-v0.3.2.md`](docs/release-notes-v0.3.2.md)。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
+
+持久化与活跃会话的读取按**能力探测**分支，不按版本号判断，因此 `>= 0.1.0-rc.6` 的支持范围未变：`0.1.3-alpha.1`–`0.1.5-rc.2` 用 `list()` 快照 + `open(id, "read")` 读句柄，`0.1.0-rc.7`–`0.1.2-rc.1` 用 `listSnapshots()` + `readFrom()`；活跃会话同时支持 `seq`/`snapshotEvents()` 与旧版 `events` 数组。`session/disposed` 在该范围内均存在（缺少它时已结束会话改由后台全量扫描补读）。缓存格式仍为 `version: 5`，旧缓存直接复用并原地重折叠。
 
 `display.currentSessionPill` 作为 v0.3.0 legacy boolean 配置键继续被接受，避免旧配置导致启动失败；当前客户端不再注册任何 composer UI，因此该键不再产生可见效果。`session-context` 服务端 API 暂时保留原有响应语义，供 v0.3.0 API compatibility 与后续集成使用。
 

@@ -125,13 +125,26 @@ async function fetchAllEvents(sessionId) {
 // ---- collect raw session files, keyed by session id ----
 const dshHome = process.env.DSH_HOME ?? join(homedir(), ".dsh");
 const sessionsRoot = join(dshHome, "sessions");
+// Canonical generation filenames: `session.jsonl` (v0) and `session.v<N>.jsonl`
+// (v1+), each optionally `.zstd`. A migrated session directory keeps its older
+// generations, so exactly one artifact per directory is read: the highest
+// version, which is the committed one.
+const CANONICAL_LOG_FILENAME = /^session(\.v([1-9]\d*))?\.jsonl(\.zstd)?$/;
 const files = [];
 (function walk(dir) {
+	const generations = [];
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
 		const full = join(dir, entry.name);
-		if (entry.isDirectory()) walk(full);
-		else if (entry.name === "session.jsonl" || entry.name === "session.jsonl.zstd") files.push(full);
+		if (entry.isDirectory()) {
+			walk(full);
+			continue;
+		}
+		const match = CANONICAL_LOG_FILENAME.exec(entry.name);
+		if (match !== null) generations.push([Number(match[2] ?? 0), full]);
 	}
+	if (generations.length === 0) return;
+	generations.sort((left, right) => right[0] - left[0]);
+	files.push(generations[0][1]);
 })(sessionsRoot);
 console.log(`raw session files: ${files.length}`);
 for (const file of files) console.log("  ", file.replace(dshHome, "<DSH_HOME>"));

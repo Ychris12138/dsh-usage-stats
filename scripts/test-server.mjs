@@ -56,14 +56,44 @@ function makeResponse() {
 	};
 }
 
-function makeContext({ sessions, persistence, routes, settings, diagnostics } = {}) {
+function makeContext({ sessions, persistence, routes, settings, diagnostics, listeners } = {}) {
 	return {
 		logger: { warn: () => {} },
 		credentials: { resolve: async () => void 0 },
 		webServer: { register: (entry) => { routes?.set(entry.path, entry.handler); return () => {}; } },
 		effect: (register) => register(),
+		on: (name, listener) => {
+			listeners?.set(name, listener);
+			return () => listeners?.delete(name);
+		},
 		__usageStatsDiagnostics: diagnostics,
 		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : name === "settings" ? settings : void 0
+	};
+}
+
+/**
+ * Persistence backend exposing the current DSH session-persistence API:
+ * `list()` snapshots carrying `{ header, revision }` plus read handles opened
+ * through `open(id, "read")`. `reads` records every handle read, `opened` and
+ * `closed` count handle lifetimes.
+ */
+function currentPersistenceApi(logs, revisions, counters = { opened: 0, closed: 0, reads: [] }) {
+	return {
+		counters,
+		api: {
+			list: async () => [...revisions].map(([id, revision]) => ({ header: { id }, revision })),
+			open: async (id) => {
+				counters.opened += 1;
+				return {
+					id,
+					read: async (offset = 0) => {
+						counters.reads.push([id, offset]);
+						return { eventState: "detached", events: (logs.get(id) ?? []).filter((event) => event.seq >= offset) };
+					},
+					close: async () => { counters.closed += 1; }
+				};
+			}
+		}
 	};
 }
 
@@ -894,7 +924,7 @@ function zeroDiagnostics() {
 	return {
 		listSnapshots: 0,
 		list: 0,
-		readFrom: 0,
+		persistedReads: 0,
 		aggregateRebuilds: 0,
 		cacheWrites: 0
 	};
@@ -958,7 +988,7 @@ async function testUsageScanDedup(root) {
 		assert.deepEqual(diagnostics, {
 			listSnapshots: 0,
 			list: 0,
-			readFrom: 0,
+			persistedReads: 0,
 			aggregateRebuilds: 1,
 			cacheWrites: 1
 		}, "a live append must not trigger a persisted scan");
@@ -983,7 +1013,7 @@ async function testUsageScanDedup(root) {
 		assert.deepEqual(diagnostics, {
 			listSnapshots: 1,
 			list: 0,
-			readFrom: 0,
+			persistedReads: 0,
 			aggregateRebuilds: 0,
 			cacheWrites: 0
 		}, "ten thousand unchanged snapshots must not rebuild or write");
@@ -995,7 +1025,7 @@ async function testUsageScanDedup(root) {
 		assert.deepEqual(diagnostics, {
 			listSnapshots: 1,
 			list: 0,
-			readFrom: 1,
+			persistedReads: 1,
 			aggregateRebuilds: 1,
 			cacheWrites: 1
 		}, "one changed revision must perform one read/rebuild/write");
@@ -1145,6 +1175,133 @@ async function testZeroUsageRowsFiltered(root) {
 	assert.equal(day.models[0].model, "unknown/deepseek-chat");
 }
 
+async function testCurrentPersistenceApi(root) {
+	const plugin = await freshModule("current-persistence", join(root, "current-persistence"));
+	const parentLog = [usageEvent(0, 100)];
+	const settledLog = [usageEvent(0, 7), usageEvent(1, 11)];
+	const logs = new Map([["settled-subagent", settledLog]]);
+	const revisions = new Map([["settled-subagent", "r1"]]);
+	const { api, counters } = currentPersistenceApi(logs, revisions);
+	const sessions = {
+		list: () => [{
+			id: "parent",
+			get seq() { return parentLog.length; },
+			snapshotEvents: (fromSeq = 0) => parentLog.slice(fromSeq)
+		}]
+	};
+	const diagnostics = zeroDiagnostics();
+	const context = makeContext({ sessions, persistence: api, diagnostics });
+	// A settled sub-agent is never live: `list()`/`open()` are the only path to
+	// its usage, and the dropped `listSnapshots`/`readFrom` pair must not be
+	// required for it.
+	const usage = await plugin.collectUsage(context);
+	assert.equal(usage.total.tokens, 118, "a settled sub-agent's stored usage must reach the daily totals");
+	assert.deepEqual(usage.sessions.map((session) => [session.sessionId, session.tokens]), [["parent", 100], ["settled-subagent", 18]]);
+	assert.deepEqual(counters.reads, [["settled-subagent", 0]], "the first fold reads the stored log from seq 0");
+	assert.equal(counters.opened, 1, "one stored log read opens exactly one handle");
+	assert.equal(counters.closed, 1, "every opened read handle must be closed");
+
+	Object.keys(diagnostics).forEach((key) => { diagnostics[key] = 0; });
+	const unchanged = await plugin.collectUsage(context);
+	assert.equal(unchanged.total.tokens, 118, "an unchanged stored log must keep its folded totals");
+	assert.deepEqual(counters.reads, [["settled-subagent", 0]], "an unchanged opaque revision must skip the stored read");
+	assert.deepEqual(diagnostics, {
+		listSnapshots: 0,
+		list: 1,
+		persistedReads: 0,
+		aggregateRebuilds: 0,
+		cacheWrites: 0
+	}, "an unchanged full scan must neither read a log nor rebuild or write");
+
+	settledLog.push(usageEvent(2, 13));
+	revisions.set("settled-subagent", "r2");
+	const appended = await plugin.collectUsage(context);
+	assert.equal(appended.total.tokens, 131, "new stored events must fold incrementally");
+	assert.deepEqual(counters.reads.at(-1), ["settled-subagent", 1], "a changed revision re-reads from the folded cursor, not from seq 0");
+	assert.equal(counters.closed, 2, "the incremental read closes its own handle");
+}
+
+async function testSettledSessionRefresh(root) {
+	const plugin = await freshModule("settled-refresh", join(root, "settled-refresh"));
+	const listeners = new Map();
+	const parentLog = [usageEvent(0, 100)];
+	const childLog = [usageEvent(0, 7)];
+	const orphanLog = [usageEvent(0, 13)];
+	const logs = new Map([["child", childLog]]);
+	const revisions = new Map([["child", "r1"]]);
+	const { api, counters } = currentPersistenceApi(logs, revisions);
+	let liveSessions = [
+		{ id: "parent", get seq() { return parentLog.length; }, snapshotEvents: (fromSeq = 0) => parentLog.slice(fromSeq) },
+		{ id: "child", get seq() { return childLog.length; }, snapshotEvents: (fromSeq = 0) => childLog.slice(fromSeq) }
+	];
+	const context = makeContext({ sessions: { list: () => liveSessions }, persistence: api, listeners });
+	await plugin.apply(context, {}, { disableBackgroundRefresh: true, accounts: { validate: async () => {}, providerViews: async () => [], get: async () => null, subscriptionAccounts: async () => [] } });
+
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 107, "a running sub-agent folds through the live store");
+	assert.equal(counters.reads.length, 0, "a running sub-agent needs no stored read");
+
+	// The child settles: its last event lands in storage, it leaves the live
+	// store, and the harness announces the disposal. A second session that was
+	// never observed live stands in for a run that started and finished between
+	// two panel requests.
+	childLog.push(usageEvent(1, 11));
+	revisions.set("child", "r2");
+	logs.set("orphan", orphanLog);
+	revisions.set("orphan", "r1");
+	liveSessions = liveSessions.filter((session) => session.id !== "child");
+	listeners.get("session/disposed")({ id: "child" });
+	listeners.get("session/disposed")({ id: "orphan" });
+
+	const settled = await plugin.collectUsage(context, { monitors: {} }, { scanPersisted: false });
+	assert.equal(settled.total.tokens, 131, "a settled sub-agent must be read back from storage for the panel request");
+	assert.equal(counters.opened, 2, "each settled session is read exactly once");
+	assert.equal(counters.closed, 2, "each settled read closes its handle");
+	assert.deepEqual([...new Set(counters.reads.map(([id]) => id))].sort(), ["child", "orphan"]);
+
+	const readsBefore = counters.reads.length;
+	const quiet = await plugin.collectUsage(context, { monitors: {} }, { scanPersisted: false });
+	assert.equal(quiet.total.tokens, 131, "a settled session must not double count on later panel requests");
+	assert.equal(counters.reads.length, readsBefore, "a drained disposal record must not re-read storage");
+
+	const scanned = await plugin.collectUsage(context);
+	assert.equal(scanned.total.tokens, 131, "the next full scan must keep the settled totals exact");
+}
+
+async function testFailedSettledReadKeepsFold(root) {
+	const plugin = await freshModule("settled-read-failure", join(root, "settled-read-failure"));
+	const listeners = new Map();
+	const log = [usageEvent(0, 5)];
+	const logs = new Map([["flaky", log]]);
+	const revisions = new Map([["flaky", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	let failReads = false;
+	const guarded = {
+		list: api.list,
+		open: async (id) => {
+			const handle = await api.open(id);
+			return {
+				read: async (offset) => {
+					if (failReads) throw new Error("storage unavailable");
+					return handle.read(offset);
+				},
+				close: handle.close
+			};
+		}
+	};
+	let live = [{ id: "flaky", get seq() { return log.length; }, snapshotEvents: (fromSeq = 0) => log.slice(fromSeq) }];
+	const context = makeContext({ sessions: { list: () => live }, persistence: guarded, listeners });
+	await plugin.apply(context, {}, { disableBackgroundRefresh: true, accounts: { validate: async () => {}, providerViews: async () => [], get: async () => null, subscriptionAccounts: async () => [] } });
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 5);
+	live = [];
+	listeners.get("session/disposed")({ id: "flaky" });
+	failReads = true;
+	assert.equal((await plugin.collectUsage(context, { monitors: {} }, { scanPersisted: false })).total.tokens, 5, "a failed settled read must keep the folded totals");
+	failReads = false;
+	log.push(usageEvent(1, 9));
+	revisions.set("flaky", "r2");
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 14, "the next full scan must recover the settled log");
+}
+
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
@@ -1168,6 +1325,9 @@ try {
 	await testPersistedToLive(root);
 	await testRevisionRewrite(root);
 	await testFallbackIncremental(root);
+	await testCurrentPersistenceApi(root);
+	await testSettledSessionRefresh(root);
+	await testFailedSettledReadKeepsFold(root);
 	await testLiveLogShrink(root);
 	await testZeroUsageRowsFiltered(root);
 	console.log("SERVER REGRESSION TESTS PASSED");

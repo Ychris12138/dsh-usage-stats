@@ -1,7 +1,7 @@
 {
   "name": "@ychris12138/dsh-usage-stats",
   "description": "Token usage, provider accounts, session cost estimates, budgets, and exports for the dsh web GUI",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Ychris12138/dsh-usage-stats.git"
@@ -25,6 +25,7 @@
     "docs/release-notes-v0.3.0.md",
     "docs/release-notes-v0.3.1.md",
     "docs/release-notes-v0.3.2.md",
+    "docs/release-notes-v0.3.3.md",
     "scripts/install.mjs",
     "README.md",
     "LICENSE",

@@ -716,6 +716,24 @@ console.log("IPv4/IPv6 private-address classification ok");
 			adapter: "declarative",
 			mode: "balance",
 			request: { path: "/account/balance" },
+			extract: { root: "/data", remaining: "/remaining", used: "/spend", total: "/max_budget" }
+		}
+	} }));
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		fetch: async () => jsonResponse({ data: { remaining: 0, spend: 30, max_budget: 100 } })
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 0, "explicit zero remaining is valid and must not be treated as missing");
+	console.log("declarative explicit zero remaining is valid ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": {
+			adapter: "declarative",
+			mode: "balance",
+			request: { path: "/account/balance" },
 			extract: { root: "/data", used: "/spend", total: "/max_budget" }
 		}
 	} }));

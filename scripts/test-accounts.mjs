@@ -657,6 +657,155 @@ console.log("IPv4/IPv6 private-address classification ok");
 }
 
 {
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": {
+			adapter: "declarative",
+			mode: "balance",
+			request: { path: "/account/balance", auth: { type: "bearer", credentialRef: "CUSTOM_KEY" } },
+			extract: { root: "/data", used: "/spend", total: "/max_budget", currencyValue: "CNY" }
+		}
+	} }));
+	const account = await queryAccount(spec, credentials({ CUSTOM_KEY: "custom-secret" }), {
+		now: () => now,
+		fetch: async () => jsonResponse({ data: { spend: 30, max_budget: 100 } })
+	});
+	assert.equal(account.status, "ok");
+	assert.deepEqual(account.balance, { remaining: 70, used: 30, total: 100, currency: "CNY", unlimited: false, expiresAt: null });
+	console.log("declarative remaining derived from used and total ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": {
+			adapter: "declarative",
+			mode: "balance",
+			request: { path: "/account/balance" },
+			extract: { root: "/data", used: "/spend", total: "/max_budget", divisor: 100 }
+		}
+	} }));
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		fetch: async () => jsonResponse({ data: { spend: 300, max_budget: 1000 } })
+	});
+	assert.equal(account.status, "ok");
+	assert.deepEqual(account.balance, { remaining: 7, used: 3, total: 10, currency: "USD", unlimited: false, expiresAt: null });
+	console.log("declarative remaining derivation applies divisor after raw-unit subtraction ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": {
+			adapter: "declarative",
+			mode: "balance",
+			request: { path: "/account/balance" },
+			extract: { root: "/data", remaining: "/remaining", used: "/spend", total: "/max_budget" }
+		}
+	} }));
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		fetch: async () => jsonResponse({ data: { remaining: 40, spend: 30, max_budget: 100 } })
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 40, "explicit remaining keeps precedence over derived value");
+	console.log("declarative explicit remaining precedence ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": {
+			adapter: "declarative",
+			mode: "balance",
+			request: { path: "/account/balance" },
+			extract: { root: "/data", remaining: "/remaining", used: "/spend", total: "/max_budget" }
+		}
+	} }));
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		fetch: async () => jsonResponse({ data: { remaining: 0, spend: 30, max_budget: 100 } })
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 0, "explicit zero remaining is valid and must not be treated as missing");
+	console.log("declarative explicit zero remaining is valid ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": {
+			adapter: "declarative",
+			mode: "balance",
+			request: { path: "/account/balance" },
+			extract: { root: "/data", used: "/spend", total: "/max_budget" }
+		}
+	} }));
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		fetch: async () => jsonResponse({ data: { spend: 120, max_budget: 100 } })
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 0, "derived remaining is clamped at zero");
+	console.log("declarative derived remaining clamps over-spend to zero ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": {
+			adapter: "declarative",
+			mode: "balance",
+			request: { path: "/account/balance" },
+			extract: { root: "/data", total: "/max_budget" }
+		}
+	} }));
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		fetch: async () => jsonResponse({ data: { max_budget: 100 } })
+	});
+	assert.equal(account.status, "invalid-response");
+	assert.equal(account.balance, null, "incomplete custom balance must not expose total as remaining");
+	console.log("declarative incomplete balance fails closed ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": {
+			adapter: "declarative",
+			mode: "balance",
+			request: { path: "/account/balance" },
+			extract: { root: "/data", remaining: "/remaining", used: "/spend", total: "/max_budget" }
+		}
+	} }));
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		fetch: async () => jsonResponse({ data: { remaining: "not-a-number", spend: 30, max_budget: 100 } })
+	});
+	assert.equal(account.status, "invalid-response");
+	assert.equal(account.balance, null, "malformed explicit remaining must not be masked by derivation");
+	console.log("declarative malformed explicit remaining fails closed ok");
+}
+
+{
+	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
+		"relay-a": {
+			adapter: "declarative",
+			mode: "balance",
+			request: { path: "/account/balance" },
+			extract: {
+				root: "/data",
+				remaining: { pointer: "/remaining", divisor: 100 },
+				used: "/spend",
+				total: "/max_budget"
+			}
+		}
+	} }));
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		fetch: async () => jsonResponse({ data: { remaining: "not-a-number", spend: 30, max_budget: 100 } })
+	});
+	assert.equal(account.status, "invalid-response");
+	assert.equal(account.balance, null, "malformed mapped remaining must not be masked by derivation");
+	console.log("declarative malformed mapped remaining fails closed ok");
+}
+
+{
 	assert.throws(() => validateAccountConfig({ monitors: {
 		"relay-a": {
 			adapter: "declarative",

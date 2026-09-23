@@ -1490,6 +1490,57 @@ async function testRegistryRoutesDoNotMovePricingFingerprint(root) {
 	assert.equal(registryCache.pricingIdentityCutoffs.tokenrhythm, void 0, "and must not cut off its own history");
 }
 
+/**
+ * A pricing-identity change must not blank usage. Token buckets are
+ * pricing-independent, so the transition carries them and rebuilds only the
+ * derived cost. The observable moment is a UI read taken while the rescan is
+ * still in flight, because that read serves the cache the transition produced.
+ */
+async function testPricingTransitionKeepsTokenFolds(root) {
+	const home = join(root, "pricing-transition-folds");
+	const plugin = await freshModule("pricing-transition-folds", home);
+	const logs = new Map([["stored", [usageEvent(0, 7)]]]);
+	const revisions = new Map([["stored", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	let gate = null;
+	const persistence = {
+		list: async () => {
+			if (gate !== null) await gate;
+			return api.list();
+		},
+		open: api.open
+	};
+	let baseURL = "https://api.deepseek.com/v1";
+	const settings = { get: (name) => name === "llm-pi-ai" ? { providers: { "route-a": { displayName: "Route A", baseURL } } } : void 0 };
+	const context = makeContext({ sessions: { list: () => [] }, persistence, settings });
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 7, "the stored session folds under the first identity");
+
+	// The route's pricing identity changes; hold the rescan open so the
+	// transition is observed the way the panel observes it.
+	baseURL = "https://relay.invalid/v1";
+	let release;
+	gate = new Promise((resolve) => { release = resolve; });
+	const scan = plugin.collectUsage(context);
+	const during = await plugin.collectUsage(context, { monitors: {} }, { scanPersisted: false });
+	assert.equal(during.total.tokens, 7, "a pricing transition must keep folded usage visible while the rescan runs");
+	release();
+	await scan;
+	gate = null;
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 7, "and the refold restores the same total");
+
+	// The same transition through the stored cache, which is the path a restart
+	// takes: a fresh module must carry the folds, not start from zero.
+	baseURL = "https://api.deepseek.com/v1";
+	const reloaded = await freshModule("pricing-transition-folds-reload", home);
+	gate = new Promise((resolve) => { release = resolve; });
+	const reloadedContext = makeContext({ sessions: { list: () => [] }, persistence, settings });
+	const reloadedScan = reloaded.collectUsage(reloadedContext);
+	const reloadedDuring = await reloaded.collectUsage(reloadedContext, { monitors: {} }, { scanPersisted: false });
+	assert.equal(reloadedDuring.total.tokens, 7, "a stored-cache pricing transition must keep the token fold");
+	release();
+	await reloadedScan;
+	gate = null;
+}
 
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
@@ -1522,6 +1573,7 @@ try {
 	await testBoundedConcurrentStoredReads(root);
 	await testConfiguredProvidersIncludeRegisteredRoutes(root);
 	await testRegistryRoutesDoNotMovePricingFingerprint(root);
+	await testPricingTransitionKeepsTokenFolds(root);
 	await testLiveLogShrink(root);
 	await testZeroUsageRowsFiltered(root);
 	console.log("SERVER REGRESSION TESTS PASSED");

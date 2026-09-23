@@ -23,7 +23,30 @@ const { act } = TestRenderer;
 // Fake primitives: every named export is a no-op component (returns its props as children is not needed).
 const Stub = () => null;
 const PassThrough = ({ children }) => children;
-const primitives = new Proxy({}, { get: (_target, key) => key === "Tooltip" ? PassThrough : Stub });
+/** Distinguishable icon stub, so a render can prove the harness glyph was used. */
+const IconStub = () => react.createElement("span", { "data-icon-stub": "" });
+// The real package exports a fixed surface, so an unknown name is `undefined`
+// rather than a stub. Mirroring that is what catches a primitive the host
+// renamed or dropped: 0.1.7 moved the icon size out of the export name
+// (`IconCloseOutline16` → `IconCloseOutlineRegular`) and removed several glyphs.
+const legacyIcons = {
+	IconChevronLeftOutline14: IconStub,
+	IconChevronRightOutline14: IconStub,
+	IconCloseOutline16: IconStub,
+	IconDataOutline16: IconStub,
+	IconRefreshOutline14: IconStub
+};
+const currentIcons = {
+	IconChevronLeftOutlineRegular: IconStub,
+	IconChevronRightOutlineRegular: IconStub,
+	IconCloseOutlineRegular: IconStub,
+	IconDataOutlineRegular: IconStub,
+	IconRefreshOutlineRegular: IconStub
+};
+const primitivesSurface = (icons) => new Proxy({ ...icons, Tooltip: PassThrough }, {
+	get: (target, key) => (typeof key === "string" && key in target ? target[key] : undefined)
+});
+const primitives = primitivesSurface(legacyIcons);
 
 let captured = null;
 const storedValues = new Map();
@@ -191,6 +214,28 @@ if (!markup.includes("用量/余额") && !markup.includes("panel.badge")) throw 
 const railMarkup = renderToStaticMarkup(react.createElement(UsageStatsPanel, { wide: false, t: (key) => key }));
 if (!railMarkup.includes("usg_rail") || !railMarkup.includes("data-usage-stats-badge")) throw new Error("collapsed rail must retain the sidebar Usage Stats action");
 console.log("sidebar render ok, wide/rail markup:", markup.length, railMarkup.length);
+
+// The same panel against the other supported primitive surfaces: the 0.1.7 icon
+// spelling must resolve, and a host that exports no icon at all must still render
+// through the inline fallback instead of throwing the sidebar action away.
+const renderBadgeWith = (surface) => {
+	const surfaceExports = captured.factory((spec) => {
+		if (spec === "react") return react;
+		if (spec === "react/jsx-runtime") return jsxRuntime;
+		if (spec === "react-dom") return { createPortal: (node) => node };
+		if (spec === "@deepseek-ai/dsh-client-ui-primitives") return surface;
+		throw new Error(`unexpected require: ${spec}`);
+	});
+	return renderToStaticMarkup(react.createElement(surfaceExports.UsageStatsPanel, { wide: false, t: (key) => key }));
+};
+if (!markup.includes("data-icon-stub")) throw new Error("the legacy icon exports must be used when the host provides them");
+const currentMarkup = renderBadgeWith(primitivesSurface(currentIcons));
+if (!currentMarkup.includes("data-usage-stats-badge")) throw new Error("the panel must render against the 0.1.7 icon set");
+if (!currentMarkup.includes("data-icon-stub")) throw new Error("the 0.1.7 icon exports must be used when the host provides them");
+const bareMarkup = renderBadgeWith(primitivesSurface({}));
+if (!bareMarkup.includes("data-usage-stats-badge")) throw new Error("the panel must render when the host exports no icon");
+if (bareMarkup.includes("data-icon-stub") || !bareMarkup.includes("<svg")) throw new Error("a missing icon must fall back to the inline glyph");
+console.log("icon surface compatibility ok (legacy, 0.1.7, none)");
 
 // Apply against a stub client context.
 const registrations = [];

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import {
 	accountProvenance,
@@ -1824,7 +1825,52 @@ console.log("IPv4/IPv6 private-address classification ok");
 {
 	const source = readFileSync(new URL("../lib/accounts.js", import.meta.url), "utf8");
 	assert.match(source, /request\.on\("socket",\s*\(socket\)\s*=>\s*\{[^}]*socket\.on\("error"/, "pinned request must forward connect-phase socket errors to the request (#42)");
+	assert.match(source, /lookup:[\s\S]*process\.nextTick\(\(\) => \{/, "pinned lookup must defer address delivery before connect");
 	console.log("pinned request socket error backstop present ok");
+}
+
+{
+	// Process-level regression for #111: the public queryAccount() API must
+	// survive a deterministic synchronous connect failure caused by a public
+	// address/family mismatch. The mismatch is a stand-in for a route-less
+	// EHOSTUNREACH/EINVAL and does not depend on a real upstream being online.
+	const moduleUrl = JSON.stringify(new URL("../lib/accounts.js", import.meta.url).href);
+	const childSource = `
+import { queryAccount } from ${moduleUrl};
+const spec = {
+  id: "repro",
+  displayName: "Repro",
+  adapter: "general",
+  mode: "balance",
+  baseURL: "https://stats.example.invalid",
+  providerBaseURL: "https://stats.example.invalid",
+  apiKeyRef: "repro",
+  monitor: { allowCrossOrigin: true }
+};
+const credentials = { resolve: async () => ({ value: "sk-repro" }) };
+const snapshot = await queryAccount(spec, credentials, {
+  lookup: async () => [{ address: "93.184.216.34", family: 6 }],
+  timeoutMs: 500
+});
+if (snapshot.status !== "unavailable") {
+  throw new Error("synchronous pinned failure did not return an unavailable snapshot");
+}
+console.log("snapshot -> " + snapshot.status);
+`;
+	for (let run = 1; run <= 20; run += 1) {
+		const child = spawnSync(process.execPath, ["--input-type=module", "-e", childSource], {
+			cwd: process.cwd(),
+			encoding: "utf8",
+			timeout: 5000,
+			windowsHide: true
+		});
+		const output = `${child.stdout ?? ""}\n${child.stderr ?? ""}`;
+		assert.equal(child.error, undefined, `synchronous pinned failure child ${run} could not start: ${output}`);
+		assert.equal(child.status, 0, `synchronous pinned failure child ${run} exited unexpectedly: ${output}`);
+		assert.doesNotMatch(output, /Unhandled ['"]error['"] event/, `synchronous pinned failure child ${run} crashed: ${output}`);
+		assert.match(output, /snapshot -> unavailable/, `synchronous pinned failure child ${run} did not complete queryAccount()`);
+	}
+	console.log("process-level synchronous pinned failure regression 20/20 ok");
 }
 
 {

@@ -120,6 +120,26 @@ if (!focusRule.includes("2px solid var(--dsw-alias-brand-primary)")) throw new E
 // `-hover-solid` fill is the shell's surface variant, not a row hover.
 const badgeHoverRule = /\.usg_badge:hover\{([^}]*)\}/.exec(source)?.[1] ?? "";
 if (!badgeHoverRule.includes("background:var(--dsw-alias-interactive-bg-hover)")) throw new Error("the sidebar action hover must match the Settings key hover token");
+// Panel surface: the official elevated-menu recipe. The blur token is absent
+// before 0.1.7, where the declaration drops out and the opaque menu colour
+// remains — that fallback is why no version check is needed.
+const panelRule = /\.usg_panel\{([^}]*)\}/.exec(source)?.[1] ?? "";
+const headerRule = /\.usg_header\{([^}]*)\}/.exec(source)?.[1] ?? "";
+if (!panelRule.includes("background:var(--dsw-specific-menu,var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base)))")) throw new Error("the panel must use the official menu surface colour");
+if (!panelRule.includes("backdrop-filter:var(--dsw-menu-backdrop-filter)")) throw new Error("the panel must pair the translucent menu surface with the official backdrop blur");
+if (!panelRule.includes("box-shadow:var(--dsw-elevation-prominent,var(--dsw-shadow-lv2))")) throw new Error("the panel must take the official prominent elevation with the legacy shadow as fallback");
+if (panelRule.includes("border:1px solid")) throw new Error("the official menu surface draws its hairline through the elevation stroke, not a 1px border");
+if (headerRule.includes("background:")) throw new Error("the panel header must stay transparent so the glass surface is continuous");
+// A control on the translucent panel takes the shell's glass-menu pattern
+// (transparent fill + hairline ring + shared hover fill); only the native popup
+// list stays opaque, because it draws over the page.
+const selectRule = /\.usg_providerSelect\{([^}]*)\}/.exec(source)?.[1] ?? "";
+const selectHoverRule = /\.usg_providerSelect:hover\{([^}]*)\}/.exec(source)?.[1] ?? "";
+const selectOptionRule = /\.usg_providerSelect option\{([^}]*)\}/.exec(source)?.[1] ?? "";
+if (!selectRule.includes("background:transparent")) throw new Error("a control on the translucent panel must not paint an opaque fill");
+if (!selectRule.includes("border:0.5px solid var(--dsw-alias-border-l3")) throw new Error("the provider select must take the shell hairline ring");
+if (!selectHoverRule.includes("background:var(--dsw-alias-interactive-bg-hover)")) throw new Error("the provider select hover must use the shared interactive fill");
+if (!selectOptionRule.includes("background:var(--dsw-alias-bg-layer-3")) throw new Error("the native option list must stay opaque over the page");
 for (const selector of [".usg_iconButton:focus-visible", ".usg_navButton:focus-visible", ".usg_cell:focus-visible", ".usg_day:focus-visible"]) {
 	if (!source.includes(selector)) throw new Error(`panel control ${selector} must join the focus outline rule`);
 }

@@ -1345,20 +1345,25 @@ async function testUiReadNotBlockedByFullScan(root) {
 	assert.equal((await plugin.collectUsage(context)).total.tokens, 12);
 }
 
-/** A stored log the backend refuses is not retried until its revision changes (#113). */
-async function testUnreadableSessionMemo(root) {
-	const home = join(root, "unreadable-memo");
-	const plugin = await freshModule("unreadable-memo", home);
-	const logs = new Map([["broken", [usageEvent(0, 5)]], ["ok", [usageEvent(0, 7)]]]);
-	const revisions = new Map([["broken", "r1"], ["ok", "r1"]]);
+/**
+ * Read-failure policy: only a deterministic refusal of this log's content is
+ * remembered, and only for this process. A refusal is a property of the reader
+ * — a later host may interpret the same unchanged bytes — so it must not be
+ * persisted, and a restart must try the log again (#113 review).
+ */
+async function testStoredReadFailurePolicy(root) {
+	const home = join(root, "read-failure-policy");
+	const plugin = await freshModule("read-failure-policy", home);
+	const logs = new Map([["refused", [usageEvent(0, 5)]], ["ok", [usageEvent(0, 7)]]]);
+	const revisions = new Map([["refused", "r1"], ["ok", "r1"]]);
 	const { api } = currentPersistenceApi(logs, revisions);
 	let attempts = 0;
 	const persistence = {
 		list: api.list,
 		open: async (id) => {
-			if (id === "broken") {
+			if (id === "refused") {
 				attempts += 1;
-				throw new Error("subagent/descriptor 0 uses unsupported descriptor version 2");
+				throw Object.assign(new Error("subagent/descriptor 0 uses unsupported descriptor version 2"), { name: "SessionFormatUnsupportedError" });
 			}
 			return api.open(id);
 		}
@@ -1368,28 +1373,119 @@ async function testUnreadableSessionMemo(root) {
 
 	const first = await plugin.collectUsage(context);
 	assert.equal(first.total.tokens, 7, "the readable session still folds");
-	assert.equal(attempts, 1, "the refused session is attempted once");
-	assert.equal(warnings.length, 1, "refusals are reported as one summary per scan");
+	assert.equal(attempts, 1, "the refused log is attempted once");
+	assert.equal(warnings.length, 1, "failures are reported as one summary per scan");
 	assert.match(warnings[0], /1 stored session\(s\) could not be read/);
+	assert.match(warnings[0], /refused by this runtime/);
 
+	// Same process, same revision: a deterministic refusal is not retried.
 	const second = await plugin.collectUsage(context);
 	assert.equal(second.total.tokens, 7);
-	assert.equal(attempts, 1, "an unchanged revision is not retried");
+	assert.equal(attempts, 1, "a deterministic refusal is skipped until the log changes");
 	assert.equal(warnings.length, 1, "a memoized refusal stays silent");
 
-	// The memo survives a restart through the cache file.
-	const reloaded = await freshModule("unreadable-memo-reload", home);
+	// A restart is a new reader, so the unchanged revision is tried again.
+	const reloaded = await freshModule("read-failure-policy-reload", home);
 	const reloadedWarnings = [];
 	const reloadedContext = makeContext({ sessions: { list: () => [] }, persistence, warnings: reloadedWarnings });
 	assert.equal((await reloaded.collectUsage(reloadedContext)).total.tokens, 7);
-	assert.equal(attempts, 1, "the restored cache keeps the refusal memo");
-	assert.equal(reloadedWarnings.length, 0, "a restored memo does not warn again");
+	assert.equal(attempts, 2, "a new process must try the unchanged log again");
+	assert.equal(reloadedWarnings.length, 1, "and report it again");
+	const stored = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.equal(Object.hasOwn(stored, "failures"), false, "the refusal memo must not be persisted");
 
-	revisions.set("broken", "r2");
-	logs.set("broken", [usageEvent(0, 11)]);
+	// A changed log is a new attempt.
+	revisions.set("refused", "r2");
+	logs.set("refused", [usageEvent(0, 11)]);
 	const retried = await plugin.collectUsage(context);
-	assert.equal(attempts, 2, "a changed revision is retried");
+	assert.equal(attempts, 3, "a changed revision is retried");
 	assert.equal(retried.total.tokens, 7, "the still-refused session contributes nothing");
+}
+
+/** A transient read failure is never remembered: the next scan retries it (#113 review). */
+async function testTransientReadFailureIsRetried(root) {
+	const home = join(root, "transient-read-failure");
+	const plugin = await freshModule("transient-read-failure", home);
+	const logs = new Map([["flaky", [usageEvent(0, 5)]], ["ok", [usageEvent(0, 7)]]]);
+	const revisions = new Map([["flaky", "r1"], ["ok", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	let attempts = 0;
+	let failing = true;
+	const persistence = {
+		list: api.list,
+		open: async (id) => {
+			if (id === "flaky" && failing) {
+				attempts += 1;
+				throw new Error("read failed: EAGAIN");
+			}
+			return api.open(id);
+		}
+	};
+	const warnings = [];
+	const context = makeContext({ sessions: { list: () => [] }, persistence, warnings });
+
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 7);
+	assert.equal(attempts, 1);
+	assert.match(warnings[0], /transient and retried on the next scan/);
+	// The same revision is attempted again while the failure persists.
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 7);
+	assert.equal(attempts, 2, "a transient failure must be retried on the next scan");
+	// Once the backend recovers, the unchanged revision folds.
+	failing = false;
+	const recovered = await plugin.collectUsage(context);
+	assert.equal(attempts, 2, "the recovered read is not counted as a failure");
+	assert.equal(recovered.total.tokens, 12, "a retried transient failure can succeed");
+}
+
+/**
+ * A UI read during a full scan renders one published generation: its totals and
+ * its session rows come from the same snapshot, never from two (#113 review).
+ */
+async function testUiReadServesOnePublishedGeneration(root) {
+	const home = join(root, "published-generation");
+	const plugin = await freshModule("published-generation", home);
+	const logs = new Map([["stored", [usageEvent(0, 7)]]]);
+	const revisions = new Map([["stored", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	const live = [{ id: "live", get seq() { return 1; }, snapshotEvents: (from = 0) => [usageEvent(0, 5)].slice(from) }];
+	let gate = null;
+	let enteredList = null;
+	const persistence = {
+		// The listing is the first persisted step, so a scan parked here has
+		// already folded the live sessions and left the cache one generation ahead
+		// of the published snapshot.
+		list: async () => {
+			if (enteredList !== null) enteredList();
+			if (gate !== null) await gate;
+			return api.list();
+		},
+		open: api.open
+	};
+	const context = makeContext({ sessions: { list: () => live }, persistence });
+	const rowSum = (usage) => usage.sessions.reduce((sum, row) => sum + row.tokens, 0);
+
+	const seeded = await plugin.collectUsage(context);
+	assert.equal(seeded.total.tokens, 12, "the seed generation folds the live and the stored session");
+	assert.equal(rowSum(seeded), 12);
+
+	// The live session gains usage while the next scan is held at its first
+	// persisted step.
+	live[0] = { id: "live", get seq() { return 2; }, snapshotEvents: (from = 0) => [usageEvent(0, 5), usageEvent(1, 4)].slice(from) };
+	let release;
+	gate = new Promise((resolve) => { release = resolve; });
+	const entered = new Promise((resolve) => { enteredList = resolve; });
+	const scan = plugin.collectUsage(context);
+	await entered;
+	const during = await plugin.collectUsage(context, { monitors: {} }, { scanPersisted: false });
+	assert.equal(during.total.tokens, 12, "a UI read during the scan serves the last published generation");
+	assert.equal(rowSum(during), during.total.tokens, "totals and session rows must come from one generation");
+	release();
+	await scan;
+	gate = null;
+	enteredList = null;
+	const after = await plugin.collectUsage(context);
+	assert.equal(after.total.tokens, 16, "the completed scan publishes the next generation");
+	assert.equal(rowSum(after), 16);
 }
 
 /** Stored logs are read with bounded concurrency, and totals stay exact (#113). */
@@ -1569,7 +1665,9 @@ try {
 	await testSettledSessionRefresh(root);
 	await testFailedSettledReadKeepsFold(root);
 	await testUiReadNotBlockedByFullScan(root);
-	await testUnreadableSessionMemo(root);
+	await testStoredReadFailurePolicy(root);
+	await testTransientReadFailureIsRetried(root);
+	await testUiReadServesOnePublishedGeneration(root);
 	await testBoundedConcurrentStoredReads(root);
 	await testConfiguredProvidersIncludeRegisteredRoutes(root);
 	await testRegistryRoutesDoNotMovePricingFingerprint(root);

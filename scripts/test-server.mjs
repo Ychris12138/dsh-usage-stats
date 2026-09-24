@@ -56,9 +56,9 @@ function makeResponse() {
 	};
 }
 
-function makeContext({ sessions, persistence, routes, settings, diagnostics, listeners } = {}) {
+function makeContext({ sessions, persistence, routes, settings, diagnostics, listeners, warnings } = {}) {
 	return {
-		logger: { warn: () => {} },
+		logger: { warn: (message) => warnings?.push(String(message)) },
 		credentials: { resolve: async () => void 0 },
 		webServer: { register: (entry) => { routes?.set(entry.path, entry.handler); return () => {}; } },
 		effect: (register) => register(),
@@ -1302,6 +1302,122 @@ async function testFailedSettledReadKeepsFold(root) {
 	assert.equal((await plugin.collectUsage(context)).total.tokens, 14, "the next full scan must recover the settled log");
 }
 
+/** Resolve to "timeout" when `promise` has not settled within `ms`. */
+function withTimeout(promise, ms) {
+	return Promise.race([
+		promise.then((value) => ({ settled: true, value })),
+		new Promise((resolve) => setTimeout(() => resolve({ settled: false }), ms))
+	]);
+}
+
+/**
+ * A full persisted scan decodes every changed stored log; on DSH 0.1.7 that is
+ * about half a second per session, so a UI read must never await it (#113).
+ */
+async function testUiReadNotBlockedByFullScan(root) {
+	const plugin = await freshModule("ui-not-blocked", join(root, "ui-not-blocked"));
+	const logs = new Map([["stored", [usageEvent(0, 7)]]]);
+	const revisions = new Map([["stored", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	const live = [{ id: "live", get seq() { return 1; }, snapshotEvents: (from = 0) => [usageEvent(0, 5)].slice(from) }];
+	let gate = null;
+	const persistence = {
+		list: async () => {
+			if (gate !== null) await gate;
+			return api.list();
+		},
+		open: api.open
+	};
+	const context = makeContext({ sessions: { list: () => live }, persistence });
+	// Seed the cache and its aggregate with one complete collection.
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 12);
+
+	// Now hold a full scan open and read through the UI path while it runs.
+	let release;
+	gate = new Promise((resolve) => { release = resolve; });
+	const scan = plugin.collectUsage(context);
+	const ui = await withTimeout(plugin.collectUsage(context, { monitors: {} }, { scanPersisted: false }), 1000);
+	assert.equal(ui.settled, true, "a UI read must not wait for an in-flight full persisted scan");
+	assert.equal(ui.value.total.tokens, 12, "the UI read serves the aggregate already in memory");
+	release();
+	await scan;
+	gate = null;
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 12);
+}
+
+/** A stored log the backend refuses is not retried until its revision changes (#113). */
+async function testUnreadableSessionMemo(root) {
+	const home = join(root, "unreadable-memo");
+	const plugin = await freshModule("unreadable-memo", home);
+	const logs = new Map([["broken", [usageEvent(0, 5)]], ["ok", [usageEvent(0, 7)]]]);
+	const revisions = new Map([["broken", "r1"], ["ok", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	let attempts = 0;
+	const persistence = {
+		list: api.list,
+		open: async (id) => {
+			if (id === "broken") {
+				attempts += 1;
+				throw new Error("subagent/descriptor 0 uses unsupported descriptor version 2");
+			}
+			return api.open(id);
+		}
+	};
+	const warnings = [];
+	const context = makeContext({ sessions: { list: () => [] }, persistence, warnings });
+
+	const first = await plugin.collectUsage(context);
+	assert.equal(first.total.tokens, 7, "the readable session still folds");
+	assert.equal(attempts, 1, "the refused session is attempted once");
+	assert.equal(warnings.length, 1, "refusals are reported as one summary per scan");
+	assert.match(warnings[0], /1 stored session\(s\) could not be read/);
+
+	const second = await plugin.collectUsage(context);
+	assert.equal(second.total.tokens, 7);
+	assert.equal(attempts, 1, "an unchanged revision is not retried");
+	assert.equal(warnings.length, 1, "a memoized refusal stays silent");
+
+	// The memo survives a restart through the cache file.
+	const reloaded = await freshModule("unreadable-memo-reload", home);
+	const reloadedWarnings = [];
+	const reloadedContext = makeContext({ sessions: { list: () => [] }, persistence, warnings: reloadedWarnings });
+	assert.equal((await reloaded.collectUsage(reloadedContext)).total.tokens, 7);
+	assert.equal(attempts, 1, "the restored cache keeps the refusal memo");
+	assert.equal(reloadedWarnings.length, 0, "a restored memo does not warn again");
+
+	revisions.set("broken", "r2");
+	logs.set("broken", [usageEvent(0, 11)]);
+	const retried = await plugin.collectUsage(context);
+	assert.equal(attempts, 2, "a changed revision is retried");
+	assert.equal(retried.total.tokens, 7, "the still-refused session contributes nothing");
+}
+
+/** Stored logs are read with bounded concurrency, and totals stay exact (#113). */
+async function testBoundedConcurrentStoredReads(root) {
+	const plugin = await freshModule("bounded-reads", join(root, "bounded-reads"));
+	const ids = Array.from({ length: 12 }, (_, index) => `stored-${index}`);
+	let active = 0;
+	let peak = 0;
+	const persistence = {
+		list: async () => ids.map((id) => ({ header: { id }, revision: "r1" })),
+		open: async () => ({
+			read: async () => {
+				active += 1;
+				peak = Math.max(peak, active);
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				active -= 1;
+				return { eventState: "detached", events: [usageEvent(0, 1)] };
+			},
+			close: async () => {}
+		})
+	};
+	const context = makeContext({ sessions: { list: () => [] }, persistence });
+	const usage = await plugin.collectUsage(context);
+	assert.equal(usage.total.tokens, ids.length, "every stored session is folded exactly once");
+	assert.ok(peak > 1, `stored reads must overlap (peak ${peak})`);
+	assert.ok(peak <= 4, `stored reads must stay bounded (peak ${peak})`);
+}
+
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
@@ -1328,6 +1444,9 @@ try {
 	await testCurrentPersistenceApi(root);
 	await testSettledSessionRefresh(root);
 	await testFailedSettledReadKeepsFold(root);
+	await testUiReadNotBlockedByFullScan(root);
+	await testUnreadableSessionMemo(root);
+	await testBoundedConcurrentStoredReads(root);
 	await testLiveLogShrink(root);
 	await testZeroUsageRowsFiltered(root);
 	console.log("SERVER REGRESSION TESTS PASSED");

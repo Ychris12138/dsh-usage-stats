@@ -403,6 +403,9 @@ Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-rep
 - 活跃会话只处理新追加事件。
 - 持久化会话使用不透明 revision（Harness 的 `list()`；旧版 `listSnapshots()` 仍兼容）；未变化时不重复读取日志。
 - 持久化日志通过 Harness 的 `open(id, "read")` 读句柄读取（旧版 `readFrom()` 仍兼容），每次读完立即关闭句柄。
+- 持久化读取使用有界并发（4 个日志同时解码）：DSH 0.1.7 首次打开一个日志要解码并校验整个文件（约 0.5 s/会话），顺序读取大库会让一轮全量扫描耗时数分钟。
+- 面板的高频读不会等待进行中的全量扫描：扫描期间直接返回**上一次已发布的整份快照**（总量与逐会话行同代，不会新旧混排），扫描结束后下一次读再更新，避免请求被拖到 HTTP 超时。
+- 被后端**确定性拒绝**的存储日志（`SessionFormatUnsupportedError`、`SessionPersistenceCorruptionError`）在**本进程内**按 revision 记忆，日志变化前不再重试；瞬时错误不记忆，下一次扫描照常重试。两类失败每轮各汇总一条告警，且该记忆只存在于运行时、不写入缓存文件（重启后同一日志会重新尝试，因为拒绝取决于读取方而非日志本身）。
 - 已退出 live store 的会话（例如已结束的 sub-agent 运行）在下一次聚合时按 id 补读持久化日志，其 Token 计入日/模型总量，无需等待后台全量扫描。
 - seq 缺口、日志重写或 live/persisted 切换时完整重折叠该会话。
 - 聚合采用 single-flight，并在同一临界区原子保存缓存。

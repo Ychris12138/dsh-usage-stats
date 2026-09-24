@@ -56,9 +56,9 @@ function makeResponse() {
 	};
 }
 
-function makeContext({ sessions, persistence, routes, settings, diagnostics, listeners } = {}) {
+function makeContext({ sessions, persistence, routes, settings, diagnostics, listeners, warnings, llm } = {}) {
 	return {
-		logger: { warn: () => {} },
+		logger: { warn: (message) => warnings?.push(String(message)) },
 		credentials: { resolve: async () => void 0 },
 		webServer: { register: (entry) => { routes?.set(entry.path, entry.handler); return () => {}; } },
 		effect: (register) => register(),
@@ -67,7 +67,7 @@ function makeContext({ sessions, persistence, routes, settings, diagnostics, lis
 			return () => listeners?.delete(name);
 		},
 		__usageStatsDiagnostics: diagnostics,
-		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : name === "settings" ? settings : void 0
+		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : name === "settings" ? settings : name === "llm" ? llm : void 0
 	};
 }
 
@@ -1302,6 +1302,342 @@ async function testFailedSettledReadKeepsFold(root) {
 	assert.equal((await plugin.collectUsage(context)).total.tokens, 14, "the next full scan must recover the settled log");
 }
 
+/** Resolve to "timeout" when `promise` has not settled within `ms`. */
+function withTimeout(promise, ms) {
+	return Promise.race([
+		promise.then((value) => ({ settled: true, value })),
+		new Promise((resolve) => setTimeout(() => resolve({ settled: false }), ms))
+	]);
+}
+
+/**
+ * A full persisted scan decodes every changed stored log; on DSH 0.1.7 that is
+ * about half a second per session, so a UI read must never await it (#113).
+ */
+async function testUiReadNotBlockedByFullScan(root) {
+	const plugin = await freshModule("ui-not-blocked", join(root, "ui-not-blocked"));
+	const logs = new Map([["stored", [usageEvent(0, 7)]]]);
+	const revisions = new Map([["stored", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	const live = [{ id: "live", get seq() { return 1; }, snapshotEvents: (from = 0) => [usageEvent(0, 5)].slice(from) }];
+	let gate = null;
+	const persistence = {
+		list: async () => {
+			if (gate !== null) await gate;
+			return api.list();
+		},
+		open: api.open
+	};
+	const context = makeContext({ sessions: { list: () => live }, persistence });
+	// Seed the cache and its aggregate with one complete collection.
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 12);
+
+	// Now hold a full scan open and read through the UI path while it runs.
+	let release;
+	gate = new Promise((resolve) => { release = resolve; });
+	const scan = plugin.collectUsage(context);
+	const ui = await withTimeout(plugin.collectUsage(context, { monitors: {} }, { scanPersisted: false }), 1000);
+	assert.equal(ui.settled, true, "a UI read must not wait for an in-flight full persisted scan");
+	assert.equal(ui.value.total.tokens, 12, "the UI read serves the aggregate already in memory");
+	release();
+	await scan;
+	gate = null;
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 12);
+}
+
+/**
+ * Read-failure policy: only a deterministic refusal of this log's content is
+ * remembered, and only for this process. A refusal is a property of the reader
+ * — a later host may interpret the same unchanged bytes — so it must not be
+ * persisted, and a restart must try the log again (#113 review).
+ */
+async function testStoredReadFailurePolicy(root) {
+	const home = join(root, "read-failure-policy");
+	const plugin = await freshModule("read-failure-policy", home);
+	const logs = new Map([["refused", [usageEvent(0, 5)]], ["ok", [usageEvent(0, 7)]]]);
+	const revisions = new Map([["refused", "r1"], ["ok", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	let attempts = 0;
+	const persistence = {
+		list: api.list,
+		open: async (id) => {
+			if (id === "refused") {
+				attempts += 1;
+				throw Object.assign(new Error("subagent/descriptor 0 uses unsupported descriptor version 2"), { name: "SessionFormatUnsupportedError" });
+			}
+			return api.open(id);
+		}
+	};
+	const warnings = [];
+	const context = makeContext({ sessions: { list: () => [] }, persistence, warnings });
+
+	const first = await plugin.collectUsage(context);
+	assert.equal(first.total.tokens, 7, "the readable session still folds");
+	assert.equal(attempts, 1, "the refused log is attempted once");
+	assert.equal(warnings.length, 1, "failures are reported as one summary per scan");
+	assert.match(warnings[0], /1 stored session\(s\) could not be read/);
+	assert.match(warnings[0], /refused by this runtime/);
+
+	// Same process, same revision: a deterministic refusal is not retried.
+	const second = await plugin.collectUsage(context);
+	assert.equal(second.total.tokens, 7);
+	assert.equal(attempts, 1, "a deterministic refusal is skipped until the log changes");
+	assert.equal(warnings.length, 1, "a memoized refusal stays silent");
+
+	// A restart is a new reader, so the unchanged revision is tried again.
+	const reloaded = await freshModule("read-failure-policy-reload", home);
+	const reloadedWarnings = [];
+	const reloadedContext = makeContext({ sessions: { list: () => [] }, persistence, warnings: reloadedWarnings });
+	assert.equal((await reloaded.collectUsage(reloadedContext)).total.tokens, 7);
+	assert.equal(attempts, 2, "a new process must try the unchanged log again");
+	assert.equal(reloadedWarnings.length, 1, "and report it again");
+	const stored = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.equal(Object.hasOwn(stored, "failures"), false, "the refusal memo must not be persisted");
+
+	// A changed log is a new attempt.
+	revisions.set("refused", "r2");
+	logs.set("refused", [usageEvent(0, 11)]);
+	const retried = await plugin.collectUsage(context);
+	assert.equal(attempts, 3, "a changed revision is retried");
+	assert.equal(retried.total.tokens, 7, "the still-refused session contributes nothing");
+}
+
+/** A transient read failure is never remembered: the next scan retries it (#113 review). */
+async function testTransientReadFailureIsRetried(root) {
+	const home = join(root, "transient-read-failure");
+	const plugin = await freshModule("transient-read-failure", home);
+	const logs = new Map([["flaky", [usageEvent(0, 5)]], ["ok", [usageEvent(0, 7)]]]);
+	const revisions = new Map([["flaky", "r1"], ["ok", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	let attempts = 0;
+	let failing = true;
+	const persistence = {
+		list: api.list,
+		open: async (id) => {
+			if (id === "flaky" && failing) {
+				attempts += 1;
+				throw new Error("read failed: EAGAIN");
+			}
+			return api.open(id);
+		}
+	};
+	const warnings = [];
+	const context = makeContext({ sessions: { list: () => [] }, persistence, warnings });
+
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 7);
+	assert.equal(attempts, 1);
+	assert.match(warnings[0], /transient and retried on the next scan/);
+	// The same revision is attempted again while the failure persists.
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 7);
+	assert.equal(attempts, 2, "a transient failure must be retried on the next scan");
+	// Once the backend recovers, the unchanged revision folds.
+	failing = false;
+	const recovered = await plugin.collectUsage(context);
+	assert.equal(attempts, 2, "the recovered read is not counted as a failure");
+	assert.equal(recovered.total.tokens, 12, "a retried transient failure can succeed");
+}
+
+/**
+ * A UI read during a full scan renders one published generation: its totals and
+ * its session rows come from the same snapshot, never from two (#113 review).
+ */
+async function testUiReadServesOnePublishedGeneration(root) {
+	const home = join(root, "published-generation");
+	const plugin = await freshModule("published-generation", home);
+	const logs = new Map([["stored", [usageEvent(0, 7)]]]);
+	const revisions = new Map([["stored", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	const live = [{ id: "live", get seq() { return 1; }, snapshotEvents: (from = 0) => [usageEvent(0, 5)].slice(from) }];
+	let gate = null;
+	let enteredList = null;
+	const persistence = {
+		// The listing is the first persisted step, so a scan parked here has
+		// already folded the live sessions and left the cache one generation ahead
+		// of the published snapshot.
+		list: async () => {
+			if (enteredList !== null) enteredList();
+			if (gate !== null) await gate;
+			return api.list();
+		},
+		open: api.open
+	};
+	const context = makeContext({ sessions: { list: () => live }, persistence });
+	const rowSum = (usage) => usage.sessions.reduce((sum, row) => sum + row.tokens, 0);
+
+	const seeded = await plugin.collectUsage(context);
+	assert.equal(seeded.total.tokens, 12, "the seed generation folds the live and the stored session");
+	assert.equal(rowSum(seeded), 12);
+
+	// The live session gains usage while the next scan is held at its first
+	// persisted step.
+	live[0] = { id: "live", get seq() { return 2; }, snapshotEvents: (from = 0) => [usageEvent(0, 5), usageEvent(1, 4)].slice(from) };
+	let release;
+	gate = new Promise((resolve) => { release = resolve; });
+	const entered = new Promise((resolve) => { enteredList = resolve; });
+	const scan = plugin.collectUsage(context);
+	await entered;
+	const during = await plugin.collectUsage(context, { monitors: {} }, { scanPersisted: false });
+	assert.equal(during.total.tokens, 12, "a UI read during the scan serves the last published generation");
+	assert.equal(rowSum(during), during.total.tokens, "totals and session rows must come from one generation");
+	release();
+	await scan;
+	gate = null;
+	enteredList = null;
+	const after = await plugin.collectUsage(context);
+	assert.equal(after.total.tokens, 16, "the completed scan publishes the next generation");
+	assert.equal(rowSum(after), 16);
+}
+
+/** Stored logs are read with bounded concurrency, and totals stay exact (#113). */
+async function testBoundedConcurrentStoredReads(root) {
+	const plugin = await freshModule("bounded-reads", join(root, "bounded-reads"));
+	const ids = Array.from({ length: 12 }, (_, index) => `stored-${index}`);
+	let active = 0;
+	let peak = 0;
+	const persistence = {
+		list: async () => ids.map((id) => ({ header: { id }, revision: "r1" })),
+		open: async () => ({
+			read: async () => {
+				active += 1;
+				peak = Math.max(peak, active);
+				await new Promise((resolve) => setTimeout(resolve, 5));
+				active -= 1;
+				return { eventState: "detached", events: [usageEvent(0, 1)] };
+			},
+			close: async () => {}
+		})
+	};
+	const context = makeContext({ sessions: { list: () => [] }, persistence });
+	const usage = await plugin.collectUsage(context);
+	assert.equal(usage.total.tokens, ids.length, "every stored session is folded exactly once");
+	assert.ok(peak > 1, `stored reads must overlap (peak ${peak})`);
+	assert.ok(peak <= 4, `stored reads must stay bounded (peak ${peak})`);
+}
+
+/**
+ * Configured routes come from the host's provider registry, not only from user
+ * settings: 0.1.7 keeps pi-ai profiles in the host's plugin configuration, so a
+ * settings-only read lists almost nothing.
+ */
+async function testConfiguredProvidersIncludeRegisteredRoutes(root) {
+	const plugin = await freshModule("configured-providers", join(root, "configured-providers"));
+	const settings = {
+		get: (ns) => ns === "llm-deepseek"
+			? { apiKeyEnv: "DEEPSEEK_API_KEY", baseURL: "https://api.deepseek.com" }
+			: ns === "llm-pi-ai"
+				? { providers: { tokenrhythm: { displayName: "Token Rhythm", apiKeyEnv: "TOKENRHYTHM_API_KEY", baseURL: "https://api.tokenrhythm.example/v1" } } }
+				: void 0
+	};
+	const llm = {
+		listProviders: () => [
+			{ id: "deepseek-official", name: "DeepSeek" },
+			{ id: "tokenrhythm", name: "TokenRhythm" },
+			{ id: "scnet", name: "SCNet" },
+			{ id: "orcarouter", name: "OrcaRouter" },
+			{ id: "openrouter1", name: "OpenRouter" },
+			{ id: "", name: "broken" }
+		]
+	};
+	const providers = await plugin.configuredProviders(makeContext({ settings, llm }));
+	assert.deepEqual(providers.map((provider) => provider.id), ["deepseek-official", "tokenrhythm", "scnet", "orcarouter", "openrouter1"], "registered routes join the settings-derived ones without duplicates");
+	const tokenrhythm = providers.find((provider) => provider.id === "tokenrhythm");
+	assert.equal(tokenrhythm.displayName, "Token Rhythm", "a settings profile wins over the registry display name");
+	assert.equal(tokenrhythm.apiKeyEnv, "TOKENRHYTHM_API_KEY", "the settings profile keeps the credential reference");
+	assert.equal(tokenrhythm.baseURL, "https://api.tokenrhythm.example/v1");
+	const scnet = providers.find((provider) => provider.id === "scnet");
+	assert.equal(scnet.displayName, "SCNet");
+	assert.equal(scnet.baseURL, undefined, "a registry-only route must not invent connection facts");
+	assert.equal(scnet.apiKeyEnv, undefined);
+	assert.equal(scnet.pricingRelevant, false, "a registry-only route stays out of the pricing identity");
+	assert.equal(providers.find((provider) => provider.id === "deepseek-official").pricingRelevant, undefined, "settings-derived providers keep pricing meaning");
+
+	// Older hosts have no provider registry: the settings-derived list stands.
+	const legacy = await plugin.configuredProviders(makeContext({ settings }));
+	assert.deepEqual(legacy.map((provider) => provider.id), ["deepseek-official", "tokenrhythm"]);
+	// A registry that throws must not fail the caller.
+	const warnings = [];
+	const failing = await plugin.configuredProviders(makeContext({ settings, llm: { listProviders: () => { throw new Error("registry down"); } }, warnings }));
+	assert.deepEqual(failing.map((provider) => provider.id), ["deepseek-official", "tokenrhythm"]);
+	assert.equal(warnings.length, 1, "an unreadable registry is reported once");
+	assert.match(warnings[0], /listing registered providers failed/);
+}
+
+/**
+ * Registry-discovered routes must not move the pricing fingerprint: they carry
+ * no pricing facts, and a display-only change would otherwise discard every
+ * cached fold and blank the cost of history they never described.
+ */
+async function testRegistryRoutesDoNotMovePricingFingerprint(root) {
+	const home = join(root, "registry-fingerprint");
+	const plugin = await freshModule("registry-fingerprint", home);
+	const settings = { get: (name) => name === "llm-deepseek" ? { baseURL: "https://api.deepseek.com/v1" } : void 0 };
+	const persistence = { list: async () => [] };
+	const session = { id: "registry-session", get seq() { return 1; }, snapshotEvents: (from = 0) => [usageEvent(0, 5)].slice(from) };
+	await plugin.collectUsage(makeContext({ sessions: { list: () => [session] }, persistence, settings }));
+	const bareCache = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+
+	const llm = { listProviders: () => [{ id: "deepseek-official", name: "DeepSeek" }, { id: "tokenrhythm", name: "Token Rhythm" }] };
+	const context = makeContext({ sessions: { list: () => [session] }, persistence, settings, llm });
+	const providers = await plugin.configuredProviders(context);
+	assert.equal(providers.some((provider) => provider.id === "tokenrhythm"), true, "the registry route still lists for the panel");
+	await plugin.collectUsage(context);
+	const registryCache = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.equal(registryCache.pricingFingerprint, bareCache.pricingFingerprint, "a registry-discovered route must not move the pricing fingerprint");
+	assert.equal(registryCache.pricingIdentityCutoffs.tokenrhythm, void 0, "and must not cut off its own history");
+}
+
+/**
+ * A pricing-identity change must not blank usage. Token buckets are
+ * pricing-independent, so the transition carries them and rebuilds only the
+ * derived cost. The observable moment is a UI read taken while the rescan is
+ * still in flight, because that read serves the cache the transition produced.
+ */
+async function testPricingTransitionKeepsTokenFolds(root) {
+	const home = join(root, "pricing-transition-folds");
+	const plugin = await freshModule("pricing-transition-folds", home);
+	const logs = new Map([["stored", [usageEvent(0, 7)]]]);
+	const revisions = new Map([["stored", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	let gate = null;
+	const persistence = {
+		list: async () => {
+			if (gate !== null) await gate;
+			return api.list();
+		},
+		open: api.open
+	};
+	let baseURL = "https://api.deepseek.com/v1";
+	const settings = { get: (name) => name === "llm-pi-ai" ? { providers: { "route-a": { displayName: "Route A", baseURL } } } : void 0 };
+	const context = makeContext({ sessions: { list: () => [] }, persistence, settings });
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 7, "the stored session folds under the first identity");
+
+	// The route's pricing identity changes; hold the rescan open so the
+	// transition is observed the way the panel observes it.
+	baseURL = "https://relay.invalid/v1";
+	let release;
+	gate = new Promise((resolve) => { release = resolve; });
+	const scan = plugin.collectUsage(context);
+	const during = await plugin.collectUsage(context, { monitors: {} }, { scanPersisted: false });
+	assert.equal(during.total.tokens, 7, "a pricing transition must keep folded usage visible while the rescan runs");
+	release();
+	await scan;
+	gate = null;
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 7, "and the refold restores the same total");
+
+	// The same transition through the stored cache, which is the path a restart
+	// takes: a fresh module must carry the folds, not start from zero.
+	baseURL = "https://api.deepseek.com/v1";
+	const reloaded = await freshModule("pricing-transition-folds-reload", home);
+	gate = new Promise((resolve) => { release = resolve; });
+	const reloadedContext = makeContext({ sessions: { list: () => [] }, persistence, settings });
+	const reloadedScan = reloaded.collectUsage(reloadedContext);
+	const reloadedDuring = await reloaded.collectUsage(reloadedContext, { monitors: {} }, { scanPersisted: false });
+	assert.equal(reloadedDuring.total.tokens, 7, "a stored-cache pricing transition must keep the token fold");
+	release();
+	await reloadedScan;
+	gate = null;
+}
+
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
@@ -1328,6 +1664,14 @@ try {
 	await testCurrentPersistenceApi(root);
 	await testSettledSessionRefresh(root);
 	await testFailedSettledReadKeepsFold(root);
+	await testUiReadNotBlockedByFullScan(root);
+	await testStoredReadFailurePolicy(root);
+	await testTransientReadFailureIsRetried(root);
+	await testUiReadServesOnePublishedGeneration(root);
+	await testBoundedConcurrentStoredReads(root);
+	await testConfiguredProvidersIncludeRegisteredRoutes(root);
+	await testRegistryRoutesDoNotMovePricingFingerprint(root);
+	await testPricingTransitionKeepsTokenFolds(root);
 	await testLiveLogShrink(root);
 	await testZeroUsageRowsFiltered(root);
 	console.log("SERVER REGRESSION TESTS PASSED");

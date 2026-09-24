@@ -56,7 +56,7 @@ function makeResponse() {
 	};
 }
 
-function makeContext({ sessions, persistence, routes, settings, diagnostics, listeners, warnings } = {}) {
+function makeContext({ sessions, persistence, routes, settings, diagnostics, listeners, warnings, llm } = {}) {
 	return {
 		logger: { warn: (message) => warnings?.push(String(message)) },
 		credentials: { resolve: async () => void 0 },
@@ -67,7 +67,7 @@ function makeContext({ sessions, persistence, routes, settings, diagnostics, lis
 			return () => listeners?.delete(name);
 		},
 		__usageStatsDiagnostics: diagnostics,
-		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : name === "settings" ? settings : void 0
+		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : name === "settings" ? settings : name === "llm" ? llm : void 0
 	};
 }
 
@@ -1418,6 +1418,79 @@ async function testBoundedConcurrentStoredReads(root) {
 	assert.ok(peak <= 4, `stored reads must stay bounded (peak ${peak})`);
 }
 
+/**
+ * Configured routes come from the host's provider registry, not only from user
+ * settings: 0.1.7 keeps pi-ai profiles in the host's plugin configuration, so a
+ * settings-only read lists almost nothing.
+ */
+async function testConfiguredProvidersIncludeRegisteredRoutes(root) {
+	const plugin = await freshModule("configured-providers", join(root, "configured-providers"));
+	const settings = {
+		get: (ns) => ns === "llm-deepseek"
+			? { apiKeyEnv: "DEEPSEEK_API_KEY", baseURL: "https://api.deepseek.com" }
+			: ns === "llm-pi-ai"
+				? { providers: { tokenrhythm: { displayName: "Token Rhythm", apiKeyEnv: "TOKENRHYTHM_API_KEY", baseURL: "https://api.tokenrhythm.example/v1" } } }
+				: void 0
+	};
+	const llm = {
+		listProviders: () => [
+			{ id: "deepseek-official", name: "DeepSeek" },
+			{ id: "tokenrhythm", name: "TokenRhythm" },
+			{ id: "scnet", name: "SCNet" },
+			{ id: "orcarouter", name: "OrcaRouter" },
+			{ id: "openrouter1", name: "OpenRouter" },
+			{ id: "", name: "broken" }
+		]
+	};
+	const providers = await plugin.configuredProviders(makeContext({ settings, llm }));
+	assert.deepEqual(providers.map((provider) => provider.id), ["deepseek-official", "tokenrhythm", "scnet", "orcarouter", "openrouter1"], "registered routes join the settings-derived ones without duplicates");
+	const tokenrhythm = providers.find((provider) => provider.id === "tokenrhythm");
+	assert.equal(tokenrhythm.displayName, "Token Rhythm", "a settings profile wins over the registry display name");
+	assert.equal(tokenrhythm.apiKeyEnv, "TOKENRHYTHM_API_KEY", "the settings profile keeps the credential reference");
+	assert.equal(tokenrhythm.baseURL, "https://api.tokenrhythm.example/v1");
+	const scnet = providers.find((provider) => provider.id === "scnet");
+	assert.equal(scnet.displayName, "SCNet");
+	assert.equal(scnet.baseURL, undefined, "a registry-only route must not invent connection facts");
+	assert.equal(scnet.apiKeyEnv, undefined);
+	assert.equal(scnet.pricingRelevant, false, "a registry-only route stays out of the pricing identity");
+	assert.equal(providers.find((provider) => provider.id === "deepseek-official").pricingRelevant, undefined, "settings-derived providers keep pricing meaning");
+
+	// Older hosts have no provider registry: the settings-derived list stands.
+	const legacy = await plugin.configuredProviders(makeContext({ settings }));
+	assert.deepEqual(legacy.map((provider) => provider.id), ["deepseek-official", "tokenrhythm"]);
+	// A registry that throws must not fail the caller.
+	const warnings = [];
+	const failing = await plugin.configuredProviders(makeContext({ settings, llm: { listProviders: () => { throw new Error("registry down"); } }, warnings }));
+	assert.deepEqual(failing.map((provider) => provider.id), ["deepseek-official", "tokenrhythm"]);
+	assert.equal(warnings.length, 1, "an unreadable registry is reported once");
+	assert.match(warnings[0], /listing registered providers failed/);
+}
+
+/**
+ * Registry-discovered routes must not move the pricing fingerprint: they carry
+ * no pricing facts, and a display-only change would otherwise discard every
+ * cached fold and blank the cost of history they never described.
+ */
+async function testRegistryRoutesDoNotMovePricingFingerprint(root) {
+	const home = join(root, "registry-fingerprint");
+	const plugin = await freshModule("registry-fingerprint", home);
+	const settings = { get: (name) => name === "llm-deepseek" ? { baseURL: "https://api.deepseek.com/v1" } : void 0 };
+	const persistence = { list: async () => [] };
+	const session = { id: "registry-session", get seq() { return 1; }, snapshotEvents: (from = 0) => [usageEvent(0, 5)].slice(from) };
+	await plugin.collectUsage(makeContext({ sessions: { list: () => [session] }, persistence, settings }));
+	const bareCache = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+
+	const llm = { listProviders: () => [{ id: "deepseek-official", name: "DeepSeek" }, { id: "tokenrhythm", name: "Token Rhythm" }] };
+	const context = makeContext({ sessions: { list: () => [session] }, persistence, settings, llm });
+	const providers = await plugin.configuredProviders(context);
+	assert.equal(providers.some((provider) => provider.id === "tokenrhythm"), true, "the registry route still lists for the panel");
+	await plugin.collectUsage(context);
+	const registryCache = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.equal(registryCache.pricingFingerprint, bareCache.pricingFingerprint, "a registry-discovered route must not move the pricing fingerprint");
+	assert.equal(registryCache.pricingIdentityCutoffs.tokenrhythm, void 0, "and must not cut off its own history");
+}
+
+
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
@@ -1447,6 +1520,8 @@ try {
 	await testUiReadNotBlockedByFullScan(root);
 	await testUnreadableSessionMemo(root);
 	await testBoundedConcurrentStoredReads(root);
+	await testConfiguredProvidersIncludeRegisteredRoutes(root);
+	await testRegistryRoutesDoNotMovePricingFingerprint(root);
 	await testLiveLogShrink(root);
 	await testZeroUsageRowsFiltered(root);
 	console.log("SERVER REGRESSION TESTS PASSED");

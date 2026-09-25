@@ -102,6 +102,47 @@ if (!dayTokensRule.includes("flex:none") || !dayTokensRule.includes("font-varian
 if (/(?:^|;)width:84px(?:;|$)/.test(dayTokensRule)) throw new Error("Last 14 days token column must use min-width rather than a fixed width in narrow layouts");
 const dayDateRule = /\.usg_dayDate\{([^}]*)\}/.exec(source)?.[1] ?? "";
 if (!dayDateRule.includes("flex:0 1 104px") || !dayDateRule.includes("min-width:0") || !dayDateRule.includes("overflow:hidden")) throw new Error("the date column must shrink before the aligned token column can overflow a narrow panel");
+// The sidebar action sits directly above the shell's Settings key and keeps that
+// key's geometry: a 42px row with 10/8px side padding and the same `4px -2px`
+// row margin, so the two buttons line up on both axes (#108). The collapsed
+// action keeps the 36px rail circle.
+const badgeRule = /\.usg_badge\{([^}]*)\}/.exec(source)?.[1] ?? "";
+const layerRule = /\.usg_layer\{([^}]*)\}/.exec(source)?.[1] ?? "";
+const railBadgeRule = /\.usg_layer\.usg_rail \.usg_badge\{([^}]*)\}/.exec(source)?.[1] ?? "";
+if (!badgeRule.includes("height:42px") || !badgeRule.includes("padding:0 10px 0 8px")) throw new Error("the expanded sidebar action must match the Settings key geometry (42px, 10/8px padding)");
+if (!layerRule.includes("width:calc(100% + 4px)") || !layerRule.includes("margin:4px -2px")) throw new Error("the sidebar action row must mirror the Settings row box (width calc(100% + 4px) with margin 4px -2px), never a one-sided top margin");
+if (!badgeRule.includes("box-sizing:border-box")) throw new Error("the sidebar action must size its padding inside the row box, like the Settings key");
+if (!railBadgeRule.includes("height:36px")) throw new Error("the collapsed sidebar action must match the Settings rail key (36px)");
+// Keyboard focus must be visible on the action and on the panel's controls.
+const focusRule = new RegExp("\\.usg_badge:focus-visible[^{]*\\{([^}]*)\\}").exec(source)?.[1] ?? "";
+if (!focusRule.includes("2px solid var(--dsw-alias-brand-primary)")) throw new Error("the sidebar action needs the host brand focus outline");
+// Hover uses the same translucent token as the Settings key; the opaque
+// `-hover-solid` fill is the shell's surface variant, not a row hover.
+const badgeHoverRule = /\.usg_badge:hover\{([^}]*)\}/.exec(source)?.[1] ?? "";
+if (!badgeHoverRule.includes("background:var(--dsw-alias-interactive-bg-hover)")) throw new Error("the sidebar action hover must match the Settings key hover token");
+// Panel surface: the official elevated-menu recipe. The blur token is absent
+// before 0.1.7, where the declaration drops out and the opaque menu colour
+// remains — that fallback is why no version check is needed.
+const panelRule = /\.usg_panel\{([^}]*)\}/.exec(source)?.[1] ?? "";
+const headerRule = /\.usg_header\{([^}]*)\}/.exec(source)?.[1] ?? "";
+if (!panelRule.includes("background:var(--dsw-specific-menu,var(--dsw-alias-bg-overlay,var(--dsw-alias-bg-base)))")) throw new Error("the panel must use the official menu surface colour");
+if (!panelRule.includes("backdrop-filter:var(--dsw-menu-backdrop-filter)")) throw new Error("the panel must pair the translucent menu surface with the official backdrop blur");
+if (!panelRule.includes("box-shadow:var(--dsw-elevation-prominent,var(--dsw-shadow-lv2))")) throw new Error("the panel must take the official prominent elevation with the legacy shadow as fallback");
+if (panelRule.includes("border:1px solid")) throw new Error("the official menu surface draws its hairline through the elevation stroke, not a 1px border");
+if (headerRule.includes("background:")) throw new Error("the panel header must stay transparent so the glass surface is continuous");
+// A control on the translucent panel takes the shell's glass-menu pattern
+// (transparent fill + hairline ring + shared hover fill); only the native popup
+// list stays opaque, because it draws over the page.
+const selectRule = /\.usg_providerSelect\{([^}]*)\}/.exec(source)?.[1] ?? "";
+const selectHoverRule = /\.usg_providerSelect:hover\{([^}]*)\}/.exec(source)?.[1] ?? "";
+const selectOptionRule = /\.usg_providerSelect option\{([^}]*)\}/.exec(source)?.[1] ?? "";
+if (!selectRule.includes("background:transparent")) throw new Error("a control on the translucent panel must not paint an opaque fill");
+if (!selectRule.includes("border:0.5px solid var(--dsw-alias-border-l3")) throw new Error("the provider select must take the shell hairline ring");
+if (!selectHoverRule.includes("background:var(--dsw-alias-interactive-bg-hover)")) throw new Error("the provider select hover must use the shared interactive fill");
+if (!selectOptionRule.includes("background:var(--dsw-alias-bg-layer-3")) throw new Error("the native option list must stay opaque over the page");
+for (const selector of [".usg_iconButton:focus-visible", ".usg_navButton:focus-visible", ".usg_cell:focus-visible", ".usg_day:focus-visible"]) {
+	if (!source.includes(selector)) throw new Error(`panel control ${selector} must join the focus outline rule`);
+}
 new Function(source)(); // executes the window.__ModuleLoader__.load call
 
 if (captured === null) throw new Error("loader did not capture the bundle");

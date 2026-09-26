@@ -615,6 +615,23 @@ assert.equal(formatResetCountdown("2026-08-24T02:37:00Z", resetNow, resetTransla
 assert.equal(formatResetCountdown("2026-08-27T14:00:00Z", resetNow, resetTranslate), "Resets in 3d 14h");
 console.log("panel reset countdown formatting ok");
 
+const { tariffWindowText } = exports_;
+const tariffTranslate = (key, params) => {
+	if (key === "duration.minutes") return `${params.minutes}m`;
+	if (key === "duration.hoursMinutes") return `${params.hours}h ${params.minutes}m`;
+	if (key === "duration.daysHours") return `${params.days}d ${params.hours}h`;
+	if (key === "pricing.peak") return "Peak";
+	if (key === "pricing.offPeak") return "Off-peak";
+	if (key === "pricing.peakCountdown") return `Peak · off-peak in ${params.time}`;
+	if (key === "pricing.offPeakCountdown") return `Off-peak · peak in ${params.time}`;
+	return key;
+};
+assert.equal(tariffWindowText({ tariff: "peak", nextTransitionAt: "2026-08-24T04:00:00.000Z" }, Date.parse("2026-08-24T03:00:00.000Z"), tariffTranslate), "Peak · off-peak in 1h 0m");
+assert.equal(tariffWindowText({ tariff: "offPeak", nextTransitionAt: "2026-08-31T01:00:00.000Z" }, Date.parse("2026-08-30T01:00:00.000Z"), tariffTranslate), "Off-peak · peak in 1d 0h");
+assert.equal(tariffWindowText({ tariff: "peak", nextTransitionAt: "2026-08-24T04:00:00.000Z" }, Date.parse("2026-08-24T04:00:00.000Z"), tariffTranslate), "", "expired tariff state must not remain visible");
+assert.equal(tariffWindowText(null, Date.now(), tariffTranslate), "");
+console.log("DeepSeek tariff countdown formatting ok");
+
 // Mount the real sidebar action and verify its own badge opens the existing
 // panel. Network and timers are inert test doubles; production still uses the
 // panel's existing refresh/cache path.

@@ -318,7 +318,8 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
 1. 点击侧边栏“用量/余额”。
 2. 用“当前供应商”切换账户卡片；一次只显示一个 provider。
 3. 使用 `‹` / `›` 切换月份，点击热图日期查看当天的 provider/model 明细。
-4. 标题栏刷新会更新 Token、provider 列表，并强制刷新当前账户。
+4. “最近会话费用”只显示 `costComplete=true` 的完整估算；未知价格或混合币种会话不会展示误导性的部分金额，完整 session 数据仍可通过 CSV/JSON 导出。
+5. 标题栏刷新会更新 Token、provider 列表，并强制刷新当前账户。
 
 ### 安全导出 / Secret-free export
 

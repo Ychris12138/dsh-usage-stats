@@ -552,6 +552,25 @@ if (!cny.includes("36.44")) throw new Error(`unexpected CNY format: ${cny}`);
 if (fmtCurrency(void 0, "CNY") !== "—") throw new Error("missing amount must render em dash");
 if (fmtCurrency("9.9", "USD").includes("¥")) throw new Error("USD must not render as ¥");
 console.log("currency formatting ok:", cny);
+
+const { buildSessionCostRows, sessionCostMeta } = exports_;
+const sessionRows = buildSessionCostRows([
+	{ sessionId: "old", title: "Old", tokens: 1000, estimatedCost: 1.25, currency: "USD", costComplete: true, models: ["deepseek-v4-flash"], lastAt: "2026-09-01T00:00:00.000Z" },
+	{ sessionId: "unknown", title: "Unknown", tokens: 2000, estimatedCost: null, currency: null, costComplete: false, models: ["relay-model"], lastAt: "2026-09-03T00:00:00.000Z" },
+	{ sessionId: "new", title: "New", tokens: 3000, estimatedCost: 0, currency: "USD", costComplete: true, models: ["deepseek-v4-pro"], lastAt: "2026-09-02T00:00:00.000Z" }
+]);
+assert.deepEqual(sessionRows.map((session) => session.sessionId), ["new", "old"], "only complete priced sessions should render, newest first");
+assert.equal(sessionRows[0].estimatedCost, 0, "a complete zero-cost session remains a valid priced session");
+assert.equal(buildSessionCostRows(sessionRows, 1).length, 1, "session cost list limit must be respected");
+assert.equal(buildSessionCostRows(sessionRows, 0).length, 0);
+const sessionTranslate = (key, params) => {
+	if (key === "sessionCost.meta") return `${params.tokens} tokens · ${params.models}`;
+	if (key === "sessionCost.tokensOnly") return `${params.tokens} tokens`;
+	return key;
+};
+const meta = sessionCostMeta(sessionRows[0], sessionTranslate);
+if (!meta.includes("3,000") || !meta.includes("deepseek-v4-pro")) throw new Error(`unexpected session cost metadata: ${meta}`);
+console.log("session cost filtering, ordering, zero-cost handling, and metadata ok");
 const budgetTranslate = (key, params) => {
 	if (key === "budget.period.daily") return "Today";
 	if (key === "budget.level.warning") return "Near";

@@ -5,6 +5,7 @@ import {
 	DEEPSEEK_PRICING_RULES,
 	estimateTokenCost,
 	matchPricingRule,
+	resolveCurrentTariff,
 	resolveUnitPricing,
 	validatePricingRules
 } from "../lib/pricing.js";
@@ -96,6 +97,23 @@ console.log("DeepSeek pricing catalog validates ok");
 	assert.equal(tariff("2026-08-29T01:00:00.000Z", "deepseek-v4-pro"), "offPeak", "Rule C Saturday is all off-peak");
 	assert.equal(tariff("2026-08-30T01:00:00.000Z", "deepseek-v4-pro"), "offPeak", "Rule C Sunday is all off-peak");
 	console.log("Rule B/C boundary and weekday-only schedule ok");
+}
+
+{
+	const peak = resolveCurrentTariff({ identity: official, timestamp: "2026-08-24T01:30:00.000Z", currency: "USD" });
+	assert.deepEqual(peak, {
+		tariff: "peak",
+		timezone: "Asia/Shanghai",
+		nextTransitionAt: "2026-08-24T04:00:00.000Z"
+	});
+	const lunch = resolveCurrentTariff({ identity: official, timestamp: "2026-08-24T04:30:00.000Z", currency: "USD" });
+	assert.equal(lunch.tariff, "offPeak");
+	assert.equal(lunch.nextTransitionAt, "2026-08-24T06:00:00.000Z");
+	const weekend = resolveCurrentTariff({ identity: official, timestamp: "2026-08-29T03:00:00.000Z", currency: "USD" });
+	assert.equal(weekend.tariff, "offPeak");
+	assert.equal(weekend.nextTransitionAt, "2026-08-31T01:00:00.000Z");
+	assert.equal(resolveCurrentTariff({ identity: customRelay, timestamp: "2026-08-24T01:30:00.000Z", currency: "USD" }), null, "custom relay must not expose official tariff state");
+	console.log("provider-level tariff state and next transition ok");
 }
 
 {

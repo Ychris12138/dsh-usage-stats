@@ -2213,9 +2213,14 @@ console.log("snapshot -> " + snapshot.status);
 	assert.ok(calls.every((call) => call.init.headers.authorization === `Bearer ${secret}`));
 	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent]), [
 		["session", 2],
-		["weekly", 0.8]
+		["weekly", 0.8],
+		["monthly", 0.3]
 	]);
-	assert.equal(account.windows[0].resetsAt, new Date(now + 5 * 3600000).toISOString());
+	assert.deepEqual(account.windows.map((window) => window.resetsAt), [
+		new Date(now + 5 * 3600000).toISOString(),
+		new Date(now + 7 * 86400000).toISOString(),
+		"2026-10-01T00:00:00.000Z"
+	]);
 	assert.equal(account.balance.remaining, 69.716263802);
 	assert.equal(account.balance.used, 0.235832552);
 	assert.equal(account.balance.currency, "USD");

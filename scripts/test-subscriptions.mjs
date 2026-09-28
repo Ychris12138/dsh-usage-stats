@@ -564,19 +564,23 @@ const noLocalAuth = {
 					json: async () => ({ totalCount: 75, totalCost: 0.235832552, totalCredits: 0.235832552, totalMonthlyCredits: 0.235832552, totalTokens: 4679269 })
 				};
 			}
-			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active" } }) };
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active", currentPeriodEnd: "2026-10-01T00:00:00.000Z" } }) };
 		}
 	});
 	assert.equal(account.status, "ok");
 	assert.equal(account.mode, "subscription");
 	assert.equal(account.plan, "GOAT");
+	// Three windows, matching what a subscription card renders: the 5-hour and
+	// weekly money caps plus the monthly credit pool.
 	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
 		["session", 2, 98],
-		["weekly", 0.8, 99.2]
+		["weekly", 0.8, 99.2],
+		["monthly", 0.3, 99.7]
 	]);
 	assert.deepEqual(account.windows.map((window) => window.resetsAt), [
 		new Date(now + 5 * 3600000).toISOString(),
-		new Date(now + 7 * 86400000).toISOString()
+		new Date(now + 7 * 86400000).toISOString(),
+		"2026-10-01T00:00:00.000Z"
 	]);
 	assert.equal(account.credits.remaining, 69.716263802);
 	assert.equal(account.credits.used, 0.235832552);
@@ -645,6 +649,8 @@ const noLocalAuth = {
 	});
 	assert.equal(account.status, "ok");
 	assert.equal(account.plan, void 0);
+	// Without the summary there is no period spend, so there is no monthly
+	// denominator to compute and no third bar to draw.
 	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent]), [["session", 50], ["weekly", 100]]);
 	assert.equal(account.credits.remaining, 17.5);
 	assert.equal(account.credits.used, void 0);

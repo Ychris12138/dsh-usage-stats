@@ -220,7 +220,9 @@ Ollama 适配器只对**已配置的 provider** 生效，不会自动添加账�
             credentialRef: OLLAMA_API_KEY   # 非已配置 provider 时必填
 ```
 
-Command Code（Go / GOAT / Pro / Max）读取 `COMMANDCODE_API_KEY`，调用官方 CLI 自己使用的一组未公开端点：`/alpha/billing/credits` 给出 credits 与 5 小时/每周窗口，`/alpha/usage/summary` 给出本期请求数与花费，`/alpha/billing/subscriptions` 给出档位（Go / GOAT / Pro / Max）。卡片因此同时显示**两部分**：窗口按「已用金额 ÷ 上限」换算成进度条，credits（月度 + 购买 + 赠送）以美元余额显示在窗口上方——这是本插件里唯一一张余额与订阅窗口并存的卡片。
+Command Code（Go / GOAT / Pro / Max）读取 `COMMANDCODE_API_KEY`，调用官方 CLI 自己使用的一组未公开端点：`/alpha/billing/credits` 给出 credits 与 5 小时/每周窗口，`/alpha/usage/summary` 给出本期请求数与花费，`/alpha/billing/subscriptions` 给出档位（Go / GOAT / Pro / Max）与计费周期。卡片因此显示**三条窗口**——5 小时、每周、每月（每月的重置时间就是订阅周期结束时间）——外加一行 credits 美元余额，这是本插件里唯一一张余额与订阅窗口并存的卡片。
+
+三条窗口的口径：5 小时与每周按上游直接给出的「已用金额 ÷ 上限」换算；月度池上游从不给出总量，分母由「剩余 credits + 本期花费」相加得到（推导值）。
 
 只有 credits 端点决定查询成败，另两个端点失败只会少显示档位或本期花费；上游从不直接给出月度池总量，所以「总额」是余额与本期花费之和（推导值）。这些端点没有公开文档，字段缺失一律按“没有这项”处理，形状完全无法识别时返回 `invalid-response` 并带上安全的原因码，而不会把未知当成 0 余额。
 

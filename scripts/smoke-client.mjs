@@ -472,7 +472,8 @@ const commandCodeAccount = {
 	plan: "GOAT",
 	windows: [
 		{ kind: "session", usedPercent: 2, remainingPercent: 98, resetsAt: "2026-09-28T12:00:00Z" },
-		{ kind: "weekly", usedPercent: 0.8, remainingPercent: 99.2 }
+		{ kind: "weekly", usedPercent: 0.8, remainingPercent: 99.2 },
+		{ kind: "monthly", usedPercent: 0.3, remainingPercent: 99.7, resetsAt: "2026-10-01T00:00:00Z" }
 	],
 	balance: { remaining: 69.72, used: 0.24, total: 69.96, currency: "USD", breakdown: { granted: 0, toppedUp: 0 } }
 };
@@ -488,8 +489,11 @@ if (!commandCodeMarkup.includes("data-account-mode=\"subscription\"") || !comman
 	throw new Error("Command Code must render the subscription card with its plan label");
 }
 if (!commandCodeMarkup.includes(usd(69.72))) throw new Error("Command Code must render the credit balance beside its windows");
-if ((commandCodeMarkup.match(/role="progressbar"/g) ?? []).length !== 2 || !commandCodeMarkup.includes("width:2%")) {
-	throw new Error("Command Code must render its two rolling windows");
+if ((commandCodeMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !commandCodeMarkup.includes("width:2%")) {
+	throw new Error("Command Code must render 5-hour, weekly and monthly windows");
+}
+if (!commandCodeMarkup.includes("subscription.window.monthly") || !commandCodeMarkup.includes("width:0.3%")) {
+	throw new Error("the monthly credit pool must render as its own window");
 }
 // Credits without a readable window are a complete answer: the card may not
 // also claim the provider returned no quota windows.

@@ -189,7 +189,7 @@ async function testDeepSeekDesktopAccountRoute(root) {
 		const signedOut = makeResponse();
 		await routes.get(plugin.ACCOUNT_PATH)({
 			method: "GET",
-			url: `${plugin.ACCOUNT_PATH}?provider=deepseek-account&refresh=1`,
+			url: `${plugin.ACCOUNT_PATH}?provider=deepseek-account`,
 			headers: {
 				host: "localhost:3080",
 				"x-dsh-usage-stats-client-locale": "en-US",
@@ -200,7 +200,7 @@ async function testDeepSeekDesktopAccountRoute(root) {
 		const signedOutAccount = JSON.parse(signedOut.body).account;
 		assert.equal(signedOutAccount.status, "signed-out");
 		assert.equal(signedOutAccount.balance, null);
-		assert.equal(balanceCalls, 1, "signed-out refresh must not call getBalance");
+		assert.equal(balanceCalls, 1, "an ordinary UI read after sign-out must bypass the old cached balance without calling getBalance");
 	} finally {
 		if (previousVersion === void 0) delete process.env.DSH_CLIENT_VERSION;
 		else process.env.DSH_CLIENT_VERSION = previousVersion;

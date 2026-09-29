@@ -63,6 +63,7 @@ const deepseek = {
 {
 	const provenanceCases = new Map([
 		["deepseek-balance", "official"],
+		["deepseek-account", "official"],
 		["openrouter-balance", "official"],
 		["moonshot-balance", "official"],
 		["zai-balance", "official"],
@@ -2151,6 +2152,123 @@ console.log("snapshot -> " + snapshot.status);
 	assert.equal(account.displayName, "My Ollama");
 	assert.equal(account.windows.length, 2);
 	console.log("Configured Ollama provider appears with user id ok");
+}
+
+{
+	const spec = resolveAccountSpec({ id: "deepseek-account", displayName: "DeepSeek Account" }, validateAccountConfig());
+	let balanceCalls = 0;
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		deepseekAccount: {
+			getState: async () => ({ status: "signed-out" }),
+			getBalance: async () => { balanceCalls += 1; throw new Error("must not query a signed-out account"); }
+		},
+		clientMetadata: { version: "0.2.0-rc.2", locale: "zh-CN", timezoneOffsetSeconds: 28800 }
+	});
+	assert.equal(account.status, "signed-out");
+	assert.equal(account.adapter, "deepseek-account");
+	assert.equal(account.balance, null);
+	assert.equal(account.source, "host-account");
+	assert.equal(balanceCalls, 0);
+	console.log("DeepSeek Account signed-out state does not masquerade as a missing API key ok");
+}
+
+{
+	const spec = resolveAccountSpec({ id: "deepseek-account", displayName: "DeepSeek Account" }, validateAccountConfig());
+	const client = { version: "0.2.0-rc.2", locale: "zh-CN", timezoneOffsetSeconds: 28800 };
+	let receivedClient = null;
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		deepseekAccount: {
+			getState: async () => ({ status: "credential-stored" }),
+			getBalance: async (value) => {
+				receivedClient = value;
+				return {
+					status: "ready",
+					value: [{ currency: "CNY", balance: "12.34" }],
+					bonusWallets: [{ currency: "CNY", balance: "5.66" }]
+				};
+			}
+		},
+		clientMetadata: client
+	});
+	assert.deepEqual(receivedClient, client, "the Host account service must receive the real caller metadata");
+	assert.equal(account.status, "ok");
+	assert.equal(account.source, "host-account");
+	assert.deepEqual(account.balance, {
+		wallets: [{ currency: "CNY", remaining: 18, breakdown: { toppedUp: 12.34, granted: 5.66 } }],
+		remaining: 18,
+		currency: "CNY",
+		unlimited: false,
+		expiresAt: null,
+		breakdown: { toppedUp: 12.34, granted: 5.66 }
+	});
+	console.log("DeepSeek Account single-currency wallet keeps legacy balance compatibility ok");
+}
+
+{
+	const spec = resolveAccountSpec({ id: "deepseek-account", displayName: "DeepSeek Account" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		deepseekAccount: {
+			getState: async () => ({ status: "credential-stored" }),
+			getBalance: async () => ({
+				status: "ready",
+				value: [
+					{ currency: "CNY", balance: "10" },
+					{ currency: "USD", balance: "2.50" }
+				],
+				bonusWallets: [
+					{ currency: "CNY", balance: "3" },
+					{ currency: "USD", balance: "1.25" }
+				]
+			})
+		},
+		clientMetadata: { version: "0.2.0-rc.2", locale: "en-US", timezoneOffsetSeconds: -25200 }
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, null, "different currencies must never be summed into one amount");
+	assert.equal(account.balance.currency, null);
+	assert.deepEqual(account.balance.wallets, [
+		{ currency: "CNY", remaining: 13, breakdown: { toppedUp: 10, granted: 3 } },
+		{ currency: "USD", remaining: 3.75, breakdown: { toppedUp: 2.5, granted: 1.25 } }
+	]);
+	assert.deepEqual(account.alert, { level: "unknown", metric: "balance", value: null });
+	console.log("DeepSeek Account multi-currency wallets remain separate ok");
+}
+
+{
+	let state = "credential-stored";
+	const deepseekAccount = {
+		getState: async () => ({ status: state }),
+		getBalance: async () => ({ status: "ready", value: [{ currency: "USD", balance: "7" }], bonusWallets: [] })
+	};
+	const service = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [],
+		config: validateAccountConfig(),
+		deps: { includeLegacyProviders: false, now: () => now, deepseekAccount }
+	});
+	let views = await service.providerViews();
+	const view = views.find((entry) => entry.id === "deepseek-account");
+	assert.equal(view?.configured, true, "stored Desktop login must make the synthetic account provider selectable");
+	assert.equal(view?.status, "pending");
+	const account = await service.get("deepseek-account", {
+		force: true,
+		clientMetadata: { version: "0.2.0-rc.2", locale: "en", timezoneOffsetSeconds: 0 }
+	});
+	assert.equal(account.status, "ok");
+	state = "signed-out";
+	const signedOutService = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [],
+		config: validateAccountConfig(),
+		deps: { includeLegacyProviders: false, now: () => now, deepseekAccount }
+	});
+	views = await signedOutService.providerViews();
+	assert.equal(views.find((entry) => entry.id === "deepseek-account")?.configured, false);
+	assert.equal(views.find((entry) => entry.id === "deepseek-account")?.status, "signed-out");
+	console.log("DeepSeek Account provider discovery follows Host login state ok");
 }
 
 console.log("ACCOUNT TESTS PASSED");

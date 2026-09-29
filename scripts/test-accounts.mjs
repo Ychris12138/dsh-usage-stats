@@ -2271,4 +2271,73 @@ console.log("snapshot -> " + snapshot.status);
 	console.log("DeepSeek Account provider discovery follows Host login state ok");
 }
 
+{
+	// A MiniMax CN route that declares only its credential ref (the host's
+	// built-in minimax-cn profile) must reach the CN quota hosts. Without the
+	// route-id hint the key is rejected globally and the panel shows
+	// "unrecognized quota data" instead of the plan windows.
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "minimax-cn", displayName: "MiniMax CN", apiKeyEnv: "MINIMAX_CN_API_KEY" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ MINIMAX_CN_API_KEY: "sk-cp-cn-key" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), auth: init.headers.authorization });
+			return jsonResponse({
+				base_resp: { status_code: 0, status_msg: "success" },
+				model_remains: [{
+					model_name: "general",
+					current_interval_remaining_percent: 72,
+					remains_time: 3600000,
+					current_weekly_remaining_percent: 40,
+					weekly_remains_time: 604800000
+				}]
+			});
+		}
+	});
+	assert.equal(spec.adapter, "minimax-token-plan");
+	assert.equal(account.status, "ok");
+	assert.equal(account.adapter, "minimax-token-plan");
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 28, 72],
+		["weekly", 60, 40]
+	]);
+	assert.deepEqual(calls.map((call) => call.url), ["https://www.minimaxi.com/v1/token_plan/remains"]);
+	assert.equal(calls[0].auth, "Bearer sk-cp-cn-key");
+	assert.equal(JSON.stringify(account).includes("sk-cp-cn-key"), false, "API key must never cross the account snapshot boundary");
+	console.log("MiniMax CN route id selects the CN quota hosts ok");
+}
+
+{
+	// The credential-ref name alone carries the same region signal, for routes
+	// whose id says nothing about the region.
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "minimax-coding", displayName: "MiniMax Coding", apiKeyEnv: "MINIMAX_CN_API_KEY" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ MINIMAX_CN_API_KEY: "sk-cp-cn-key" }), {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			return jsonResponse({ base_resp: { status_code: 0 }, model_remains: [{ model_name: "general", current_interval_remaining_percent: 50 }] });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.deepEqual(calls, ["https://www.minimaxi.com/v1/token_plan/remains"]);
+	console.log("MiniMax CN credential ref selects the CN quota hosts ok");
+}
+
+{
+	// A global route keeps the global hosts and never probes CN ones.
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "minimax", displayName: "MiniMax", apiKeyEnv: "MINIMAX_API_KEY", baseURL: "https://api.minimax.io/anthropic" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ MINIMAX_API_KEY: "sk-global-key" }), {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			return jsonResponse({ base_resp: { status_code: 0 }, model_remains: [{ model_name: "general", current_interval_remaining_percent: 55 }] });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.deepEqual(calls, ["https://www.minimax.io/v1/token_plan/remains"]);
+	console.log("MiniMax global route keeps the global quota hosts ok");
+}
+
 console.log("ACCOUNT TESTS PASSED");

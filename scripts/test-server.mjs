@@ -56,7 +56,7 @@ function makeResponse() {
 	};
 }
 
-function makeContext({ sessions, persistence, routes, settings, diagnostics, listeners, warnings, llm } = {}) {
+function makeContext({ sessions, persistence, routes, settings, diagnostics, listeners, warnings, llm, deepseekAccount } = {}) {
 	return {
 		logger: { warn: (message) => warnings?.push(String(message)) },
 		credentials: { resolve: async () => void 0 },
@@ -67,7 +67,7 @@ function makeContext({ sessions, persistence, routes, settings, diagnostics, lis
 			return () => listeners?.delete(name);
 		},
 		__usageStatsDiagnostics: diagnostics,
-		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : name === "settings" ? settings : name === "llm" ? llm : void 0
+		get: (name) => name === "sessions" ? sessions : name === "sessionPersistence" ? persistence : name === "settings" ? settings : name === "llm" ? llm : name === "deepseekAccount" ? deepseekAccount : void 0
 	};
 }
 
@@ -128,6 +128,83 @@ async function testRouteFence(root) {
 	assert.equal(account.status, 200);
 	assert.equal(JSON.parse(account.body).account.status, "not-configured");
 	assert.equal(typeof routes.get(plugin.SESSION_CONTEXT_PATH), "function");
+}
+
+async function testDeepSeekDesktopAccountRoute(root) {
+	const home = join(root, "deepseek-account");
+	const previousVersion = process.env.DSH_CLIENT_VERSION;
+	process.env.DSH_CLIENT_VERSION = "0.2.0-rc.2";
+	try {
+		const plugin = await freshModule("deepseek-account", home);
+		const routes = new Map();
+		let state = "credential-stored";
+		let receivedClient = null;
+		let balanceCalls = 0;
+		const deepseekAccount = {
+			getState: async () => ({ status: state, links: { usageUrl: "https://platform.deepseek.com/usage", topUpUrl: "https://platform.deepseek.com/top_up" }, attempt: null }),
+			getBalance: async (client) => {
+				balanceCalls += 1;
+				receivedClient = client;
+				return { status: "ready", value: [{ currency: "CNY", balance: "20" }], bonusWallets: [{ currency: "CNY", balance: "5" }] };
+			}
+		};
+		const context = makeContext({
+			sessions: { list: () => [] },
+			persistence: { list: async () => [] },
+			routes,
+			settings: { get: () => void 0 },
+			llm: { listProviders: () => [{ id: "deepseek-account", name: "DeepSeek Account" }] },
+			deepseekAccount
+		});
+		await plugin.apply(context, {}, { disableBackgroundRefresh: true });
+
+		const providers = makeResponse();
+		await routes.get(plugin.PROVIDERS_PATH)({
+			method: "GET", url: plugin.PROVIDERS_PATH,
+			headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" }
+		}, providers);
+		const accountView = JSON.parse(providers.body).providers.find((entry) => entry.id === "deepseek-account");
+		assert.equal(accountView?.configured, true);
+		assert.equal(accountView?.adapter, "deepseek-account");
+
+		const response = makeResponse();
+		await routes.get(plugin.ACCOUNT_PATH)({
+			method: "GET",
+			url: `${plugin.ACCOUNT_PATH}?provider=deepseek-account&refresh=1`,
+			headers: {
+				host: "localhost:3080",
+				"x-dsh-usage-stats-client-locale": "zh-CN",
+				"x-dsh-usage-stats-timezone-offset": "28800"
+			},
+			socket: { remoteAddress: "127.0.0.1" }
+		}, response);
+		assert.equal(response.status, 200);
+		const account = JSON.parse(response.body).account;
+		assert.equal(account.status, "ok");
+		assert.deepEqual(receivedClient, { version: "0.2.0-rc.2", locale: "zh-CN", timezoneOffsetSeconds: 28800 });
+		assert.deepEqual(account.balance.wallets, [{ currency: "CNY", remaining: 25, breakdown: { toppedUp: 20, granted: 5 } }]);
+		assert.doesNotMatch(response.body, /token|authorization|cookie/i, "the account wire must remain credential-free");
+
+		state = "signed-out";
+		const signedOut = makeResponse();
+		await routes.get(plugin.ACCOUNT_PATH)({
+			method: "GET",
+			url: `${plugin.ACCOUNT_PATH}?provider=deepseek-account&refresh=1`,
+			headers: {
+				host: "localhost:3080",
+				"x-dsh-usage-stats-client-locale": "en-US",
+				"x-dsh-usage-stats-timezone-offset": "0"
+			},
+			socket: { remoteAddress: "127.0.0.1" }
+		}, signedOut);
+		const signedOutAccount = JSON.parse(signedOut.body).account;
+		assert.equal(signedOutAccount.status, "signed-out");
+		assert.equal(signedOutAccount.balance, null);
+		assert.equal(balanceCalls, 1, "signed-out refresh must not call getBalance");
+	} finally {
+		if (previousVersion === void 0) delete process.env.DSH_CLIENT_VERSION;
+		else process.env.DSH_CLIENT_VERSION = previousVersion;
+	}
 }
 
 async function testOrcaRouterIntegrationRoute(root) {
@@ -1641,6 +1718,7 @@ async function testPricingTransitionKeepsTokenFolds(root) {
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
+	await testDeepSeekDesktopAccountRoute(root);
 	await testOrcaRouterIntegrationRoute(root);
 	await testSessionContext(root);
 	await testModernLiveSessionAPI(root);

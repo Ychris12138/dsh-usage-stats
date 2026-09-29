@@ -41,6 +41,18 @@ function assistantEvent(seq, providerId, model, time = Date.UTC(2026, 7, 23, 12,
 }
 
 {
+	const identity = resolveProviderIdentity(provider("deepseek-account", void 0, "DeepSeek Account"));
+	assert.equal(identity.providerFamily, "deepseek");
+	assert.equal(identity.accountAdapter, "deepseek-account");
+	assert.equal(identity.pricingFamily, "unknown", "account-login history must not be repriced as API-key traffic implicitly");
+	assert.equal(identity.confidence, "canonical-id");
+	const spec = resolveAccountSpec(provider("deepseek-account", void 0, "DeepSeek Account"));
+	assert.equal(spec.adapter, "deepseek-account");
+	assert.equal(spec.mode, "balance");
+	assert.equal(spec.apiKeyRef, void 0, "account login must not masquerade as an API-key credential");
+}
+
+{
 	const identity = resolveProviderIdentity(provider("relay-a", "https://api.deepseek.com/v1", "Not DeepSeek"));
 	assert.equal(identity.providerFamily, "deepseek");
 	assert.equal(identity.accountAdapter, "deepseek-balance");

@@ -212,6 +212,7 @@ assert.equal(authoritativeProviderList(null), null);
 writeSelectedProvider("opencode-go", localStorage);
 assert.equal(readSelectedProvider(localStorage), "opencode-go");
 const providerChoicesForStorage = [
+	{ id: "deepseek-account", configured: true },
 	{ id: "deepseek-official", configured: true },
 	{ id: "opencode-go", configured: true }
 ];
@@ -220,7 +221,7 @@ assert.equal(reconcileSelectedProvider("opencode-go", providerChoicesForStorage,
 assert.equal(reconcileSelectedProvider("opencode-go", [], localStorage), "opencode-go", "an empty/transient provider list must not erase the current selection");
 assert.equal(readSelectedProvider(localStorage), "opencode-go", "a transient empty provider list must not clear persisted selection");
 writeSelectedProvider("removed-provider", localStorage);
-assert.equal(reconcileSelectedProvider("removed-provider", providerChoicesForStorage, localStorage), "deepseek-official", "a removed provider must use the existing fallback");
+assert.equal(reconcileSelectedProvider("removed-provider", providerChoicesForStorage, localStorage), "deepseek-account", "a removed provider must prefer the signed-in DeepSeek Account route");
 assert.equal(readSelectedProvider(localStorage), null, "a removed provider must be cleared from storage");
 writeSelectedProvider("deepseek-official", localStorage);
 const sentinelWriteStart = storedWrites.length;
@@ -600,6 +601,10 @@ if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPerce
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 55 }] }) !== false) throw new Error("subscription all above 5% must NOT warn");
 // not-configured / unavailable / empty => no misleading numeric value, no warning
 if (badgeAccountValue({ mode: "balance", status: "not-configured" }) !== null) throw new Error("not-configured balance must not show a numeric badge");
+if (badgeAccountValue({ mode: "balance", status: "signed-out" }) !== null) throw new Error("signed-out account must not show a numeric badge");
+if (badgeAccountValue({ mode: "balance", status: "ok", balance: { remaining: null, currency: null, wallets: [
+	{ currency: "CNY", remaining: 10 }, { currency: "USD", remaining: 2 }
+] } }) !== null) throw new Error("multi-currency account must not invent one collapsed total");
 if (badgeAccountValue({ mode: "subscription", status: "unavailable", windows: [] }) !== null) throw new Error("unavailable subscription must not show a numeric badge");
 if (badgeWarnOf({ mode: "balance", status: "not-configured" }) !== false) throw new Error("not-configured must never warn");
 if (badgeWarnOf(null) !== false) throw new Error("null account must never warn");
@@ -650,6 +655,12 @@ assert.equal(tariffWindowText({ tariff: "offPeak", nextTransitionAt: "2026-08-31
 assert.equal(tariffWindowText({ tariff: "peak", nextTransitionAt: "2026-08-24T04:00:00.000Z" }, Date.parse("2026-08-24T04:00:00.000Z"), tariffTranslate), "", "expired tariff state must not remain visible");
 assert.equal(tariffWindowText(null, Date.now(), tariffTranslate), "");
 console.log("DeepSeek tariff countdown formatting ok");
+
+const { accountRequestHeaders } = exports_;
+const accountHeaders = accountRequestHeaders();
+assert.equal(typeof accountHeaders["x-dsh-usage-stats-client-locale"], "string");
+assert.match(accountHeaders["x-dsh-usage-stats-timezone-offset"], /^-?\d+$/);
+console.log("DeepSeek Account request metadata headers ok");
 
 // Mount the real sidebar action and verify its own badge opens the existing
 // panel. Network and timers are inert test doubles; production still uses the

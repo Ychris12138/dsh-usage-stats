@@ -34,7 +34,7 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 
 ## 快速安装 / Quick start
 
-需要 DeepSeek Harness `web` profile（`@deepseek-ai/dsh >= 0.1.0-rc.6`）。
+需要 DeepSeek Harness `web` profile（基础功能支持 `@deepseek-ai/dsh >= 0.1.0-rc.6`）。DSH Desktop 的 **DeepSeek Account 登录余额**接入依赖 DSH `0.2.0-rc.2+` 提供的 Host account service；旧版 Harness 仍继续使用 API Key 余额路径。
 
 稳定版优先安装 npm 上的精确版本；这也是 DSH Desktop Market 使用的同一个包：
 
@@ -99,11 +99,14 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 
 ## 支持的账户类型 / Providers
 
-插件自动发现官方 DeepSeek 路由和 `llm-pi-ai` 中的 provider profile。只有存在公开账户接口或显式 monitor 的供应商才会查询远端账户；Token 用量统计不需要额外凭据。
+插件自动发现官方 DeepSeek API Key 路由、DSH 0.2 的 `deepseek-account` 路由，以及 `llm-pi-ai` 中的 provider profile。只有存在公开账户接口、Host-owned account service 或显式 monitor 的供应商才会查询账户；Token 用量统计不需要额外凭据。
+
+> **开发版说明**：当前 npm stable `0.3.4` 尚未包含 DSH 0.2 DeepSeek Account 登录余额支持；该能力目前位于 `main` / 下一稳定版候选中。`0.3.4` 的 DeepSeek 卡片仍是 API Key `/user/balance` 路径。
 
 | Provider / adapter | 模式 | 默认凭据 | 上游接口 |
 | --- | --- | --- | --- |
-| DeepSeek | 余额 | provider `apiKeyEnv` | `/user/balance` |
+| DeepSeek API Key | 余额 | provider `apiKeyEnv` | `/user/balance` |
+| DeepSeek Account（DSH 0.2 Desktop） | 余额 | DSH Host-owned account grant；插件不读取 token/cookie | `deepseekAccount.getState()` + `getBalance()` |
 | OpenRouter | 余额 | `OPENROUTER_MANAGEMENT_KEY` | `/api/v1/credits` |
 | OrcaRouter | 余额 | `ORCAROUTER_API_KEY` | `/v1/balance`（旧部署回退到账单摘要接口） |
 | Moonshot / Kimi API | 余额 | provider `apiKeyEnv` | `/v1/users/me/balance` |
@@ -162,11 +165,21 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 
 预算使用本机日历日/月边界：低于 80% 为正常，达到 80% 为 warning，达到 100% 为 critical。`daily` / `monthly` 必须是正数或 `null`；当前版本不做 FX 换算，因此预算货币与可靠价格货币不兼容时状态保持 unknown。
 
-面板的当前 provider 会保存在浏览器的命名空间 localStorage 中；刷新页面或重启 DSH 后恢复。若该 provider 已被删除，插件会清除旧值并使用原有的 DeepSeek/已配置 provider fallback。该选择不会写入 DSH 设置、服务端缓存或新 API。
+面板的当前 provider 会保存在浏览器的命名空间 localStorage 中；刷新页面或重启 DSH 后恢复。若该 provider 已被删除，插件会清除旧值；DSH 0.2 Desktop 已登录时优先选择 `deepseek-account`，否则回退到已配置的 `deepseek-official` / 其他 provider。用户已有的有效选择始终优先，不会被自动切换。该选择不会写入 DSH 设置、服务端缓存或新 API。
+
+### DSH Desktop DeepSeek Account（DSH 0.2）
+
+DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key 路由分开。插件通过 Host 的可选 `deepseekAccount` service 读取**客户端安全的登录状态和余额结果**，不会读取或复制账号 token、Cookie、PKCE 数据，也不会把它们发送到浏览器。
+
+- `deepseek-official`：继续使用 `DEEPSEEK_API_KEY` / `/user/balance`，兼容旧 Harness；
+- `deepseek-account`：使用 Desktop/Settings 已保存的账号 grant，通过官方 Host service 查询；
+- 充值余额与赠送余额按币种合并；CNY 与 USD 同时存在时**分别显示，绝不跨币种相加**；
+- Host Account 不参加后台账户轮询。只有带真实 UI 版本/语言/时区 metadata 的面板读取才会查询余额；退出或切换账号后，下一次 UI 读取不会继续复用旧余额；
+- 未登录显示“未登录 DeepSeek Account”，不会误提示用户配置 `DEEPSEEK_API_KEY`。
 
 ### 余额型供应商
 
-DeepSeek、Moonshot 等默认复用对应 provider profile 的 `apiKeyEnv`。例如：
+DeepSeek API Key、Moonshot 等默认复用对应 provider profile 的 `apiKeyEnv`。例如：
 
 ```yaml
 # ~/.dsh/.credentials.yaml
@@ -309,7 +322,7 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
 
 </details>
 
-支持的 adapter：`deepseek-balance`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`。
+支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`。
 
 `warning.warnBelow` 与 `warning.criticalBelow` 是余额绝对值阈值。具有总额度的余额和 Token Plan 会自动产生 `normal / warning / critical` 剩余比例状态（默认 30% / 10%）。
 
@@ -450,7 +463,7 @@ node scripts/check-balance.mjs
 
 ## 兼容性与致谢 / Compatibility & credits
 
-当前 npm stable 为 `0.3.4`；`v0.3.4` 的完整发布门禁见 [`docs/release-checklist.md`](docs/release-checklist.md)，变更摘要见 [`docs/release-notes-v0.3.4.md`](docs/release-notes-v0.3.4.md)。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
+当前 npm stable 为 `0.3.4`；`v0.3.4` 的完整发布门禁见 [`docs/release-checklist.md`](docs/release-checklist.md)，变更摘要见 [`docs/release-notes-v0.3.4.md`](docs/release-notes-v0.3.4.md)。`main` 正在增加 DSH `0.2.0-rc.2+` 的 `deepseek-account` Host service 兼容，发布前仍需真实 Desktop 登录环境验收。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
 
 持久化与活跃会话的读取按**能力探测**分支，不按版本号判断，因此 `>= 0.1.0-rc.6` 的支持范围未变：`0.1.3-alpha.1`–`0.1.5-rc.2` 用 `list()` 快照 + `open(id, "read")` 读句柄，`0.1.0-rc.7`–`0.1.2-rc.1` 用 `listSnapshots()` + `readFrom()`；活跃会话同时支持 `seq`/`snapshotEvents()` 与旧版 `events` 数组。`session/disposed` 在该范围内均存在（缺少它时已结束会话改由后台全量扫描补读）。缓存格式仍为 `version: 5`，旧缓存直接复用并原地重折叠。
 

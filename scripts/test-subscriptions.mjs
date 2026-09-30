@@ -387,7 +387,9 @@ const noLocalAuth = {
 
 {
 	// A credential the upstream rejects in every region is an authority
-	// problem, not a response that could not be parsed.
+	// problem, not a response that could not be parsed. The cross-region
+	// fallback only exists for routes with no region signal; a declared
+	// region (below and above) pins the request to its own hosts.
 	const calls = [];
 	const minimax = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "revoked-key" }), {}, {
 		now: () => now,
@@ -401,6 +403,36 @@ const noLocalAuth = {
 	assert.equal(minimax.reason, "base_resp status_code 1004: login fail");
 	assert.equal(calls.length, 2, "one probe per region");
 	console.log("MiniMax credential rejected in both regions is unauthorized ok");
+}
+
+{
+	// A declared region pins the credential to that region's hosts: no
+	// credential rejection may leak the key to the other region's domains.
+	const globalCalls = [];
+	const globalResult = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "global-rejected" }), { region: "global" }, {
+		now: () => now,
+		fetch: async (url) => {
+			globalCalls.push(String(url));
+			return { ok: true, status: 200, json: async () => ({ base_resp: { status_code: 2049, status_msg: "invalid api key" } }) };
+		}
+	});
+	assert.equal(globalResult.status, "unauthorized");
+	assert.equal(globalResult.region, "global");
+	assert.deepEqual(globalCalls, [
+		"https://www.minimax.io/v1/token_plan/remains"
+	], "a declared global region never touches CN hosts");
+	const cnCalls = [];
+	const cnResult = await collectSubscription("minimax", credentials({ MINIMAX_API_KEY: "cn-rejected" }), { region: "cn" }, {
+		now: () => now,
+		fetch: async (url) => {
+			cnCalls.push(String(url));
+			return { ok: true, status: 200, json: async () => ({ base_resp: { status_code: 1004, status_msg: "login fail" } }) };
+		}
+	});
+	assert.equal(cnResult.status, "unauthorized");
+	assert.equal(cnResult.region, "cn");
+	assert.deepEqual(cnCalls, ["https://www.minimaxi.com/v1/token_plan/remains"], "a declared CN region never touches global hosts");
+	console.log("MiniMax declared region pins hosts and skips the cross-region probe ok");
 }
 
 {

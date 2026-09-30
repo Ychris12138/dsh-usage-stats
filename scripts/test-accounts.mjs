@@ -2340,4 +2340,22 @@ console.log("snapshot -> " + snapshot.status);
 	console.log("MiniMax global route keeps the global quota hosts ok");
 }
 
+{
+	// A global route that receives the upstream credential rejection must stay
+	// pinned to global hosts; only an undeclared route may cross regions.
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "minimax", displayName: "MiniMax", apiKeyEnv: "MINIMAX_API_KEY", baseURL: "https://api.minimax.io/anthropic" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ MINIMAX_API_KEY: "sk-global-key" }), {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			return jsonResponse({ base_resp: { status_code: 2049, status_msg: "invalid api key" } });
+		}
+	});
+	assert.equal(account.status, "unauthorized");
+	assert.deepEqual(calls, ["https://www.minimax.io/v1/token_plan/remains"]);
+	assert.equal(calls.some((url) => url.includes("minimaxi.com")), false, "global credentials must never cross to CN hosts");
+	console.log("MiniMax global credential rejection stays pinned to global hosts ok");
+}
+
 console.log("ACCOUNT TESTS PASSED");

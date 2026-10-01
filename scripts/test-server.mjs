@@ -121,7 +121,15 @@ async function testRouteFence(root) {
 	const subscriptions = makeResponse();
 	await routes.get(plugin.SUBSCRIPTIONS_PATH)({ method: "GET", url: plugin.SUBSCRIPTIONS_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, subscriptions);
 	assert.equal(subscriptions.status, 200);
-	assert.deepEqual(JSON.parse(subscriptions.body).subscriptions.map((provider) => provider.status), ["not-configured", "not-configured"]);
+	// Every subscription-mode account is listed, including the Command Code
+	// placeholder. OpenCode Go reads an ambient ~/.local/share/opencode/auth.json
+	// when the harness has no credential of its own, so its status belongs to the
+	// machine, not to this assertion; the credential-free providers are pinned.
+	const subscriptionAccounts = JSON.parse(subscriptions.body).subscriptions;
+	assert.deepEqual(subscriptionAccounts.map((provider) => provider.id).sort(), ["commandcode", "opencode-go", "zai"]);
+	assert.equal(subscriptionAccounts.find((provider) => provider.id === "zai")?.status, "not-configured");
+	assert.equal(subscriptionAccounts.find((provider) => provider.id === "commandcode")?.status, "not-configured");
+	assert.equal(subscriptionAccounts.find((provider) => provider.id === "commandcode")?.adapter, "commandcode-goat");
 
 	const account = makeResponse();
 	await routes.get(plugin.ACCOUNT_PATH)({ method: "GET", url: `${plugin.ACCOUNT_PATH}?provider=deepseek-official`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, account);
@@ -907,6 +915,73 @@ async function testLegacyZaiSubscriptionId(root) {
 	await routes.get(plugin.ACCOUNT_PATH)({ method: "GET", url: `${plugin.ACCOUNT_PATH}?provider=zai-coding-cn&activity=detail`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, detail);
 	assert.equal(detail.status, 200);
 	assert.deepEqual(accountRead, { providerId: "zai-coding-cn", options: { force: false, activity: "detail" } }, "detail activity must stay a small server-owned AccountService hint");
+}
+
+/**
+ * A subscription account may still carry a monetary pool (Command Code reports
+ * plan credits next to its rolling windows). The legacy balance route must
+ * serve it, and must keep answering "unsupported" for subscription accounts
+ * that genuinely have no balance at all.
+ */
+async function testCommandCodeCreditsOnLegacyBalanceRoute(root) {
+	const plugin = await freshModule("commandcode-balance", join(root, "commandcode-balance"));
+	const routes = new Map();
+	const commandCode = {
+		id: "commandcode",
+		displayName: "Command Code",
+		mode: "subscription",
+		adapter: "commandcode-goat",
+		status: "ok",
+		plan: "GOAT",
+		windows: [{ kind: "session", usedPercent: 2, remainingPercent: 98 }],
+		balance: { remaining: 69.716263802, used: 0.235832552, total: 69.952096354, currency: "USD", breakdown: { granted: 0, toppedUp: 4 } }
+	};
+	const windowOnly = { id: "opencode-go", displayName: "OpenCode Go", mode: "subscription", adapter: "opencode-go", status: "ok", windows: [] };
+	const accounts = {
+		validate: async () => {},
+		subscriptionAccounts: async () => [commandCode, windowOnly],
+		providerViews: async () => [{ id: "commandcode", configured: true }, { id: "opencode-go", configured: true }],
+		get: async (providerId) => providerId === "commandcode" ? commandCode : windowOnly,
+		refreshAll: async () => []
+	};
+	await plugin.apply(makeContext({ sessions: { list: () => [] }, persistence: { listSnapshots: async () => [], list: async () => [] }, routes }), {}, {
+		disableBackgroundRefresh: true,
+		accounts
+	});
+	const request = (providerId) => {
+		const response = makeResponse();
+		return {
+			response,
+			run: routes.get(plugin.BALANCE_PATH)({
+				method: "GET",
+				url: `${plugin.BALANCE_PATH}?provider=${providerId}`,
+				headers: { host: "localhost:3080" },
+				socket: { remoteAddress: "127.0.0.1" }
+			}, response)
+		};
+	};
+
+	const credits = request("commandcode");
+	await credits.run;
+	assert.equal(credits.response.status, 200);
+	const payload = JSON.parse(credits.response.body);
+	assert.equal(payload.ok, true);
+	assert.equal(payload.provider, "commandcode");
+	assert.equal(payload.balance.isAvailable, true);
+	assert.equal(payload.balance.currency, "USD");
+	assert.equal(payload.balance.total, 69.716263802, "the compat route reports remaining credits as the balance total");
+	assert.equal(payload.balance.toppedUp, 4);
+
+	const unsupported = request("opencode-go");
+	await unsupported.run;
+	assert.equal(unsupported.response.status, 200);
+	assert.equal(JSON.parse(unsupported.response.body).error, "unsupported", "a window-only subscription keeps its explicit answer");
+
+	const subscriptions = makeResponse();
+	await routes.get(plugin.SUBSCRIPTIONS_PATH)({ method: "GET", url: plugin.SUBSCRIPTIONS_PATH, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, subscriptions);
+	const listed = JSON.parse(subscriptions.body).subscriptions;
+	assert.equal(listed.find((entry) => entry.id === "commandcode")?.balance.remaining, 69.716263802);
+	assert.doesNotMatch(subscriptions.body, /credential|apiKey/i);
 }
 
 async function testBackgroundRefresh(root) {
@@ -1732,6 +1807,7 @@ try {
 	await testExportRoutes(root);
 	await testMalformedCacheRebuild(root);
 	await testLegacyZaiSubscriptionId(root);
+	await testCommandCodeCreditsOnLegacyBalanceRoute(root);
 	await testBackgroundRefresh(root);
 	await testDisabledAccountRefresh(root);
 	await testUsageScanDedup(root);

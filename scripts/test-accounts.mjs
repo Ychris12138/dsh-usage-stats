@@ -2357,5 +2357,209 @@ console.log("snapshot -> " + snapshot.status);
 	assert.equal(calls.some((url) => url.includes("minimaxi.com")), false, "global credentials must never cross to CN hosts");
 	console.log("MiniMax global credential rejection stays pinned to global hosts ok");
 }
+{
+	// Command Code: the canonical route id resolves to the subscription adapter,
+	// and so do the ids a sync plugin generates and a bare commandcode.ai host.
+	const configured = validateAccountConfig();
+	const canonical = resolveAccountSpec({ id: "commandcode", displayName: "Command Code", apiKeyEnv: "COMMANDCODE_API_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }, configured);
+	assert.equal(canonical.adapter, "commandcode-goat");
+	assert.equal(canonical.mode, "subscription");
+	assert.equal(canonical.apiKeyRef, "COMMANDCODE_API_KEY");
+	for (const id of ["commandcode-goat-autosync", "commandcode-pro-anthropic", "commandcode-max-responses"]) {
+		const generated = resolveAccountSpec({ id, displayName: id, apiKeyEnv: "COMMANDCODE_API_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }, configured);
+		assert.equal(generated.adapter, "commandcode-goat", `${id} must resolve through the family prefix`);
+		assert.equal(generated.mode, "subscription");
+	}
+	const byHost = resolveAccountSpec({ id: "my-cc-relay", displayName: "My Command Code", apiKeyEnv: "MY_CC_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }, configured);
+	assert.equal(byHost.adapter, "commandcode-goat", "a commandcode.ai host is enough to select the adapter");
+	assert.equal(byHost.apiKeyRef, "MY_CC_KEY", "a custom route keeps its own credential reference");
+	// The route registry names a route without its connection facts, so a
+	// plugin-published Command Code route arrives with no apiKeyEnv. Without a
+	// fallback such a route stays "not-configured" and is never queried.
+	const published = resolveAccountSpec({ id: "commandcode", displayName: "Command Code" }, configured);
+	assert.equal(published.adapter, "commandcode-goat");
+	assert.equal(published.apiKeyRef, "COMMANDCODE_API_KEY", "a plugin-published route falls back to the provider plugin's credential name");
+	const explicitRef = resolveAccountSpec({ id: "commandcode", displayName: "Command Code" }, validateAccountConfig({ monitors: { commandcode: { adapter: "commandcode-goat", credentialRef: "MY_CC_KEY" } } }));
+	assert.equal(explicitRef.apiKeyRef, "MY_CC_KEY", "an explicit monitor credentialRef still wins");
+	console.log("Command Code identity and adapter resolution ok");
+}
+
+{
+	// The claimed client version is a monitor field: valid values pass through,
+	// and a blank or free-form string is refused instead of being sent as-is.
+	for (const version of ["1.72.1", "1.72", "1.72.1-beta.2"]) {
+		const spec = resolveAccountSpec({ id: "commandcode", displayName: "Command Code" }, validateAccountConfig({ monitors: { commandcode: { adapter: "commandcode-goat", commandCodeVersion: version } } }));
+		assert.equal(spec.monitor.commandCodeVersion, version);
+	}
+	for (const notVersion of ["", " ", "latest", "v1.72.1"]) {
+		assert.throws(() => validateAccountConfig({ monitors: { commandcode: { adapter: "commandcode-goat", commandCodeVersion: notVersion } } }), /commandCodeVersion/, `${JSON.stringify(notVersion)} must be refused`);
+	}
+	console.log("Command Code client version validation ok");
+}
+
+{
+	// Command Code: the live account shape — credits pool plus the 5-hour and
+	// weekly money caps — becomes a subscription snapshot that also carries the
+	// monetary balance, so one card can show both.
+	const spec = resolveAccountSpec({ id: "commandcode", displayName: "Command Code", apiKeyEnv: "COMMANDCODE_API_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }, validateAccountConfig({ monitors: { commandcode: { adapter: "commandcode-goat", commandCodeVersion: "9.9.9" } } }));
+	const calls = [];
+	const secret = "user_commandcode_secret";
+	const account = await queryAccount(spec, credentials({ COMMANDCODE_API_KEY: secret }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), init });
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return jsonResponse({
+					credits: { belowThreshold: false, creditThreshold: 0, monthlyCredits: 69.716263802, purchasedCredits: 0, freeCredits: 0 },
+					windowLimits: {
+						limited: true,
+						exceeded: null,
+						fiveHour: { used: 0.283736198, cap: 14, exceeded: false, resetAt: now + 5 * 3600000 },
+						weekly: { used: 0.283736198, cap: 35, exceeded: false, resetAt: now + 7 * 86400000 }
+					},
+					sandboxAccess: false
+				});
+			}
+			if (String(url).endsWith("/alpha/usage/summary")) {
+				return jsonResponse({ totalCount: 75, totalCost: 0.235832552, totalCredits: 0.235832552, totalMonthlyCredits: 0.235832552, totalTokens: 4679269 });
+			}
+			return jsonResponse({ success: true, data: { planId: "individual-goat", status: "active", currentPeriodEnd: "2026-10-01T00:00:00.000Z" } });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.mode, "subscription");
+	assert.equal(account.adapter, "commandcode-goat");
+	assert.equal(account.plan, "GOAT");
+	assert.deepEqual(calls.map((call) => call.url), [
+		"https://api.commandcode.ai/alpha/billing/credits",
+		"https://api.commandcode.ai/alpha/usage/summary",
+		"https://api.commandcode.ai/alpha/billing/subscriptions"
+	]);
+	assert.ok(calls.every((call) => call.init.headers.authorization === `Bearer ${secret}`));
+	assert.ok(calls.every((call) => call.init.headers["x-command-code-version"] === "9.9.9"), "the monitor's claimed client version reaches the live query path");
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent]), [
+		["session", 2],
+		["weekly", 0.8],
+		["monthly", 0.3]
+	]);
+	assert.deepEqual(account.windows.map((window) => window.resetsAt), [
+		new Date(now + 5 * 3600000).toISOString(),
+		new Date(now + 7 * 86400000).toISOString(),
+		"2026-10-01T00:00:00.000Z"
+	]);
+	assert.equal(account.balance.remaining, 69.716263802);
+	assert.equal(account.balance.used, 0.235832552);
+	assert.equal(account.balance.currency, "USD");
+	assert.deepEqual(account.balance.breakdown, { granted: 0, toppedUp: 0 });
+	closeTo(account.balance.total, 69.952096354, "credits pool denominator");
+	// The tightest rolling window decides the alert, not the credit pool: here
+	// the 5-hour cap is 2% consumed, so 98% remains.
+	assert.deepEqual(account.alert, { level: "normal", metric: "remaining-percent", value: 98 });
+	assert.equal(JSON.stringify(account).includes(secret), false, "API key must never cross the account snapshot boundary");
+	console.log("Command Code account snapshot ok");
+}
+
+{
+	// Command Code: the plan label and the period spend are detail. Losing them
+	// must leave the credits and windows the card already read fully usable.
+	const spec = resolveAccountSpec({ id: "commandcode", displayName: "Command Code", apiKeyEnv: "COMMANDCODE_API_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ COMMANDCODE_API_KEY: "user_x" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return jsonResponse({ credits: { monthlyCredits: 12.5, purchasedCredits: 4, freeCredits: 1 }, windowLimits: { limited: true, fiveHour: { used: 7, cap: 14 }, weekly: { used: 35, cap: 35 } } });
+			}
+			return jsonResponse({ error: "upstream exploded" }, 500);
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.plan, void 0);
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 50, 50],
+		["weekly", 100, 0]
+	]);
+	assert.equal(account.balance.remaining, 17.5);
+	assert.equal(account.balance.used, void 0);
+	assert.equal(account.balance.total, void 0);
+	assert.deepEqual(account.balance.breakdown, { granted: 1, toppedUp: 4 });
+	assert.equal(account.alert.level, "critical");
+	console.log("Command Code partial-endpoint degradation ok");
+}
+
+{
+	// Command Code: an account with no active throttling keeps its credits and
+	// reports no windows, and the alert then follows the balance instead.
+	const spec = resolveAccountSpec({ id: "commandcode", displayName: "Command Code", apiKeyEnv: "COMMANDCODE_API_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ COMMANDCODE_API_KEY: "user_x" }), {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) return jsonResponse({ credits: { monthlyCredits: 3, purchasedCredits: 0, freeCredits: 0 }, windowLimits: { limited: false } });
+			return jsonResponse({}, 500);
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.deepEqual(account.windows, []);
+	assert.equal(account.balance.remaining, 3);
+	assert.deepEqual(account.alert, { level: "unknown", metric: "balance", value: 3 });
+	console.log("Command Code unlimited-window fallback ok");
+}
+
+{
+	// Command Code: a credits payload with no readable numbers is a failed query,
+	// not a zero balance, and says so with a safe diagnostic reason.
+	const spec = resolveAccountSpec({ id: "commandcode", displayName: "Command Code", apiKeyEnv: "COMMANDCODE_API_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ COMMANDCODE_API_KEY: "user_x" }), {
+		now: () => now,
+		fetch: async () => jsonResponse({ credits: { monthlyCredits: null }, windowLimits: { limited: true } })
+	});
+	assert.equal(account.status, "invalid-response");
+	assert.deepEqual(account.windows, []);
+	assert.equal(account.balance ?? null, null);
+	assert.equal(account.reason, "commandcode-billing-shape-unrecognized");
+	console.log("Command Code unrecognized billing shape ok");
+}
+
+{
+	// Command Code: without a credential the card is "not configured" and no
+	// request is attempted.
+	const spec = resolveAccountSpec({ id: "commandcode", displayName: "Command Code", apiKeyEnv: "COMMANDCODE_API_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		fetch: async () => { throw new Error("must not fetch without a credential"); }
+	});
+	assert.equal(account.status, "not-configured");
+	assert.deepEqual(account.missingCredentials, ["COMMANDCODE_API_KEY"]);
+	assert.deepEqual(account.windows, []);
+	console.log("Command Code missing credential state ok");
+}
+
+{
+	// Command Code: the family placeholder keeps the account reachable on an
+	// install that never configured a route, while a real route wins over it.
+	const service = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [{ id: "deepseek-official", displayName: "DeepSeek", apiKeyEnv: "DEEPSEEK_API_KEY", baseURL: "https://api.deepseek.com" }],
+		config: validateAccountConfig(),
+		deps: { includeLegacyProviders: true, now: () => now }
+	});
+	const views = await service.providerViews();
+	const placeholder = views.find((view) => view.id === "commandcode");
+	assert.equal(placeholder?.adapter, "commandcode-goat");
+	assert.equal(placeholder?.accountMode, "subscription");
+	assert.equal(placeholder?.configured, false);
+
+	const configuredService = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [
+			{ id: "deepseek-official", displayName: "DeepSeek", apiKeyEnv: "DEEPSEEK_API_KEY", baseURL: "https://api.deepseek.com" },
+			{ id: "commandcode-goat-autosync", displayName: "Command Code GOAT", apiKeyEnv: "COMMANDCODE_API_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }
+		],
+		config: validateAccountConfig(),
+		deps: { includeLegacyProviders: true, now: () => now }
+	});
+	const configuredViews = await configuredService.providerViews();
+	assert.deepEqual(configuredViews.filter((view) => view.adapter === "commandcode-goat").map((view) => view.id), ["commandcode-goat-autosync"]);
+	console.log("Command Code placeholder provider policy ok");
+}
 
 console.log("ACCOUNT TESTS PASSED");

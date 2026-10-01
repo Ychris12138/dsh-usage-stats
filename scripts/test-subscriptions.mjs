@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { collectSubscription, collectSubscriptions, subscriptionCredentialRefs } from "../lib/subscriptions.js";
+import { collectSubscription, collectSubscriptions, commandCodeDefaultVersion, isCommandCodeVersion, subscriptionCredentialRefs } from "../lib/subscriptions.js";
 
 function credentials(values) {
 	return {
@@ -622,6 +622,317 @@ const noLocalAuth = {
 	assert.equal(account.status, "ok");
 	assert.deepEqual(calls, ["https://ollama.example.com/api/usage"]);
 	console.log("Ollama custom usage base URL ok");
+}
+
+{
+	// Command Code: a real captured /alpha/billing/credits + /alpha/usage/summary
+	// + /alpha/billing/subscriptions shape (2026-09-28 live response) becomes
+	// windows plus a monetary credit pool.
+	const secret = "user_commandcode_secret";
+	const calls = [];
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: secret }), {}, {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), init });
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return {
+					ok: true,
+					status: 200,
+					json: async () => ({
+						credits: { belowThreshold: false, creditThreshold: 0, monthlyCredits: 69.716263802, purchasedCredits: 0, freeCredits: 0 },
+						windowLimits: {
+							limited: true,
+							exceeded: null,
+							fiveHour: { used: 0.283736198, cap: 14, exceeded: false, resetAt: now + 5 * 3600000 },
+							weekly: { used: 0.283736198, cap: 35, exceeded: false, resetAt: now + 7 * 86400000 }
+						},
+						sandboxAccess: false,
+						sandboxMinutes: null
+					})
+				};
+			}
+			if (String(url).endsWith("/alpha/usage/summary")) {
+				return {
+					ok: true,
+					status: 200,
+					json: async () => ({ totalCount: 75, totalCost: 0.235832552, totalCredits: 0.235832552, totalMonthlyCredits: 0.235832552, totalTokens: 4679269 })
+				};
+			}
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active", currentPeriodEnd: "2026-10-01T00:00:00.000Z" } }) };
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.mode, "subscription");
+	assert.equal(account.plan, "GOAT");
+	// Three windows, matching what a subscription card renders: the 5-hour and
+	// weekly money caps plus the monthly credit pool.
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 2, 98],
+		["weekly", 0.8, 99.2],
+		["monthly", 0.3, 99.7]
+	]);
+	assert.deepEqual(account.windows.map((window) => window.resetsAt), [
+		new Date(now + 5 * 3600000).toISOString(),
+		new Date(now + 7 * 86400000).toISOString(),
+		"2026-10-01T00:00:00.000Z"
+	]);
+	assert.equal(account.credits.remaining, 69.716263802);
+	assert.equal(account.credits.used, 0.235832552);
+	assert.equal(account.credits.currency, "USD");
+	assert.equal(account.credits.unlimited, false);
+	assert.deepEqual(account.credits.breakdown, { granted: 0, toppedUp: 0 });
+	assert.deepEqual(calls.map((call) => call.url), [
+		"https://api.commandcode.ai/alpha/billing/credits",
+		"https://api.commandcode.ai/alpha/usage/summary",
+		"https://api.commandcode.ai/alpha/billing/subscriptions"
+	]);
+	assert.ok(calls.every((call) => call.init.headers.authorization === `Bearer ${secret}`));
+	assert.ok(calls.every((call) => call.init.headers["x-command-code-version"] === commandCodeDefaultVersion), "the account surface expects the CLI version header");
+	assert.equal(JSON.stringify(account).includes(secret), false, "API key must not cross the module interface");
+	console.log("Command Code account normalization ok");
+}
+
+{
+	// Command Code: bought and granted credits are separate pools from the
+	// plan's monthly allowance, so they must not widen the monthly bar's
+	// denominator: 70 left of the allowance with 1 spent from it is 1/71 even
+	// when 20 bought and 10 granted credits sit beside it (dividing by
+	// 100 + 1 would report a tenth of the real consumption).
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 70, purchasedCredits: 20, freeCredits: 10 }, windowLimits: { limited: true, fiveHour: { used: 7, cap: 14 }, weekly: { used: 14, cap: 35 } } }) };
+			}
+			if (String(url).endsWith("/alpha/usage/summary")) {
+				return { ok: true, status: 200, json: async () => ({ totalCount: 5, totalCost: 1, totalCredits: 1, totalMonthlyCredits: 1, totalPurchasedCredits: 0, totalFreeCredits: 0, totalTokens: 100 }) };
+			}
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active", currentPeriodEnd: "2026-10-01T00:00:00.000Z" } }) };
+		}
+	});
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 50, 50],
+		["weekly", 40, 60],
+		["monthly", 1.4, 98.6]
+	], "the monthly bar divides the monthly pool by itself");
+	// The balance stays every pool at once, with its rows still adding up.
+	assert.equal(account.credits.remaining, 100);
+	assert.equal(account.credits.used, 1);
+	assert.equal(account.credits.total, 101);
+	assert.deepEqual(account.credits.breakdown, { granted: 10, toppedUp: 20 });
+	console.log("Command Code monthly bar ignores bought and granted credits ok");
+}
+
+{
+	// Command Code: the wallet's rows are the aggregate pair, not the monthly
+	// counter — with the two disagreeing (5 spent across the pools, none of it
+	// from the monthly allowance) the bar reads 0% while the rows read 5.
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 70, purchasedCredits: 20, freeCredits: 10 }, windowLimits: { limited: true, fiveHour: { used: 7, cap: 14 } } }) };
+			}
+			if (String(url).endsWith("/alpha/usage/summary")) {
+				return { ok: true, status: 200, json: async () => ({ totalCount: 5, totalCost: 5, totalCredits: 5, totalMonthlyCredits: 0, totalPurchasedCredits: 4, totalFreeCredits: 1, totalTokens: 100 }) };
+			}
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active" } }) };
+		}
+	});
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent]), [["session", 50], ["monthly", 0]], "the bar follows the monthly counter alone");
+	assert.deepEqual([account.credits.remaining, account.credits.used, account.credits.total], [100, 5, 105], "the rows follow the aggregate counter");
+	console.log("Command Code wallet rows follow the aggregate counter ok");
+}
+
+{
+	// Command Code: `totalCredits` is the aggregate over every pool, so it can
+	// never stand in for the monthly denominator. A summary that states the
+	// aggregate but not `totalMonthlyCredits` leaves the monthly bar out rather
+	// than dividing this pool's remainder by other pools' spend.
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 70, purchasedCredits: 20, freeCredits: 10 }, windowLimits: { limited: true, fiveHour: { used: 7, cap: 14 } } }) };
+			}
+			if (String(url).endsWith("/alpha/usage/summary")) {
+				return { ok: true, status: 200, json: async () => ({ totalCount: 5, totalCost: 3, totalCredits: 3, totalTokens: 100 }) };
+			}
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active" } }) };
+		}
+	});
+	assert.deepEqual(account.windows.map((window) => window.kind), ["session"], "no monthly counter, no monthly bar");
+	assert.deepEqual([account.credits.remaining, account.credits.used, account.credits.total], [100, 3, 103]);
+	console.log("Command Code monthly bar needs the monthly counter ok");
+}
+
+{
+	// Command Code: the two derived facts have different needs. A summary that
+	// states only the monthly counter still draws the monthly bar (90 left of
+	// the allowance, 10 spent from it), while the wallet's rows stay out
+	// because no aggregate states what the period used across every pool.
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 90, purchasedCredits: 0, freeCredits: 0 }, windowLimits: { limited: true, fiveHour: { used: 7, cap: 14 } } }) };
+			}
+			if (String(url).endsWith("/alpha/usage/summary")) {
+				return { ok: true, status: 200, json: async () => ({ totalCount: 5, totalMonthlyCredits: 10, totalTokens: 100 }) };
+			}
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active" } }) };
+		}
+	});
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent]), [["session", 50], ["monthly", 10]], "the bar needs only the monthly counter");
+	assert.equal(account.credits.remaining, 90);
+	assert.equal(account.credits.used, void 0, "no aggregate, no wallet spend row");
+	assert.equal(account.credits.total, void 0, "no aggregate, no wallet total row");
+	console.log("Command Code wallet rows need the aggregate counter ok");
+}
+
+{
+	// Command Code gates its account surface by client version, so a monitor may
+	// claim one without waiting for a release — and only a version-shaped value
+	// is acceptable, because the header carries whatever it is given.
+	for (const version of ["1.72.1", "1.72", "1.72.1-beta.2", " 2.0.0 "]) {
+		assert.equal(isCommandCodeVersion(version), true, `${JSON.stringify(version)} is a version`);
+	}
+	for (const notVersion of ["", " ", "latest", "v1.72.1", "1", undefined, null, 1721]) {
+		assert.equal(isCommandCodeVersion(notVersion), false, `${JSON.stringify(notVersion)} is not a version`);
+	}
+	const calls = [];
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), { commandCodeVersion: "9.9.9" }, {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), init });
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 1, purchasedCredits: 0, freeCredits: 0 }, windowLimits: { limited: true, fiveHour: { used: 0, cap: 14 }, weekly: { used: 0, cap: 35 } } }) };
+			}
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active" } }) };
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.ok(calls.length > 0);
+	assert.ok(calls.every((call) => call.init.headers["x-command-code-version"] === "9.9.9"), "a monitor override reaches every account request");
+	console.log("Command Code client version override ok");
+}
+
+{
+	// Command Code: a monitor that names the chat base must still reach the
+	// account surface one level above it.
+	const calls = [];
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), { baseURL: "https://api.commandcode.ai/provider/v1" }, {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 1 }, windowLimits: { limited: true } }) };
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.deepEqual(calls.slice(0, 2), [
+		"https://api.commandcode.ai/alpha/billing/credits",
+		"https://api.commandcode.ai/alpha/usage/summary"
+	]);
+	console.log("Command Code chat-base root normalization ok");
+}
+
+{
+	// Command Code: an explicit account root (self-hosted or proxied) is honored.
+	const calls = [];
+	await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), { baseURL: "https://cc.example.com/" }, {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 1 }, windowLimits: { limited: true } }) };
+		}
+	});
+	assert.deepEqual(calls.slice(0, 2), [
+		"https://cc.example.com/alpha/billing/credits",
+		"https://cc.example.com/alpha/usage/summary"
+	]);
+	console.log("Command Code custom account root ok");
+}
+
+{
+	// Command Code: the plan label and the period spend are optional. Losing both
+	// must leave the credits and the windows usable instead of failing the query.
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 12.5, purchasedCredits: 4, freeCredits: 1 }, windowLimits: { limited: true, fiveHour: { used: 7, cap: 14 }, weekly: { used: 35, cap: 35 } } }) };
+			}
+			if (String(url).endsWith("/alpha/usage/summary")) throw new Error("network down");
+			return { ok: true, status: 200, json: async () => { throw new SyntaxError("not json"); } };
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.plan, void 0);
+	// Without the summary there is no period spend, so there is no monthly
+	// denominator to compute and no third bar to draw.
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent]), [["session", 50], ["weekly", 100]]);
+	assert.equal(account.credits.remaining, 17.5);
+	assert.equal(account.credits.used, void 0);
+	assert.equal(account.credits.total, void 0);
+	assert.deepEqual(account.credits.breakdown, { granted: 1, toppedUp: 4 });
+	console.log("Command Code optional endpoint degradation ok");
+}
+
+{
+	// Command Code: a plan id is displayed with the vendor's own tier spelling,
+	// matched by longest prefix so `individual-pro-v1` never answers as Pro v1.
+	const planFor = async (planId) => (await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 1 }, windowLimits: { limited: true, fiveHour: { used: 1, cap: 2 } } }) };
+			if (String(url).endsWith("/alpha/usage/summary")) return { ok: false, status: 500, json: async () => ({}) };
+			return { ok: true, status: 200, json: async () => ({ data: { planId } }) };
+		}
+	})).plan;
+	assert.equal(await planFor("individual-go"), "Go");
+	assert.equal(await planFor("individual-goat"), "GOAT");
+	assert.equal(await planFor("individual-pro-v1"), "Pro");
+	assert.equal(await planFor("individual-pro"), "Pro");
+	assert.equal(await planFor("individual-max"), "Max");
+	assert.equal(await planFor("teams-pro"), "Teams Pro");
+	assert.equal(await planFor("future-plan"), "future-plan", "an unknown plan id must stay readable, not become a guess");
+	console.log("Command Code plan naming ok");
+}
+
+{
+	// Command Code: a payload with nothing readable is invalid-response with a
+	// safe reason, and the HTTP status mapping stays the shared one.
+	const empty = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+		now: () => now,
+		fetch: async (url) => String(url).endsWith("/alpha/billing/credits")
+			? { ok: true, status: 200, json: async () => ({ credits: {}, windowLimits: { limited: true } }) }
+			: { ok: false, status: 500, json: async () => ({}) }
+	});
+	assert.equal(empty.status, "invalid-response");
+	assert.deepEqual(empty.windows, []);
+	assert.equal(empty.credits, void 0);
+	assert.equal(empty.reason, "commandcode-billing-shape-unrecognized");
+
+	for (const [httpStatus, providerStatus] of [[401, "unauthorized"], [403, "unauthorized"], [429, "rate-limited"], [500, "unavailable"], [503, "unavailable"]]) {
+		const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+			now: () => now,
+			fetch: async () => ({ ok: false, status: httpStatus, json: async () => ({}) })
+		});
+		assert.equal(account.status, providerStatus, "HTTP " + httpStatus + " should map to " + providerStatus);
+	}
+	console.log("Command Code invalid shape and HTTP status mapping ok");
+}
+
+{
+	// Command Code: no credential means no request at all.
+	const account = await collectSubscription("commandcode-goat", credentials({}), {}, {
+		now: () => now,
+		fetch: async () => { throw new Error("must not fetch without a credential"); }
+	});
+	assert.equal(account.status, "not-configured");
+	assert.deepEqual(account.missingCredentials, [subscriptionCredentialRefs.commandCodeApiKey]);
+	assert.deepEqual(account.windows, []);
+	console.log("Command Code missing credential is not-configured ok");
 }
 
 console.log("SUBSCRIPTION TESTS PASSED");

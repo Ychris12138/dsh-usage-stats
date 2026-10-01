@@ -149,6 +149,42 @@ function assistantEvent(seq, providerId, model, time = Date.UTC(2026, 7, 23, 12,
 }
 
 {
+	// Command Code: the route id, the ids a provider plugin generates, and a
+	// commandcode.ai host all resolve to the same subscription adapter, and none
+	// of them may inherit DeepSeek pricing from the model names they resell.
+	const canonical = resolveProviderIdentity(provider("commandcode", "https://relay.invalid/v1"));
+	assert.deepEqual(canonical, {
+		routeId: "commandcode",
+		displayName: "commandcode",
+		providerFamily: "commandcode",
+		accountAdapter: "commandcode-goat",
+		pricingFamily: "unknown",
+		baseURL: "https://relay.invalid/v1",
+		confidence: "canonical-id"
+	});
+	for (const id of ["commandcode-goat", "commandcode-goat-autosync", "commandcode-pro-anthropic", "commandcode-max-responses"]) {
+		const generated = resolveProviderIdentity(provider(id, "https://relay.invalid/v1"));
+		assert.equal(generated.providerFamily, "commandcode", `${id} must resolve through the family prefix`);
+		assert.equal(generated.accountAdapter, "commandcode-goat");
+		assert.equal(generated.confidence, "canonical-id");
+	}
+	const hostname = resolveProviderIdentity(provider("my-cc", "https://api.commandcode.ai/provider/v1"));
+	assert.equal(hostname.providerFamily, "commandcode");
+	assert.equal(hostname.accountAdapter, "commandcode-goat");
+	assert.equal(hostname.confidence, "canonical-host");
+	assert.equal(resolveAccountSpec(provider("commandcode", "https://api.commandcode.ai/provider/v1")).adapter, "commandcode-goat");
+	// A prefix is not a vendor guess: a route that merely starts with a lookalike
+	// string must stay unknown.
+	assert.equal(resolveProviderIdentity(provider("commandcodex", "https://relay.invalid/v1")).providerFamily, "unknown");
+	assert.equal(estimateTokenCost({
+		identity: canonical,
+		model: "deepseek/deepseek-v4.1-flash",
+		timestamp: Date.UTC(2026, 7, 27, 3, 0, 0),
+		buckets: { inputTokens: 1_000_000, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 }
+	}), null, "Command Code sells upstream models; its routes must not borrow their official pricing");
+}
+
+{
 	const state = createUsageState();
 	applyUsageDelta(state, [
 		requestEvent(0, "route-a", "shared-model"),

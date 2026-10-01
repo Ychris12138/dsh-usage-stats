@@ -46,7 +46,30 @@ npm pack --json
 
 ## 5. Real DSH release-candidate regression
 
-### v0.3.4-specific gates
+### v0.3.5-specific gates
+
+DSH 0.2 Desktop / DeepSeek Account:
+
+- [x] Real DSH Desktop acceptance completed on 2026-10-01 using the Host-owned `deepseek-account` route.
+- [x] The provider selector exposes DeepSeek Account separately from API-key DeepSeek.
+- [x] Signed-in account balance renders without requiring `DEEPSEEK_API_KEY`.
+- [x] Signing out invalidates the previous balance on the next UI read and renders a signed-out state; signing back in restores the balance.
+- [x] Browser/client payloads contain only locale/timezone metadata; raw account token, Cookie, PKCE, and Host-only token resolution never cross the Host boundary.
+- [x] CNY and USD wallets remain separate and are never summed across currencies.
+
+MiniMax Coding Plan:
+
+- [x] Known CN/global routes pin credentials to their own region; an upstream 1004/2049 rejection cannot send a known-region key to the other region.
+- [x] Only a route with no region signal may retry the other region after an explicit 1004/2049 credential rejection.
+- [x] Explicit `usageBaseURL` never falls back to another host.
+- [x] PR #122 contributor validated the CN Coding Plan path against a real account and observed two quota windows.
+- [x] QueryAccount-level regression coverage locks the global 2049 case to `.io` hosts only.
+
+Packaging/client compatibility:
+
+- [x] Obsolete `@deepseek-ai/dsh-client-runtime` is absent from `dsh.client.inject`; locale and UI-primitives activation entries remain.
+- [x] Recent-session cost estimates omit incomplete or mixed-currency amounts rather than showing partial costs.
+- [x] DeepSeek peak/off-peak countdown remains scoped to the official route and fails closed for custom relays.
 
 Persistence:
 
@@ -76,15 +99,15 @@ Declarative balance:
 - [ ] Test the sidebar action and panel in light and dark themes.
 - [ ] Confirm Last 14 days token values retain an 84 px minimum width, right alignment, and tabular numerals while the date column shrinks/ellipsizes without adding narrow-panel overflow (#75).
 - [ ] With `refresh.enabled: false`, confirm one first account fetch, no expiry-driven upstream requests, manual Retry, and a fresh fetch after provider configuration changes.
-- [ ] #53 and #14 are closed and are not v0.3.4 release blockers. If a real enterprise proxy or MiniMax Coding Plan environment is available, record sanitized observations; otherwise mark those checks `NOT TESTED` without claiming a fix.
+- [ ] #53 and #14 are closed and are not v0.3.5 release blockers. If a real enterprise proxy or MiniMax Coding Plan environment is available, record sanitized observations; otherwise mark those checks `NOT TESTED` without claiming a fix.
 
 ## 6. Create the immutable release commit
 
 Do not run this section until every release-candidate gate above passes and the maintainer approves preparing the release commit.
 
 - [ ] Create a release branch from the reviewed `main` at `RC_BASE_SHA`.
-- [ ] Run `npm run release:sync -- 0.3.4` once to update `package.json`, `package-lock.json`, the Community Market catalog, and documented stable-version references together.
-- [ ] Confirm the v0.3.4 release notes use final stable wording, preserve the historical v0.3.0/v0.3.1/v0.3.2/v0.3.3 notes, and do not claim unverified #14/#53 fixes or include out-of-scope behavior.
+- [ ] Run `npm run release:sync -- 0.3.5` once to update `package.json`, `package-lock.json`, the Community Market catalog, and documented stable-version references together.
+- [ ] Confirm the v0.3.5 release notes use final stable wording, preserve the historical v0.3.0/v0.3.1/v0.3.2/v0.3.3 notes, and do not claim unverified #14/#53 fixes or include out-of-scope behavior.
 - [ ] Run the release gates again against the synchronized version:
 
 ```bash
@@ -93,20 +116,20 @@ npm test
 npm pack --json
 ```
 
-- [ ] Inspect the final pack manifest, then commit all version/release metadata changes with `chore: prepare v0.3.4 release`.
+- [ ] Inspect the final pack manifest, then commit all version/release metadata changes with `chore: prepare v0.3.5 release`.
 - [ ] Record that commit as `RELEASE_SHA`; this replaces `RC_BASE_SHA` as the only publish/tag identity.
 - [ ] Confirm the working tree is clean and `HEAD` equals `RELEASE_SHA`.
 - [ ] Confirm the committed package version, not merely the working-tree version:
 
 ```bash
-test "$(git show "$RELEASE_SHA:package.json" | jq -r .version)" = "0.3.4"
+test "$(git show "$RELEASE_SHA:package.json" | jq -r .version)" = "0.3.5"
 ```
 
 The release invariant is:
 
 ```text
 npm published source commit
-== v0.3.4 tag commit
+== v0.3.5 tag commit
 == GitHub Release commit
 == package/catalog version commit
 == RELEASE_SHA
@@ -120,14 +143,14 @@ Do not run this section until the immutable release commit exists and the mainta
 - [ ] From a clean checkout/worktree at exactly `RELEASE_SHA`, run `npm publish --access public --registry=https://registry.npmjs.org/`.
 - [ ] `npm view "@ychris12138/dsh-usage-stats" version --registry=https://registry.npmjs.org/` equals the target version.
 - [ ] Merge or push the release commit to `main` according to the chosen branch workflow; verify `main` contains the exact `RELEASE_SHA` without recreating the release changes.
-- [ ] Only after npm and `main` verification: create the signed/annotated `v0.3.4` tag pointing explicitly to `RELEASE_SHA`.
+- [ ] Only after npm and `main` verification: create the signed/annotated `v0.3.5` tag pointing explicitly to `RELEASE_SHA`.
 - [ ] Verify the tag resolves to the published source commit:
 
 ```bash
-test "$(git rev-parse v0.3.4^{commit})" = "$RELEASE_SHA"
+test "$(git rev-parse v0.3.5^{commit})" = "$RELEASE_SHA"
 ```
 
-- [ ] Create the GitHub Release from `v0.3.4`; verify it resolves to `RELEASE_SHA`.
+- [ ] Create the GitHub Release from `v0.3.5`; verify it resolves to `RELEASE_SHA`.
 - [ ] Verify the public Pages `catalog-source.json` and `/v1/plugins` response content type, package name, and exact version.
 - [ ] Install the exact npm version through DSH Desktop Community Market and restart the host.
 - [ ] Close the npm/market release issue only after the Desktop Market installation succeeds.

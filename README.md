@@ -118,6 +118,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | New API | 余额 | provider 推理 Token | `/api/usage/token/` |
 | Sub2API / Passion | 自动判别 | provider `apiKeyEnv` | `/v1/usage` |
 | Sub2API 面板（真实） | 余额 | provider 推理 Token | `/user/balance`（复用 apiKey） |
+| CodeArts 系反代（`dsh-codearts-auth`） | 订阅 | 宿主插件账号池；本插件不读取 AK/SK | `creditBalance.creditsBalances()`（进程内） |
 | General / Declarative | 余额或订阅 | 配置中的 credential ref | 受限 GET + JSON |
 
 没有公开账户接口的供应商仍会正常统计 Token；账户卡片会明确显示“不支持”，不会猜测余额。
@@ -176,6 +177,18 @@ DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key �
 - 充值余额与赠送余额按币种合并；CNY 与 USD 同时存在时**分别显示，绝不跨币种相加**；
 - Host Account 不参加后台账户轮询。只有带真实 UI 版本/语言/时区 metadata 的面板读取才会查询余额；退出或切换账号后，下一次 UI 读取不会继续复用旧余额；
 - 未登录显示“未登录 DeepSeek Account”，不会误提示用户配置 `DEEPSEEK_API_KEY`。
+
+### CodeArts 系反代供应商（dsh-codearts-auth）
+
+`deepseek-harness-codearts` 插件为 12 条反代 route（`codearts` / `buddy` / `workbuddy` / `lobsterai` / `qoder` / `qodercn` / `trae` / `cline` / `loomy` / `raccoon` / `zcode`）注册了 LLM 路由。这些 route 没有 baseURL，也没有本插件能解析的 API Key——凭据在宿主插件自己的账号池里，查询走各家私有的签名协议（华为云 SDK-HMAC-SHA256、腾讯 Bearer、Cosine 签名…），因此 declarative / HTTP 路线都走不通。
+
+本插件改用与 DeepSeek Account 相同的**宿主服务接缝**：当 `dsh-codearts-auth` 在场时，经 `ctx.get('creditBalance')` 拿到该服务，读它算好的 `CreditBalance`，provider 清单也由服务自己给出（`supportedProviders()`），不在本仓库硬编码一份会过期的名单。
+
+- 数据所有权完全在宿主插件：本插件不读取、不复制、不转发 AK/SK、token、Cookie；只读余额结果与积分包元数据；
+- Jet Hub 面板与本插件读的是同一份判据（同一个 `CreditBalanceService`），两边不可能显示不同的数字；
+- 积分按**包**展示（每个包的已用比例与到期日），不压成单一余额数字——用户要看的正是「哪个包快过期」；
+- 宿主插件缺席时这些卡片显示“不支持”，不影响其余 provider，也不会让插件启动失败；
+- 查不到（凭据失效、Token 计费账户、企业版不下发额度）时**如实显示原因，绝不显示成 0**——0 的语义是“已用光”。
 
 ### 余额型供应商
 

@@ -461,6 +461,54 @@ if (!deepseekMarkup.includes("usg_accountCard") || !goMarkup.includes("usg_accou
 if (!deepseekMarkup.includes("data-account-mode=\"balance\"") || !deepseekMarkup.includes("DeepSeek") || deepseekMarkup.includes("progressbar")) throw new Error("DeepSeek must render only monetary balance data");
 if (!goMarkup.includes("data-account-mode=\"subscription\"") || !goMarkup.includes("OpenCode Go")) throw new Error("OpenCode Go must render the subscription account mode");
 if ((goMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !goMarkup.includes("width:12%")) throw new Error("OpenCode Go must render three quota meters");
+// Command Code reports a plan credit pool next to its rolling windows, so the
+// subscription card must show both instead of forcing a choice between them.
+const usd = (amount) => new Intl.NumberFormat(void 0, { style: "currency", currency: "USD" }).format(amount);
+const commandCodeAccount = {
+	id: "commandcode",
+	displayName: "Command Code",
+	mode: "subscription",
+	adapter: "commandcode-goat",
+	status: "ok",
+	plan: "GOAT",
+	windows: [
+		{ kind: "session", usedPercent: 2, remainingPercent: 98, resetsAt: "2026-09-28T12:00:00Z" },
+		{ kind: "weekly", usedPercent: 0.8, remainingPercent: 99.2 },
+		{ kind: "monthly", usedPercent: 0.3, remainingPercent: 99.7, resetsAt: "2026-10-01T00:00:00Z" }
+	],
+	balance: { remaining: 69.72, used: 0.24, total: 69.96, currency: "USD", breakdown: { granted: 0, toppedUp: 0 } }
+};
+const commandCodeMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "commandcode", displayName: "Command Code", accountMode: "subscription", adapter: "commandcode-goat" },
+	account: commandCodeAccount,
+	accountLoading: false,
+	accountError: null,
+	translate: translateAccount,
+	onRetry: () => {}
+}));
+if (!commandCodeMarkup.includes("data-account-mode=\"subscription\"") || !commandCodeMarkup.includes("Command Code") || !commandCodeMarkup.includes("GOAT")) {
+	throw new Error("Command Code must render the subscription card with its plan label");
+}
+if (!commandCodeMarkup.includes(usd(69.72))) throw new Error("Command Code must render the credit balance beside its windows");
+if ((commandCodeMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !commandCodeMarkup.includes("width:2%")) {
+	throw new Error("Command Code must render 5-hour, weekly and monthly windows");
+}
+if (!commandCodeMarkup.includes("subscription.window.monthly") || !commandCodeMarkup.includes("width:0.3%")) {
+	throw new Error("the monthly credit pool must render as its own window");
+}
+// Credits without a readable window are a complete answer: the card may not
+// also claim the provider returned no quota windows.
+const creditsOnlyMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "commandcode", displayName: "Command Code", accountMode: "subscription", adapter: "commandcode-goat" },
+	account: { ...commandCodeAccount, plan: void 0, windows: [], balance: { remaining: 3, currency: "USD" } },
+	accountLoading: false,
+	accountError: null,
+	translate: translateAccount,
+	onRetry: () => {}
+}));
+if (!creditsOnlyMarkup.includes(usd(3)) || creditsOnlyMarkup.includes("usg_quotaEmpty")) {
+	throw new Error("a credits-only Command Code account must show its balance without an empty-quota notice");
+}
 const invalidMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
 	provider: { id: "minimax", displayName: "MiniMax", accountMode: "subscription" },
 	account: { id: "minimax", displayName: "MiniMax", mode: "subscription", status: "invalid-response", windows: [], reason: "all-addresses-unreachable" },

@@ -115,6 +115,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | Kimi For Coding | 订阅 | `KIMI_API_KEY` | `/coding/v1/usages` |
 | MiniMax Coding Plan | 订阅 | `MINIMAX_API_KEY` | `/v1/token_plan/remains` |
 | Ollama 云 | 订阅 | `OLLAMA_API_KEY` | `/api/usage`（5小时 + 周窗口） |
+| Command Code（Go / GOAT / Pro / Max） | 订阅 + 余额 | `COMMANDCODE_API_KEY` | `/alpha/billing/credits` 等 `/alpha/*` |
 | New API | 余额 | provider 推理 Token | `/api/usage/token/` |
 | Sub2API / Passion | 自动判别 | provider `apiKeyEnv` | `/v1/usage` |
 | Sub2API 面板（真实） | 余额 | provider 推理 Token | `/user/balance`（复用 apiKey） |
@@ -210,6 +211,7 @@ MINIMAX_API_KEY: your-minimax-key
 # 中国区 MiniMax 用户可选；默认 global
 MINIMAX_API_REGION: cn
 OLLAMA_API_KEY: sk-ollama-your-key
+COMMANDCODE_API_KEY: user-your-command-code-key
 ```
 
 OpenCode Go 依次尝试 Harness credential、`~/.local/share/opencode/auth.json`，最后才使用显式 `OPENCODE_GO_AUTH_COOKIE + OPENCODE_GO_WORKSPACE_ID` 兼容回退。Bearer usage endpoint 目前不是公开 API，可能随上游变化；Cookie 等同登录凭据，不应进入日志或 issue。
@@ -230,6 +232,14 @@ Ollama 适配器只对**已配置的 provider** 生效，不会自动添加账�
             usageBaseURL: https://ollama.example.com
             credentialRef: OLLAMA_API_KEY   # 非已配置 provider 时必填
 ```
+
+Command Code（Go / GOAT / Pro / Max）读取 `COMMANDCODE_API_KEY`，调用官方 CLI 自己使用的一组未公开端点：`/alpha/billing/credits` 给出 credits 与 5 小时/每周窗口，`/alpha/usage/summary` 给出本期请求数与花费，`/alpha/billing/subscriptions` 给出档位（Go / GOAT / Pro / Max）与计费周期。卡片因此显示**三条窗口**——5 小时、每周、每月（每月的重置时间就是订阅周期结束时间）——外加一行 credits 美元余额，这是本插件里唯一一张余额与订阅窗口并存的卡片。
+
+三条窗口的口径：5 小时与每周按上游直接给出的「已用金额 ÷ 上限」换算；月度池上游从不给出总量，分母由「剩余 credits + 本期花费」相加得到（推导值）。
+
+只有 credits 端点决定查询成败，另两个端点失败只会少显示档位或本期花费；上游从不直接给出月度池总量，所以「总额」是余额与本期花费之和（推导值）。这些端点没有公开文档，字段缺失一律按“没有这项”处理，形状完全无法识别时返回 `invalid-response` 并带上安全的原因码，而不会把未知当成 0 余额。
+
+Provider 识别：id 为 `commandcode`、`commandcode-goat-autosync` 等 `commandcode-` 前缀（同步插件为每个档位与协议生成一条路由），或 baseURL 主机为 `*.commandcode.ai` 时自动选用 `commandcode-goat` 适配器，聊天基地址 `…/provider/v1` 会自动折算回账户根地址。与 OpenCode Go、Z.ai 一样，没有任何 Command Code 路由的安装也会看到一张「未配置」的占位卡片；Command Code 是转售上游模型，它的路由不参与本插件的模型价格估算。
 
 Z.ai 全球区使用 `api.z.ai`，中国区使用 `open.bigmodel.cn`。MiniMax 优先使用官方 `www.minimax.io` / `www.minimaxi.com` Token Plan 地址，并解析 5 小时与周窗口的剩余比例和重置时间。
 
@@ -322,7 +332,7 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
 
 </details>
 
-支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`。
+支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`orcarouter-balance`、`opencode-go`、`commandcode-goat`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`ollama`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`declarative`。
 
 `warning.warnBelow` 与 `warning.criticalBelow` 是余额绝对值阈值。具有总额度的余额和 Token Plan 会自动产生 `normal / warning / critical` 剩余比例状态（默认 30% / 10%）。
 
@@ -471,6 +481,7 @@ node scripts/check-balance.mjs
 
 - [Javis603/token-monitor](https://github.com/Javis603/token-monitor)：参考多 provider 配额归一化与 Z.ai 限额解析。
 - [xiaoqi20/dsh-opencode-go-usage](https://github.com/xiaoqi20/dsh-opencode-go-usage)：参考 DSH 凭据接入、OpenCode `auth.json` 回退与 Bearer usage endpoint。
+- [Plocr/dsh-commandcode-goat](https://github.com/Plocr/dsh-commandcode-goat)：参考 Command Code 官方 CLI 的 `/alpha/*` 账户端点、档位命名与 credits 口径。
 
 本项目重新实现统一 account protocol、adapter 与单供应商 UI，不复制参考项目界面。
 

@@ -2373,14 +2373,35 @@ console.log("snapshot -> " + snapshot.status);
 	const byHost = resolveAccountSpec({ id: "my-cc-relay", displayName: "My Command Code", apiKeyEnv: "MY_CC_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }, configured);
 	assert.equal(byHost.adapter, "commandcode-goat", "a commandcode.ai host is enough to select the adapter");
 	assert.equal(byHost.apiKeyRef, "MY_CC_KEY", "a custom route keeps its own credential reference");
+	// The route registry names a route without its connection facts, so a
+	// plugin-published Command Code route arrives with no apiKeyEnv. Without a
+	// fallback such a route stays "not-configured" and is never queried.
+	const published = resolveAccountSpec({ id: "commandcode", displayName: "Command Code" }, configured);
+	assert.equal(published.adapter, "commandcode-goat");
+	assert.equal(published.apiKeyRef, "COMMANDCODE_API_KEY", "a plugin-published route falls back to the provider plugin's credential name");
+	const explicitRef = resolveAccountSpec({ id: "commandcode", displayName: "Command Code" }, validateAccountConfig({ monitors: { commandcode: { adapter: "commandcode-goat", credentialRef: "MY_CC_KEY" } } }));
+	assert.equal(explicitRef.apiKeyRef, "MY_CC_KEY", "an explicit monitor credentialRef still wins");
 	console.log("Command Code identity and adapter resolution ok");
+}
+
+{
+	// The claimed client version is a monitor field: valid values pass through,
+	// and a blank or free-form string is refused instead of being sent as-is.
+	for (const version of ["1.72.1", "1.72", "1.72.1-beta.2"]) {
+		const spec = resolveAccountSpec({ id: "commandcode", displayName: "Command Code" }, validateAccountConfig({ monitors: { commandcode: { adapter: "commandcode-goat", commandCodeVersion: version } } }));
+		assert.equal(spec.monitor.commandCodeVersion, version);
+	}
+	for (const notVersion of ["", " ", "latest", "v1.72.1"]) {
+		assert.throws(() => validateAccountConfig({ monitors: { commandcode: { adapter: "commandcode-goat", commandCodeVersion: notVersion } } }), /commandCodeVersion/, `${JSON.stringify(notVersion)} must be refused`);
+	}
+	console.log("Command Code client version validation ok");
 }
 
 {
 	// Command Code: the live account shape — credits pool plus the 5-hour and
 	// weekly money caps — becomes a subscription snapshot that also carries the
 	// monetary balance, so one card can show both.
-	const spec = resolveAccountSpec({ id: "commandcode", displayName: "Command Code", apiKeyEnv: "COMMANDCODE_API_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }, validateAccountConfig());
+	const spec = resolveAccountSpec({ id: "commandcode", displayName: "Command Code", apiKeyEnv: "COMMANDCODE_API_KEY", baseURL: "https://api.commandcode.ai/provider/v1" }, validateAccountConfig({ monitors: { commandcode: { adapter: "commandcode-goat", commandCodeVersion: "9.9.9" } } }));
 	const calls = [];
 	const secret = "user_commandcode_secret";
 	const account = await queryAccount(spec, credentials({ COMMANDCODE_API_KEY: secret }), {
@@ -2415,6 +2436,7 @@ console.log("snapshot -> " + snapshot.status);
 		"https://api.commandcode.ai/alpha/billing/subscriptions"
 	]);
 	assert.ok(calls.every((call) => call.init.headers.authorization === `Bearer ${secret}`));
+	assert.ok(calls.every((call) => call.init.headers["x-command-code-version"] === "9.9.9"), "the monitor's claimed client version reaches the live query path");
 	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent]), [
 		["session", 2],
 		["weekly", 0.8],

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { collectSubscription, collectSubscriptions, subscriptionCredentialRefs } from "../lib/subscriptions.js";
+import { collectSubscription, collectSubscriptions, commandCodeDefaultVersion, isCommandCodeVersion, subscriptionCredentialRefs } from "../lib/subscriptions.js";
 
 function credentials(values) {
 	return {
@@ -687,9 +687,36 @@ const noLocalAuth = {
 		"https://api.commandcode.ai/alpha/billing/subscriptions"
 	]);
 	assert.ok(calls.every((call) => call.init.headers.authorization === `Bearer ${secret}`));
-	assert.ok(calls.every((call) => call.init.headers["x-command-code-version"] !== void 0), "the account surface expects the CLI version header");
+	assert.ok(calls.every((call) => call.init.headers["x-command-code-version"] === commandCodeDefaultVersion), "the account surface expects the CLI version header");
 	assert.equal(JSON.stringify(account).includes(secret), false, "API key must not cross the module interface");
 	console.log("Command Code account normalization ok");
+}
+
+{
+	// Command Code gates its account surface by client version, so a monitor may
+	// claim one without waiting for a release — and only a version-shaped value
+	// is acceptable, because the header carries whatever it is given.
+	for (const version of ["1.72.1", "1.72", "1.72.1-beta.2", " 2.0.0 "]) {
+		assert.equal(isCommandCodeVersion(version), true, `${JSON.stringify(version)} is a version`);
+	}
+	for (const notVersion of ["", " ", "latest", "v1.72.1", "1", undefined, null, 1721]) {
+		assert.equal(isCommandCodeVersion(notVersion), false, `${JSON.stringify(notVersion)} is not a version`);
+	}
+	const calls = [];
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), { commandCodeVersion: "9.9.9" }, {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), init });
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 1, purchasedCredits: 0, freeCredits: 0 }, windowLimits: { limited: true, fiveHour: { used: 0, cap: 14 }, weekly: { used: 0, cap: 35 } } }) };
+			}
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active" } }) };
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.ok(calls.length > 0);
+	assert.ok(calls.every((call) => call.init.headers["x-command-code-version"] === "9.9.9"), "a monitor override reaches every account request");
+	console.log("Command Code client version override ok");
 }
 
 {

@@ -693,6 +693,104 @@ const noLocalAuth = {
 }
 
 {
+	// Command Code: bought and granted credits are separate pools from the
+	// plan's monthly allowance, so they must not widen the monthly bar's
+	// denominator: 70 left of the allowance with 1 spent from it is 1/71 even
+	// when 20 bought and 10 granted credits sit beside it (dividing by
+	// 100 + 1 would report a tenth of the real consumption).
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 70, purchasedCredits: 20, freeCredits: 10 }, windowLimits: { limited: true, fiveHour: { used: 7, cap: 14 }, weekly: { used: 14, cap: 35 } } }) };
+			}
+			if (String(url).endsWith("/alpha/usage/summary")) {
+				return { ok: true, status: 200, json: async () => ({ totalCount: 5, totalCost: 1, totalCredits: 1, totalMonthlyCredits: 1, totalPurchasedCredits: 0, totalFreeCredits: 0, totalTokens: 100 }) };
+			}
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active", currentPeriodEnd: "2026-10-01T00:00:00.000Z" } }) };
+		}
+	});
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent, window.remainingPercent]), [
+		["session", 50, 50],
+		["weekly", 40, 60],
+		["monthly", 1.4, 98.6]
+	], "the monthly bar divides the monthly pool by itself");
+	// The balance stays every pool at once, with its rows still adding up.
+	assert.equal(account.credits.remaining, 100);
+	assert.equal(account.credits.used, 1);
+	assert.equal(account.credits.total, 101);
+	assert.deepEqual(account.credits.breakdown, { granted: 10, toppedUp: 20 });
+	console.log("Command Code monthly bar ignores bought and granted credits ok");
+}
+
+{
+	// Command Code: the wallet's rows are the aggregate pair, not the monthly
+	// counter — with the two disagreeing (5 spent across the pools, none of it
+	// from the monthly allowance) the bar reads 0% while the rows read 5.
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 70, purchasedCredits: 20, freeCredits: 10 }, windowLimits: { limited: true, fiveHour: { used: 7, cap: 14 } } }) };
+			}
+			if (String(url).endsWith("/alpha/usage/summary")) {
+				return { ok: true, status: 200, json: async () => ({ totalCount: 5, totalCost: 5, totalCredits: 5, totalMonthlyCredits: 0, totalPurchasedCredits: 4, totalFreeCredits: 1, totalTokens: 100 }) };
+			}
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active" } }) };
+		}
+	});
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent]), [["session", 50], ["monthly", 0]], "the bar follows the monthly counter alone");
+	assert.deepEqual([account.credits.remaining, account.credits.used, account.credits.total], [100, 5, 105], "the rows follow the aggregate counter");
+	console.log("Command Code wallet rows follow the aggregate counter ok");
+}
+
+{
+	// Command Code: `totalCredits` is the aggregate over every pool, so it can
+	// never stand in for the monthly denominator. A summary that states the
+	// aggregate but not `totalMonthlyCredits` leaves the monthly bar out rather
+	// than dividing this pool's remainder by other pools' spend.
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 70, purchasedCredits: 20, freeCredits: 10 }, windowLimits: { limited: true, fiveHour: { used: 7, cap: 14 } } }) };
+			}
+			if (String(url).endsWith("/alpha/usage/summary")) {
+				return { ok: true, status: 200, json: async () => ({ totalCount: 5, totalCost: 3, totalCredits: 3, totalTokens: 100 }) };
+			}
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active" } }) };
+		}
+	});
+	assert.deepEqual(account.windows.map((window) => window.kind), ["session"], "no monthly counter, no monthly bar");
+	assert.deepEqual([account.credits.remaining, account.credits.used, account.credits.total], [100, 3, 103]);
+	console.log("Command Code monthly bar needs the monthly counter ok");
+}
+
+{
+	// Command Code: the two derived facts have different needs. A summary that
+	// states only the monthly counter still draws the monthly bar (90 left of
+	// the allowance, 10 spent from it), while the wallet's rows stay out
+	// because no aggregate states what the period used across every pool.
+	const account = await collectSubscription("commandcode-goat", credentials({ COMMANDCODE_API_KEY: "user_x" }), {}, {
+		now: () => now,
+		fetch: async (url) => {
+			if (String(url).endsWith("/alpha/billing/credits")) {
+				return { ok: true, status: 200, json: async () => ({ credits: { monthlyCredits: 90, purchasedCredits: 0, freeCredits: 0 }, windowLimits: { limited: true, fiveHour: { used: 7, cap: 14 } } }) };
+			}
+			if (String(url).endsWith("/alpha/usage/summary")) {
+				return { ok: true, status: 200, json: async () => ({ totalCount: 5, totalMonthlyCredits: 10, totalTokens: 100 }) };
+			}
+			return { ok: true, status: 200, json: async () => ({ success: true, data: { planId: "individual-goat", status: "active" } }) };
+		}
+	});
+	assert.deepEqual(account.windows.map((window) => [window.kind, window.usedPercent]), [["session", 50], ["monthly", 10]], "the bar needs only the monthly counter");
+	assert.equal(account.credits.remaining, 90);
+	assert.equal(account.credits.used, void 0, "no aggregate, no wallet spend row");
+	assert.equal(account.credits.total, void 0, "no aggregate, no wallet total row");
+	console.log("Command Code wallet rows need the aggregate counter ok");
+}
+
+{
 	// Command Code gates its account surface by client version, so a monitor may
 	// claim one without waiting for a release — and only a version-shaped value
 	// is acceptable, because the header carries whatever it is given.

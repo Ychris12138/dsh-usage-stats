@@ -235,9 +235,9 @@ Ollama 适配器只对**已配置的 provider** 生效，不会自动添加账�
 
 **Command Code（Go / GOAT / Pro / Max）——实验性适配器。** 它读取 `COMMANDCODE_API_KEY`，调用的是 Command Code 自己 CLI 使用的一组**未公开、未版本化**端点（不属于其公开 Provider API）：`/alpha/billing/credits` 给出 credits 与 5 小时/每周窗口，`/alpha/usage/summary` 给出本期请求数与花费，`/alpha/billing/subscriptions` 给出档位（Go / GOAT / Pro / Max）与计费周期。上游随时可以改动或收紧这些端点，届时卡片会退化为「响应异常」，不会影响 Token 统计本身。卡片因此显示**三条窗口**——5 小时、每周、每月（每月的重置时间就是订阅周期结束时间）——外加一行 credits 美元余额，这是本插件里唯一一张余额与订阅窗口并存的卡片。
 
-三条窗口的口径：5 小时与每周按上游直接给出的「已用金额 ÷ 上限」换算；月度池上游从不给出总量，分母由「剩余 credits + 本期花费」相加得到（推导值）。
+三条窗口的口径：5 小时与每周按上游直接给出的「已用金额 ÷ 上限」换算；月度池只用它**自己那一对**数字——`credits.monthlyCredits`（月度池剩余）与 `/alpha/usage/summary` 的 `totalMonthlyCredits`（本期从月度池花掉的部分）——作为分母的两半（推导值）。充值 `purchasedCredits` 与赠送 `freeCredits` 是**另外两个池**：它们只出现在余额行与 breakdown 里，不进月度窗口的分母；聚合的 `totalCredits` 同样不进，若 `totalMonthlyCredits` 缺失就干脆不画月度窗口，而不是拿聚合值凑一个分母。
 
-只有 credits 端点决定查询成败，另两个端点失败只会少显示档位或本期花费。字段缺失一律按“没有这项”处理，形状完全无法识别时返回 `invalid-response` 并带上安全的原因码，而不会把未知当成 0 余额。
+只有 credits 端点决定查询成败，另两个端点失败只会少显示档位、本期花费，以及需要它们的推导项：月度窗口要 `totalMonthlyCredits`，余额行的「已使用/总余额」要聚合 `totalCredits`——缺哪项就少哪项，而不会把未知当成 0 余额。字段缺失一律按“没有这项”处理，形状完全无法识别时返回 `invalid-response` 并带上安全的原因码，而不会把未知当成 0 余额。
 
 这些端点会按**客户端版本**放行，所以适配器自带一个默认版本（随本插件发布更新）；某个部署被要求更高版本时，用 monitor 覆盖即可，不需要等发版，也不会在每次刷新时去 npm 查询版本：
 

@@ -2308,6 +2308,99 @@ console.log("snapshot -> " + snapshot.status);
 }
 
 {
+	// DSH 0.2 provider registries may expose zai-coding-cn without the
+	// apiKeyEnv/baseURL fields that older settings profiles carried. The
+	// canonical route must still bind the standard Z.ai credential and CN host.
+	const calls = [];
+	const provider = { id: "zai-coding-cn", displayName: "Z.ai CN" };
+	const spec = resolveAccountSpec(provider, validateAccountConfig());
+	assert.equal(spec.adapter, "zai-token-plan");
+	assert.equal(spec.apiKeyRef, "ZAI_API_KEY");
+	const account = await queryAccount(spec, credentials({ ZAI_API_KEY: "zai-cn-secret" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), init });
+			if (String(url).endsWith("/quota/limit")) {
+				return jsonResponse({ data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, remaining: 900 }] } });
+			}
+			return jsonResponse({ data: [{ product_name: "GLM Coding Pro" }] });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.deepEqual(calls.map((call) => call.url), [
+		"https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+		"https://open.bigmodel.cn/api/biz/subscription/list"
+	]);
+	assert.ok(calls.every((call) => call.init.headers.authorization === "zai-cn-secret"));
+	assert.equal(JSON.stringify(account).includes("zai-cn-secret"), false, "Z.ai key must not cross the account snapshot boundary");
+	const missing = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		fetch: async () => { throw new Error("missing credentials must not reach upstream"); }
+	});
+	assert.equal(missing.status, "not-configured");
+	assert.deepEqual(missing.missingCredentials, ["ZAI_API_KEY"]);
+	console.log("Z.ai CN route without connection metadata binds key and region safely ok");
+}
+
+{
+	// An explicit monitor region remains authoritative over the canonical CN id.
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "zai-coding-cn", displayName: "Z.ai CN" }, validateAccountConfig({ monitors: {
+		"zai-coding-cn": { adapter: "zai-token-plan", region: "global" }
+	} }));
+	const account = await queryAccount(spec, credentials({ ZAI_API_KEY: "zai-global-secret" }), {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			return jsonResponse({ data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, remaining: 900 }] } });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(calls[0], "https://api.z.ai/api/monitor/usage/quota/limit");
+	console.log("Z.ai explicit monitor region precedence preserved ok");
+}
+
+{
+	// A user-supplied credentialRef must remain authoritative; the id-only
+	// fallback must not silently read ZAI_API_KEY instead.
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "zai-coding-cn", displayName: "Z.ai CN" }, validateAccountConfig({ monitors: {
+		"zai-coding-cn": { adapter: "zai-token-plan", credentialRef: "CUSTOM_ZAI_KEY" }
+	} }));
+	assert.equal(spec.apiKeyRef, "CUSTOM_ZAI_KEY");
+	const account = await queryAccount(spec, credentials({ ZAI_API_KEY: "wrong-key", CUSTOM_ZAI_KEY: "custom-key" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), authorization: init.headers.authorization });
+			return jsonResponse({ data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, remaining: 900 }] } });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(calls[0].authorization, "custom-key");
+	assert.equal(calls[0].url, "https://open.bigmodel.cn/api/monitor/usage/quota/limit");
+	assert.equal(JSON.stringify(account).includes("custom-key"), false);
+	console.log("Z.ai explicit credentialRef precedence preserved ok");
+}
+
+{
+	// Preserve the existing environment override: an explicit ZAI_API_REGION
+	// can still select global for a canonical CN route when no monitor region is
+	// configured.
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "zai-coding-cn", displayName: "Z.ai CN" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ ZAI_API_KEY: "zai-key", ZAI_API_REGION: "global" }), {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			return jsonResponse({ data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, remaining: 900 }] } });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(calls[0], "https://api.z.ai/api/monitor/usage/quota/limit");
+	console.log("Z.ai environment region override remains compatible ok");
+}
+
+{
 	// The credential-ref name alone carries the same region signal, for routes
 	// whose id says nothing about the region.
 	const calls = [];

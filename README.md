@@ -233,7 +233,7 @@ Ollama 适配器只对**已配置的 provider** 生效，不会自动添加账�
 
 Z.ai 全球区使用 `api.z.ai`，中国区使用 `open.bigmodel.cn`。MiniMax 优先使用官方 `www.minimax.io` / `www.minimaxi.com` Token Plan 地址，并解析 5 小时与周窗口的剩余比例和重置时间。
 
-DSH 0.2 的 provider registry 可能只提供 `zai-coding-cn` 的 route id，而不再附带 `apiKeyEnv` 或 `baseURL`。插件会在这个 canonical route 上安全回退到 `ZAI_API_KEY`，并在没有显式区域设置时请求中国区额度接口；显式 `monitors.<provider>.credentialRef` 仍然优先，区域设置沿用 `ZAI_API_REGION` > `monitors.<provider>.region` > route/baseURL 推断的顺序。
+DSH 0.2 的 provider registry 可能只提供 `zai-coding-cn` 的 route id，而不再附带 `apiKeyEnv` 或 `baseURL`。插件会在这个 canonical route 上安全回退到 `ZAI_API_KEY`，并在没有显式区域设置时请求中国区额度接口；显式 `monitors.<provider>.credentialRef` 仍然优先，区域设置沿用 `monitors.<provider>.region` > `ZAI_API_REGION` > route/baseURL 推断的顺序。
 
 ### New API、Sub2API 与自定义 monitor
 

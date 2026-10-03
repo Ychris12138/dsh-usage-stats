@@ -2346,9 +2346,9 @@ console.log("snapshot -> " + snapshot.status);
 	// An explicit monitor region remains authoritative over the canonical CN id.
 	const calls = [];
 	const spec = resolveAccountSpec({ id: "zai-coding-cn", displayName: "Z.ai CN" }, validateAccountConfig({ monitors: {
-		"zai-coding-cn": { adapter: "zai-token-plan", region: "global" }
+		"zai-coding-cn": { adapter: "zai-token-plan", region: "bigmodel-cn" }
 	} }));
-	const account = await queryAccount(spec, credentials({ ZAI_API_KEY: "zai-global-secret" }), {
+	const account = await queryAccount(spec, credentials({ ZAI_API_KEY: "zai-cn-secret", ZAI_API_REGION: "global" }), {
 		now: () => now,
 		fetch: async (url) => {
 			calls.push(String(url));
@@ -2356,7 +2356,7 @@ console.log("snapshot -> " + snapshot.status);
 		}
 	});
 	assert.equal(account.status, "ok");
-	assert.equal(calls[0], "https://api.z.ai/api/monitor/usage/quota/limit");
+	assert.equal(calls[0], "https://open.bigmodel.cn/api/monitor/usage/quota/limit");
 	console.log("Z.ai explicit monitor region precedence preserved ok");
 }
 

@@ -233,7 +233,9 @@ Ollama 适配器只对**已配置的 provider** 生效，不会自动添加账�
 
 Z.ai 全球区使用 `api.z.ai`，中国区使用 `open.bigmodel.cn`。MiniMax 优先使用官方 `www.minimax.io` / `www.minimaxi.com` Token Plan 地址，并解析 5 小时与周窗口的剩余比例和重置时间。
 
-DSH 0.2 的 provider registry 可能只提供 `zai-coding-cn` 的 route id，而不再附带 `apiKeyEnv` 或 `baseURL`。插件会在这个 canonical route 上安全回退到 `ZAI_API_KEY`，并在没有显式区域设置时请求中国区额度接口；显式 `monitors.<provider>.credentialRef` 仍然优先，区域设置沿用 `monitors.<provider>.region` > `ZAI_API_REGION` > route/baseURL 推断的顺序。
+DSH 0.2 的 provider registry 可能只提供 `zai-coding-cn` 的 route id，而不再附带 `apiKeyEnv` 或 `baseURL`。当没有显式凭据引用且查询中国区时，插件优先读取 DSH 使用的 `ZAI_CODING_CN_API_KEY`，缺失时兼容旧的 `ZAI_API_KEY`；两者同时存在时使用前者。显式 `monitors.<provider>.credentialRef` 优先于 provider 的 `apiKeyEnv`，指定引用缺失时不会改用其他 Key，上游拒绝凭据时也不会轮换 Key 重试。自定义 provider 不会借用这些默认凭据。
+
+区域设置沿用 `monitors.<provider>.region` > `ZAI_API_REGION` > route/baseURL 推断的顺序，`zai-coding-cn` 默认请求中国区。若区域被覆盖为全球区，默认凭据只读取 `ZAI_API_KEY`，不会把 `ZAI_CODING_CN_API_KEY` 发送到全球区；全球 `zai` 路由也不会隐式借用 CN 路由的 Key。供应商“已配置”状态、手动查询与后台刷新使用相同的凭据解析规则。
 
 ### New API、Sub2API 与自定义 monitor
 

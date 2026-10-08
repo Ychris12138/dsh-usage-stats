@@ -118,6 +118,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | New API | 余额 | provider 推理 Token | `/api/usage/token/` |
 | Sub2API / Passion | 自动判别 | provider `apiKeyEnv` | `/v1/usage` |
 | Sub2API 面板（真实） | 余额 | provider 推理 Token | `/user/balance`（复用 apiKey） |
+| CodeArts 系反代（`dsh-codearts-auth`） | 订阅 | 宿主插件账号池；本插件不读取 AK/SK | `creditBalance.creditsBalances()`（进程内） |
 | General / Declarative | 余额或订阅 | 配置中的 credential ref | 受限 GET + JSON |
 
 没有公开账户接口的供应商仍会正常统计 Token；账户卡片会明确显示“不支持”，不会猜测余额。
@@ -176,6 +177,27 @@ DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key �
 - 充值余额与赠送余额按币种合并；CNY 与 USD 同时存在时**分别显示，绝不跨币种相加**；
 - Host Account 不参加后台账户轮询。只有带真实 UI 版本/语言/时区 metadata 的面板读取才会查询余额；退出或切换账号后，下一次 UI 读取不会继续复用旧余额；
 - 未登录显示“未登录 DeepSeek Account”，不会误提示用户配置 `DEEPSEEK_API_KEY`。
+
+### CodeArts 系反代供应商（dsh-codearts-auth）
+
+`deepseek-harness-codearts` 的账号池路线包括 `codearts` / `buddy` / `workbuddy` / `lobsterai` / `qoder` / `qodercn` / `trae` / `cline` / `loomy` / `raccoon` / `zcode`，以及与内置供应商同名的 `minimax`。这些账号池路线的凭据由宿主插件持有，因此使用进程内余额接口。
+
+此适配器仍为实验性集成，要求宿主插件通过 `ctx.provide('creditBalance', service)` 提供以下接口：同步的 `supportedProviders()` 返回 `{ id, displayName? }[]`，异步的 `creditsBalances(providerId)` 返回 `{ accounts: [{ accountId, nickname?, balance, error? }] }`。仅有 `accountPool` 或内部 `credits.balances` RPC 不满足此契约；上游服务的已发布版本与真实双插件验收仍待确认。
+
+本插件经 `ctx.get('creditBalance')` 读取服务计算的 `CreditBalance`。服务清单只补充不存在的 provider，并为这些条目标记明确的宿主来源；不会覆盖已注册的同名路由。裸 `minimax` 仍按内置 MiniMax token plan 查询，缺少 `apiKeyEnv` / `baseURL` 不能证明它属于 CodeArts。
+
+若已注册的 `minimax` 实际使用 CodeArts 账号池，需要在现有 usage-stats 配置下显式选择适配器：
+
+```yaml
+monitors:
+  minimax:
+    adapter: codearts-credits
+```
+
+- 数据所有权完全在宿主插件：本插件不读取、不复制、不转发 AK/SK、token、Cookie；只读余额结果与积分包元数据；
+- 积分按**包**展示（每个包的已用比例与到期日），不压成单一余额数字——用户要看的正是「哪个包快过期」；
+- 宿主插件缺席时这些卡片显示“不支持”，不影响其余 provider，也不会让插件启动失败；
+- 查询失败不会显示成 0；`reason` / `partial` 只包含固定安全原因码，不包含上游原始错误、失败账号的昵称或 ID。
 
 ### 余额型供应商
 

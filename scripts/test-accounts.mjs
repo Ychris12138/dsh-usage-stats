@@ -2338,8 +2338,93 @@ console.log("snapshot -> " + snapshot.status);
 		fetch: async () => { throw new Error("missing credentials must not reach upstream"); }
 	});
 	assert.equal(missing.status, "not-configured");
-	assert.deepEqual(missing.missingCredentials, ["ZAI_API_KEY"]);
+	assert.deepEqual(missing.missingCredentials, ["ZAI_CODING_CN_API_KEY"]);
 	console.log("Z.ai CN route without connection metadata binds key and region safely ok");
+}
+
+{
+	// #129: the Host registry can expose only the route id while DSH stores
+	// its key under ZAI_CODING_CN_API_KEY. Discovery and queries must agree.
+	const defaults = { ZAI_CODING_CN_API_KEY: "cn-route-secret", ZAI_API_KEY: "legacy-secret" };
+	const cases = [
+		{ name: "CN route key only", keys: { ZAI_CODING_CN_API_KEY: defaults.ZAI_CODING_CN_API_KEY }, key: "cn-route-secret" },
+		{ name: "legacy key only", keys: { ZAI_API_KEY: defaults.ZAI_API_KEY }, key: "legacy-secret" },
+		{ name: "CN route key wins", key: "cn-route-secret" },
+		{ name: "empty CN key falls back locally", keys: { ...defaults, ZAI_CODING_CN_API_KEY: "  " }, key: "legacy-secret" },
+		{ name: "global route keeps global key", id: "zai", key: "legacy-secret", host: "api.z.ai" },
+		{ name: "global route cannot borrow CN key", id: "zai", keys: { ZAI_CODING_CN_API_KEY: "cn-route-secret" } },
+		{ name: "global route in CN still cannot borrow CN key", id: "zai", keys: { ZAI_CODING_CN_API_KEY: "cn-route-secret", ZAI_API_REGION: "cn" } },
+		{ name: "global environment never sends CN key", keys: { ...defaults, ZAI_API_REGION: "global" }, key: "legacy-secret", host: "api.z.ai" },
+		{ name: "global environment with only CN key stays unconfigured", keys: { ZAI_CODING_CN_API_KEY: "cn-route-secret", ZAI_API_REGION: "global" } },
+		{ name: "CN monitor overrides global environment", keys: { ...defaults, ZAI_API_REGION: "global" }, monitor: { region: "cn" }, key: "cn-route-secret" },
+		{ name: "global monitor overrides CN environment", keys: { ...defaults, ZAI_API_REGION: "cn" }, monitor: { region: "global" }, key: "legacy-secret", host: "api.z.ai" },
+		{ name: "provider credential wins", apiKeyEnv: "PROVIDER_KEY", keys: { ...defaults, PROVIDER_KEY: "provider-secret" }, key: "provider-secret" },
+		{ name: "monitor credential wins over provider", apiKeyEnv: "PROVIDER_KEY", monitor: { credentialRef: "MONITOR_KEY" }, keys: { ...defaults, PROVIDER_KEY: "provider-secret", MONITOR_KEY: "monitor-secret" }, key: "monitor-secret" },
+		{ name: "missing provider credential cannot fall back", apiKeyEnv: "MISSING_KEY" },
+		{ name: "missing monitor credential cannot fall back", apiKeyEnv: "ZAI_API_KEY", monitor: { credentialRef: "MISSING_KEY" } },
+		{ name: "custom provider cannot borrow defaults", id: "custom-zai", monitor: {} }
+	];
+	for (const test of cases) {
+		const id = test.id ?? "zai-coding-cn";
+		const calls = [];
+		const service = createAccountService({
+			credentials: credentials(test.keys ?? defaults),
+			getProviders: async () => [{ id, ...(test.apiKeyEnv === void 0 ? {} : { apiKeyEnv: test.apiKeyEnv }) }],
+			config: validateAccountConfig(test.monitor === void 0 ? {} : { monitors: { [id]: { adapter: "zai-token-plan", ...test.monitor } } }),
+			deps: {
+				includeLegacyProviders: false,
+				now: () => now,
+				fetch: async (url, init) => {
+					calls.push({ url: String(url), authorization: init.headers.authorization });
+					return jsonResponse({ data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, remaining: 900 }] } });
+				}
+			}
+		});
+		const before = await service.providerViews();
+		assert.equal(before[0].configured, test.key !== void 0, `${test.name}: initial provider view`);
+		assert.equal(calls.length, 0, `${test.name}: provider discovery must not query upstream`);
+		const account = await service.get(id);
+		assert.equal(account.status, test.key === void 0 ? "not-configured" : "ok", test.name);
+		assert.equal(calls.length, test.key === void 0 ? 0 : 2, test.name);
+		for (const call of calls) {
+			assert.equal(new URL(call.url).hostname, test.host ?? "open.bigmodel.cn", test.name);
+			assert.equal(call.authorization, test.key, test.name);
+		}
+		const after = await service.providerViews();
+		assert.equal(after[0].configured, before[0].configured, `${test.name}: cached provider view`);
+		const snapshots = JSON.stringify({ before, account, after });
+		for (const secret of ["cn-route-secret", "legacy-secret", "provider-secret", "monitor-secret"]) {
+			assert.equal(snapshots.includes(secret), false, `${test.name}: credentials must not cross the snapshot boundary`);
+		}
+		// Exercise the same binding through the server-owned refresh scheduler.
+		const refreshed = await service.refreshDue({ force: true });
+		assert.equal(refreshed[0].status, account.status, `${test.name}: scheduled refresh`);
+	}
+	console.log("Z.ai route credential discovery, precedence, region isolation, and refresh regression matrix ok");
+}
+
+{
+	const refs = [];
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "zai-coding-cn" }, validateAccountConfig());
+	const account = await queryAccount(spec, {
+		resolve: async (ref) => {
+			refs.push(ref);
+			return { value: { ZAI_CODING_CN_API_KEY: "rejected-cn-secret", ZAI_API_KEY: "other-account-secret" }[ref] };
+		}
+	}, {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), authorization: init.headers.authorization });
+			return jsonResponse({}, 401);
+		}
+	});
+	assert.equal(account.status, "unauthorized");
+	assert.equal(calls.length, 1, "a rejected CN key must not trigger a different-account retry");
+	assert.equal(calls[0].authorization, "rejected-cn-secret");
+	assert.equal(refs.includes("ZAI_API_KEY"), false, "a present CN key must not resolve the legacy key");
+	assert.equal(JSON.stringify(account).includes("rejected-cn-secret"), false);
+	console.log("Z.ai authentication failure never rotates to a different credential ok");
 }
 
 {

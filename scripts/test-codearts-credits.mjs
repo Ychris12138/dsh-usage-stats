@@ -44,30 +44,48 @@ function specFor(providerId, monitor = {}) {
 
 const NOW = 1_800_000_000_000;
 
-// ── 分类：12 条 route 都要落到 codearts-credits，且出处是 official ──
+// ── 分类：CodeArts 独有 route 与宿主明确提供的 route ──
 
-test("codearts 系 12 条 route 全部解析到 codearts-credits 适配器", () => {
+test("codearts 系 11 条独有 route 解析到 codearts-credits 适配器", () => {
 	for (const id of ["codearts", "buddy", "workbuddy", "lobsterai", "qoder", "qodercn", "trae", "cline", "loomy", "raccoon", "zcode"]) {
 		const identity = resolveProviderIdentity({ id, displayName: id }, { monitors: {} });
 		assert.equal(identity.accountAdapter, "codearts-credits", `${id} 分类错误`);
 	}
 });
 
-test("minimax 归 codearts-credits（MiniMax Code 账号在 codearts 池里）", () => {
-	// 两个插件都注册了 minimax 这条 route id。内置的 minimax-token-plan 适配器
-	// 要 MINIMAX_API_KEY，而 MiniMax Code 的账号凭据在 dsh-codearts-auth 的账号池
-	// 里、没有这个 Key —— 判给 token-plan 会让卡片永远停在 not-configured，
-	// 而 codearts 侧其实能读到 `credit/details`（实测踩过）。
+test("裸 minimax 仍归 token-plan，缺少连接字段不能证明归属 CodeArts", () => {
 	const identity = resolveProviderIdentity({ id: "minimax", displayName: "minimax" }, { monitors: {} });
-	assert.equal(identity.accountAdapter, "codearts-credits");
+	assert.equal(identity.accountAdapter, "minimax-token-plan");
+	assert.equal(identity.providerFamily, "minimax");
 });
 
 test("API Key 版 minimax 路由仍走 token-plan（不误伤）", () => {
 	// minimax-cn 在 llm-pi-ai 里配了 MINIMAX_CN_API_KEY，实测 status=ok。
-	for (const id of ["minimaxi", "minimax-cn", "minimax-coding"]) {
+	for (const id of ["minimax", "minimaxi", "minimax-cn", "minimax-coding"]) {
 		const identity = resolveProviderIdentity({ id, displayName: id }, { monitors: {} });
 		assert.equal(identity.accountAdapter, "minimax-token-plan", `${id} 应保持 token-plan`);
 	}
+});
+
+test("服务来源标记只在没有连接配置时选择 CodeArts，显式 monitor 优先", () => {
+	for (const id of ["minimax", "future-credit-provider"]) {
+		const provider = { id, accountService: "creditBalance" };
+		assert.equal(resolveProviderIdentity(provider).accountAdapter, "codearts-credits");
+		assert.equal(resolveProviderIdentity({ id }).accountAdapter, id === "minimax" ? "minimax-token-plan" : null);
+		assert.equal(resolveProviderIdentity({ id, accountService: "other-service" }).accountAdapter, id === "minimax" ? "minimax-token-plan" : null);
+		for (const connection of [{ apiKeyEnv: "OWN_KEY" }, { baseURL: "https://custom.example.com/v1" }]) {
+			assert.equal(resolveProviderIdentity({ ...provider, ...connection }).accountAdapter, id === "minimax" ? "minimax-token-plan" : null);
+		}
+		assert.equal(resolveProviderIdentity(provider, { monitors: { [id]: { adapter: "minimax-token-plan" } } }).accountAdapter, "minimax-token-plan");
+	}
+});
+
+test("已注册 minimax 可以通过显式 monitor 选择 CodeArts", () => {
+	const identity = resolveProviderIdentity(
+		{ id: "minimax", apiKeyEnv: "MINIMAX_API_KEY", baseURL: "https://api.minimax.io/anthropic" },
+		{ monitors: { minimax: { adapter: "codearts-credits" } } }
+	);
+	assert.equal(identity.accountAdapter, "codearts-credits");
 });
 
 test("CANONICAL_ROUTES 无重复键（后写的会静默覆盖先写的）", async () => {
@@ -182,7 +200,7 @@ test("空 packages 但有汇总额：合成一个绝对额度窗口（MiniMax �
 			accounts: [{ accountId: "minimax-1", nickname: "我的账号", balance: { total: 1234, packages: [], expiredTotal: 0 } }]
 		})
 	});
-	const snapshot = await queryAccount(specFor("minimax"), { resolve: async () => void 0 }, { creditBalance: service, now: () => NOW });
+	const snapshot = await queryAccount(specFor("minimax", { adapter: "codearts-credits" }), { resolve: async () => void 0 }, { creditBalance: service, now: () => NOW });
 	assert.equal(snapshot.status, "ok");
 	assert.equal(snapshot.windows.length, 1);
 	assert.equal(snapshot.windows[0].amount, 1234);
@@ -200,7 +218,7 @@ test("空 packages 且 total 也缺失 → 仍然 unavailable（不编造 0）",
 			accounts: [{ accountId: "a", nickname: "n", balance: { total: null, packages: [], expiredTotal: 0 } }]
 		})
 	});
-	const snapshot = await queryAccount(specFor("minimax"), { resolve: async () => void 0 }, { creditBalance: service, now: () => NOW });
+	const snapshot = await queryAccount(specFor("minimax", { adapter: "codearts-credits" }), { resolve: async () => void 0 }, { creditBalance: service, now: () => NOW });
 	assert.equal(snapshot.status, "unavailable");
 	assert.deepEqual(snapshot.windows, []);
 });
@@ -222,7 +240,7 @@ test("多个账号的包合并进 windows，plan 记为账号数", async () => {
 	assert.deepEqual(new Set(snapshot.windows.map((w) => w.account)), new Set(["a1", "a2"]));
 });
 
-test("部分账号失败：成功的照常展示，失败原因单列（不吞掉）", async () => {
+test("部分账号失败：成功的照常展示，失败只输出安全原因码", async () => {
 	const service = fakeCreditBalance({
 		creditsBalances: async () => ({
 			accounts: [
@@ -234,7 +252,26 @@ test("部分账号失败：成功的照常展示，失败原因单列（不吞�
 	const snapshot = await queryAccount(specFor("codearts"), { resolve: async () => void 0 }, { creditBalance: service, now: () => NOW });
 	assert.equal(snapshot.status, "ok");
 	assert.equal(snapshot.windows.length, 1);
-	assert.deepEqual(snapshot.partial, ["小号: Token 计费账户，无积分余额"]);
+	assert.deepEqual(snapshot.partial, ["unknown"]);
+	assert.equal(JSON.stringify(snapshot).includes("Token 计费账户"), false);
+	assert.equal(JSON.stringify(snapshot).includes("小号"), false);
+});
+
+test("部分失败不泄露错误文本、失败账号昵称或 ID，成功账号展示字段保留", async () => {
+	const secrets = ["sk-error-secret", "Cookie=session-secret", "https://private.example.com/?token=url-secret", "/Users/private/.credentials", "failed-nickname-secret", "failed-id-secret", "missing-balance-id-secret", "missing-balance-name-secret"];
+	const service = fakeCreditBalance({
+		creditsBalances: async () => ({ accounts: [
+			{ accountId: "visible-success-id", nickname: "成功账号", balance: { total: 25, packages: [] } },
+			{ accountId: secrets[5], nickname: secrets[4], balance: null, error: secrets.slice(0, 4).join(" ") },
+			{ accountId: secrets[6], nickname: secrets[7] }
+		] })
+	});
+	const snapshot = await queryAccount(specFor("codearts"), null, { creditBalance: service, now: () => NOW });
+	assert.equal(snapshot.status, "ok");
+	assert.deepEqual(snapshot.partial, ["unknown", "unknown"]);
+	assert.equal(snapshot.windows[0].account, "visible-success-id");
+	assert.equal(snapshot.windows[0].label, "成功账号");
+	for (const secret of secrets) assert.equal(JSON.stringify(snapshot).includes(secret), false, `快照泄露 ${secret}`);
 });
 
 test("alert 取最紧窗口：只剩 5% 时为 critical", async () => {
@@ -280,11 +317,31 @@ test("provider 不受支持（UnsupportedProviderError）→ unsupported", async
 	assert.equal(snapshot.status, "unsupported");
 });
 
-test("服务抛普通异常 → unavailable 并保留原因", async () => {
+test("服务抛普通异常 → unavailable 并使用安全原因码", async () => {
 	const service = fakeCreditBalance({ creditsBalances: async () => { throw new Error("AK 限流"); } });
 	const snapshot = await queryAccount(specFor("codearts"), { resolve: async () => void 0 }, { creditBalance: service, now: () => NOW });
 	assert.equal(snapshot.status, "unavailable");
-	assert.equal(snapshot.reason, "AK 限流");
+	assert.equal(snapshot.reason, "unknown");
+});
+
+test("服务异常只允许固定原因码，Error、字符串与对象均不泄露诊断内容", async () => {
+	const secrets = ["sk-service-secret", "Cookie=session-secret", "https://private.example.com/?token=url-secret", "/Users/private/.credentials"];
+	const message = secrets.join(" ");
+	const cases = [
+		{ error: new Error(message), reason: "unknown" },
+		{ error: message, reason: "unknown" },
+		{ error: { message, safeReason: message, toString: () => message }, reason: "unknown" },
+		{ error: Object.assign(new Error(message), { safeReason: "unauthorized" }), reason: "unauthorized" },
+		{ error: Object.assign(new Error(message), { name: "TimeoutError" }), reason: "timeout" },
+		{ error: Object.assign(new Error(message), { providerStatus: "rate-limited" }), reason: "rate-limited" }
+	];
+	for (const { error, reason } of cases) {
+		const service = fakeCreditBalance({ creditsBalances: async () => { throw error; } });
+		const snapshot = await queryAccount(specFor("codearts"), null, { creditBalance: service, now: () => NOW });
+		assert.equal(snapshot.status, "unavailable");
+		assert.equal(snapshot.reason, reason);
+		for (const secret of secrets) assert.equal(JSON.stringify(snapshot).includes(secret), false, `快照泄露 ${secret}`);
+	}
 });
 
 test("账号池为空 → not-configured（而不是余额 0）", async () => {
@@ -301,8 +358,23 @@ test("全部账号查询失败 → unavailable 且带原因，绝不退化成 0"
 	});
 	const snapshot = await queryAccount(specFor("codearts"), { resolve: async () => void 0 }, { creditBalance: service, now: () => NOW });
 	assert.equal(snapshot.status, "unavailable");
-	assert.equal(snapshot.reason, "主号: 凭据已失效");
+	assert.equal(snapshot.reason, "unknown");
 	assert.deepEqual(snapshot.windows, []);
+	assert.equal(JSON.stringify(snapshot).includes("主号"), false);
+	assert.equal(JSON.stringify(snapshot).includes("凭据已失效"), false);
+});
+
+test("全部账号缺少 balance 时不输出昵称、ID 或错误诊断", async () => {
+	const secrets = ["sk-secret", "Cookie=session-secret", "https://private.example.com/?token=url-secret", "/Users/private/.credentials"];
+	const service = fakeCreditBalance({ creditsBalances: async () => ({ accounts: [
+		{ accountId: secrets[0], nickname: secrets[1], error: secrets[2], balance: null },
+		{ accountId: secrets[3], nickname: "private-account-nickname" }
+	] }) });
+	const snapshot = await queryAccount(specFor("codearts"), null, { creditBalance: service, now: () => NOW });
+	assert.equal(snapshot.status, "unavailable");
+	assert.equal(snapshot.reason, "unknown");
+	assert.deepEqual(snapshot.windows, []);
+	for (const secret of [...secrets, "private-account-nickname"]) assert.equal(JSON.stringify(snapshot).includes(secret), false);
 });
 
 test("空 packages 且 total 为 0 → 显示「剩余 0」（非 null 的 0 是真的 0）", async () => {
@@ -364,6 +436,132 @@ test("已注册的同名 provider 不被服务清单覆盖（用户改过的展�
 	});
 	const view = (await accountService.providerViews()).find((item) => item.id === "codearts");
 	assert.equal(view.displayName, "我改过的名字");
+});
+
+test("服务声明支持 minimax 也不改变既有裸路由或 API 路由的归属", async () => {
+	for (const creditBalancePresent of [false, true]) {
+		for (const connection of [{}, { apiKeyEnv: "MINIMAX_API_KEY", baseURL: "https://api.minimax.io/anthropic" }]) {
+			let creditQueries = 0;
+			const service = fakeCreditBalance({
+				supportedProviders: () => [{ id: "minimax", displayName: "服务中的名字" }],
+				creditsBalances: async () => { creditQueries += 1; return { accounts: [] }; }
+			});
+			const accountService = createAccountService({
+				credentials: { resolve: async () => void 0 },
+				getProviders: async () => [{ id: "minimax", displayName: "用户的 MiniMax", ...connection }],
+				config: { monitors: {}, refresh: { enabled: false } },
+				deps: { includeLegacyProviders: false, ...(creditBalancePresent ? { creditBalance: service } : {}) }
+			});
+			const views = await accountService.providerViews();
+			assert.equal(views.length, 1);
+			assert.equal(views[0].adapter, "minimax-token-plan");
+			assert.equal(views[0].displayName, "用户的 MiniMax");
+			const snapshot = await accountService.get("minimax");
+			assert.equal(snapshot.status, "not-configured");
+			assert.equal(creditQueries, 0, "既有 MiniMax 不应查询 CodeArts 账号池");
+		}
+	}
+});
+
+test("裸 minimax 用默认 MINIMAX_API_KEY 查询 Token Plan，服务有无均兼容", async () => {
+	for (const creditBalancePresent of [false, true]) {
+		const calls = [];
+		let creditQueries = 0;
+		const creditBalance = fakeCreditBalance({
+			supportedProviders: () => [{ id: "minimax", displayName: "MiniMax Code" }],
+			creditsBalances: async () => { creditQueries += 1; return { accounts: [] }; }
+		});
+		const accountService = createAccountService({
+			credentials: { resolve: async (ref) => ({ value: ref === "MINIMAX_API_KEY" ? "minimax-global-secret" : void 0 }) },
+			getProviders: async () => [{ id: "minimax", displayName: "MiniMax" }],
+			config: { monitors: {}, refresh: { enabled: false } },
+			deps: {
+				includeLegacyProviders: false,
+				...(creditBalancePresent ? { creditBalance } : {}),
+				fetch: async (url, init) => {
+					calls.push({ url: String(url), authorization: init.headers.authorization });
+					return new Response(JSON.stringify({ base_resp: { status_code: 0 }, model_remains: [{ model_name: "general", current_interval_remaining_percent: 55 }] }), { status: 200, headers: { "content-type": "application/json" } });
+				}
+			}
+		});
+		const view = (await accountService.providerViews())[0];
+		assert.equal(view.adapter, "minimax-token-plan");
+		assert.equal(view.configured, true);
+		const snapshot = await accountService.get("minimax");
+		assert.equal(snapshot.status, "ok");
+		assert.equal(snapshot.windows[0].remainingPercent, 55);
+		assert.deepEqual(calls, [{ url: "https://www.minimax.io/v1/token_plan/remains", authorization: "Bearer minimax-global-secret" }]);
+		assert.equal(creditQueries, 0);
+		assert.equal(JSON.stringify(snapshot).includes("minimax-global-secret"), false);
+	}
+});
+
+test("MiniMax 默认 Key 不覆盖显式引用，也不借给自定义连接配置", async () => {
+	for (const { provider, monitor } of [
+		{ provider: { id: "minimax", apiKeyEnv: "MISSING_KEY" }, monitor: {} },
+		{ provider: { id: "minimax" }, monitor: { adapter: "minimax-token-plan", credentialRef: "MISSING_KEY" } },
+		{ provider: { id: "minimax", baseURL: "https://custom.example.com/v1" }, monitor: {} }
+	]) {
+		const spec = resolveAccountSpec(provider, { monitors: { minimax: monitor } });
+		const snapshot = await queryAccount(spec, { resolve: async (ref) => ({ value: ref === "MINIMAX_API_KEY" ? "minimax-global-secret" : void 0 }) }, {
+			fetch: async () => { assert.fail("缺少显式凭据时不应发送请求"); }
+		});
+		assert.equal(snapshot.status, "not-configured");
+		assert.equal(JSON.stringify(snapshot).includes("minimax-global-secret"), false);
+	}
+});
+
+test("服务新增的 minimax 与未知 route 使用服务来源标记并可查询积分", async () => {
+	const queried = [];
+	const service = fakeCreditBalance({
+		supportedProviders: () => [{ id: "minimax", displayName: "MiniMax Code" }, { id: "future-credit-provider", displayName: "Future Credit" }],
+		creditsBalances: async (id) => {
+			queried.push(id);
+			return { accounts: [{ accountId: "visible-account", nickname: "服务账号", balance: { total: 7, packages: [] } }] };
+		}
+	});
+	const accountService = createAccountService({
+		credentials: { resolve: async () => void 0 },
+		getProviders: async () => [],
+		config: { monitors: {}, refresh: { enabled: false } },
+		deps: { creditBalance: service, includeLegacyProviders: false }
+	});
+	const views = await accountService.providerViews();
+	assert.equal(views.length, 2);
+	for (const view of views) {
+		assert.equal(view.adapter, "codearts-credits");
+		const snapshot = await accountService.get(view.id);
+		assert.equal(snapshot.status, "ok");
+		assert.equal(snapshot.windows[0].amount, 7);
+		assert.equal(snapshot.source, "codearts-plugin");
+	}
+	assert.deepEqual(queried, ["minimax", "future-credit-provider"]);
+});
+
+test("既有 minimax 通过显式 monitor 使用 CodeArts 服务且保留展示名", async () => {
+	const queried = [];
+	const credentialRefs = [];
+	const service = fakeCreditBalance({
+		supportedProviders: () => [{ id: "minimax", displayName: "服务中的名字" }],
+		creditsBalances: async (id) => {
+			queried.push(id);
+			return { accounts: [{ accountId: "visible-account", nickname: "服务账号", balance: { total: 9, packages: [] } }] };
+		}
+	});
+	const accountService = createAccountService({
+		credentials: { resolve: async (ref) => { credentialRefs.push(ref); return void 0; } },
+		getProviders: async () => [{ id: "minimax", displayName: "用户的 MiniMax", apiKeyEnv: "MINIMAX_API_KEY", baseURL: "https://api.minimax.io/anthropic" }],
+		config: { monitors: { minimax: { adapter: "codearts-credits" } }, refresh: { enabled: false } },
+		deps: { creditBalance: service, includeLegacyProviders: false }
+	});
+	const view = (await accountService.providerViews())[0];
+	assert.equal(view.adapter, "codearts-credits");
+	assert.equal(view.displayName, "用户的 MiniMax");
+	const snapshot = await accountService.get("minimax");
+	assert.equal(snapshot.status, "ok");
+	assert.equal(snapshot.windows[0].amount, 9);
+	assert.deepEqual(queried, ["minimax"]);
+	assert.deepEqual(credentialRefs, [], "宿主积分查询和供应商列表均不应读取 API Key");
 });
 
 test("服务缺席时不补 provider（卡片不出现，其余 provider 不受影响）", async () => {

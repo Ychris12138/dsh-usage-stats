@@ -233,6 +233,10 @@ Ollama 适配器只对**已配置的 provider** 生效，不会自动添加账�
 
 Z.ai 全球区使用 `api.z.ai`，中国区使用 `open.bigmodel.cn`。MiniMax 优先使用官方 `www.minimax.io` / `www.minimaxi.com` Token Plan 地址，并解析 5 小时与周窗口的剩余比例和重置时间。
 
+DSH 0.2 的 provider registry 可能只提供 `zai-coding-cn` 的 route id，而不再附带 `apiKeyEnv` 或 `baseURL`。当没有显式凭据引用且查询中国区时，插件优先读取 DSH 使用的 `ZAI_CODING_CN_API_KEY`，缺失时兼容旧的 `ZAI_API_KEY`；两者同时存在时使用前者。显式 `monitors.<provider>.credentialRef` 优先于 provider 的 `apiKeyEnv`，指定引用缺失时不会改用其他 Key，上游拒绝凭据时也不会轮换 Key 重试。自定义 provider 不会借用这些默认凭据。
+
+区域设置沿用 `monitors.<provider>.region` > `ZAI_API_REGION` > route/baseURL 推断的顺序，`zai-coding-cn` 默认请求中国区。若区域被覆盖为全球区，默认凭据只读取 `ZAI_API_KEY`，不会把 `ZAI_CODING_CN_API_KEY` 发送到全球区；全球 `zai` 路由也不会隐式借用 CN 路由的 Key。供应商“已配置”状态、手动查询与后台刷新使用相同的凭据解析规则。
+
 ### New API、Sub2API 与自定义 monitor
 
 在现有 `name: "@ychris12138/dsh-usage-stats"` Cordis entry 下合并 `config`，不要追加第二个插件 entry。monitor 键必须是 Harness 中真实存在的 provider id；未知 provider、adapter 或非法映射会在路由和 timer 注册前阻止插件启动。例外：monitor 同时显式提供 `usageBaseURL` 与 `credentialRef` 时视为自包含，会在 provider 注册可见前临时物化为 provider（适用于 Harness 设置页里后加载的 provider），此时不要求该 provider 已出现在注册表中。

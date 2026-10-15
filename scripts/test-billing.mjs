@@ -132,7 +132,8 @@ const ruleC = Date.parse("2026-08-24T02:00:00Z");
 	}, "search-1");
 	const second = webSearchUsage(ruleC + 2, ruleC + 2, "deepseek-official", "deepseek-v4-flash", {
 		inputTokens: 5,
-		outputTokens: 5
+		outputTokens: 5,
+		reasoningTokens: 2
 	}, "search-2");
 	applyUsageDelta(state, [
 		request(0, ruleC, "deepseek-official", "deepseek-v4-flash"),
@@ -140,12 +141,13 @@ const ruleC = Date.parse("2026-08-24T02:00:00Z");
 		replacement,
 		second,
 		{ seq: ruleC + 3, time: ruleC + 3, type: "web/deepseek-search-llm-request", data: { provider: "deepseek-official", model: "deepseek-v4-flash", usage: { input_tokens: 999 } } },
-		{ seq: ruleC + 4, time: ruleC + 4, type: "web/deepseek-search-usage", data: { provider: "deepseek-official", usage: { input_tokens: 999 } } }
+		{ seq: ruleC + 4, time: ruleC + 4, type: "web/deepseek-search-usage", data: { provider: "deepseek-official", usage: { input_tokens: 999 } } },
+		{ time: ruleC + 5, type: "web/deepseek-search-usage", data: { provider: "deepseek-official", model: "deepseek-v4-flash", usage: { input_tokens: 999 } } }
 	], { estimateCost: estimator });
 	const rendered = renderSessionUsage("web-search", state);
 	const expectedReplacement = estimator({ providerId: "deepseek-official", model: "deepseek-v4-flash", timestamp: ruleC + 1, buckets: buckets(20, 1) });
-	const expectedSecond = estimator({ providerId: "deepseek-official", model: "deepseek-v4-flash", timestamp: ruleC + 2, buckets: buckets(5, 5) });
-	assert.equal(rendered.tokens, 31, "web-search response usage must fold camelCase and snake_case token fields");
+	const expectedSecond = estimator({ providerId: "deepseek-official", model: "deepseek-v4-flash", timestamp: ruleC + 2, buckets: buckets(5, 7) });
+	assert.equal(rendered.tokens, 33, "web-search response usage must fold camelCase, snake_case, and reasoning token fields");
 	assert.deepEqual(rendered.providers, ["deepseek-official"]);
 	assert.deepEqual(rendered.models, ["deepseek-official/deepseek-v4-flash"]);
 	assert.equal(rendered.estimatedCost, expectedReplacement.amount + expectedSecond.amount, "web-search usage must use event-time pricing");

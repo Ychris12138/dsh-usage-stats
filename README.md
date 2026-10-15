@@ -115,6 +115,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | Kimi For Coding | 订阅 | `KIMI_API_KEY` | `/coding/v1/usages` |
 | MiniMax Coding Plan | 订阅 | `MINIMAX_API_KEY` | `/v1/token_plan/remains` |
 | Ollama 云 | 订阅 | `OLLAMA_API_KEY` | `/api/usage`（5小时 + 周窗口） |
+| Command Code（Go / GOAT / Pro / Max） | 订阅 + 余额 | `COMMANDCODE_API_KEY` | `/alpha/billing/credits` 等 `/alpha/*`（**实验性**：未公开端点） |
 | New API | 余额 | provider 推理 Token | `/api/usage/token/` |
 | Sub2API / Passion | 自动判别 | provider `apiKeyEnv` | `/v1/usage` |
 | Sub2API 面板（真实） | 余额 | provider 推理 Token | `/user/balance`（复用 apiKey） |
@@ -210,6 +211,7 @@ MINIMAX_API_KEY: your-minimax-key
 # 中国区 MiniMax 用户可选；默认 global
 MINIMAX_API_REGION: cn
 OLLAMA_API_KEY: sk-ollama-your-key
+COMMANDCODE_API_KEY: user-your-command-code-key
 ```
 
 OpenCode Go 依次尝试 Harness credential、`~/.local/share/opencode/auth.json`，最后才使用显式 `OPENCODE_GO_AUTH_COOKIE + OPENCODE_GO_WORKSPACE_ID` 兼容回退。Bearer usage endpoint 目前不是公开 API，可能随上游变化；Cookie 等同登录凭据，不应进入日志或 issue。
@@ -230,6 +232,27 @@ Ollama 适配器只对**已配置的 provider** 生效，不会自动添加账�
             usageBaseURL: https://ollama.example.com
             credentialRef: OLLAMA_API_KEY   # 非已配置 provider 时必填
 ```
+
+**Command Code（Go / GOAT / Pro / Max）——实验性适配器。** 它读取 `COMMANDCODE_API_KEY`，调用的是 Command Code 自己 CLI 使用的一组**未公开、未版本化**端点（不属于其公开 Provider API）：`/alpha/billing/credits` 给出 credits 与 5 小时/每周窗口，`/alpha/usage/summary` 给出本期请求数与花费，`/alpha/billing/subscriptions` 给出档位（Go / GOAT / Pro / Max）与计费周期。上游随时可以改动或收紧这些端点，届时卡片会退化为「响应异常」，不会影响 Token 统计本身。卡片因此显示**三条窗口**——5 小时、每周、每月（每月的重置时间就是订阅周期结束时间）——外加一行 credits 美元余额，这是本插件里唯一一张余额与订阅窗口并存的卡片。
+
+三条窗口的口径：5 小时与每周按上游直接给出的「已用金额 ÷ 上限」换算；月度池只用它**自己那一对**数字——`credits.monthlyCredits`（月度池剩余）与 `/alpha/usage/summary` 的 `totalMonthlyCredits`（本期从月度池花掉的部分）——作为分母的两半（推导值）。充值 `purchasedCredits` 与赠送 `freeCredits` 是**另外两个池**：它们只出现在余额行与 breakdown 里，不进月度窗口的分母；聚合的 `totalCredits` 同样不进，若 `totalMonthlyCredits` 缺失就干脆不画月度窗口，而不是拿聚合值凑一个分母。
+
+只有 credits 端点决定查询成败，另两个端点失败只会少显示档位、本期花费，以及需要它们的推导项：月度窗口要 `totalMonthlyCredits`，余额行的「已使用/总余额」要聚合 `totalCredits`——缺哪项就少哪项，而不会把未知当成 0 余额。字段缺失一律按“没有这项”处理，形状完全无法识别时返回 `invalid-response` 并带上安全的原因码，而不会把未知当成 0 余额。
+
+这些端点会按**客户端版本**放行，所以适配器自带一个默认版本（随本插件发布更新）；某个部署被要求更高版本时，用 monitor 覆盖即可，不需要等发版，也不会在每次刷新时去 npm 查询版本：
+
+```yaml
+        monitors:
+          commandcode:
+            adapter: commandcode-goat
+            commandCodeVersion: 1.72.1   # 非空版本串；留空或自由文本会被拒绝
+```
+
+Provider 识别：id 为 `commandcode`、`commandcode-goat-autosync` 等 `commandcode-` 前缀（同步插件为每个档位与协议生成一条路由），或 baseURL 主机为 `*.commandcode.ai` 时自动选用 `commandcode-goat` 适配器，聊天基地址 `…/provider/v1` 会自动折算回账户根地址。由 provider 插件注册的 route 在 Harness 路由表里只有 id 与名称、不带 `apiKeyEnv`，这类 route 会用 `COMMANDCODE_API_KEY` 作为凭据引用（显式 `credentialRef` 仍优先），否则它会停在「未配置」而从不发请求。
+
+需要说明的依赖关系：本适配器不 import 任何 provider 插件，额度数据也直接取自 `api.commandcode.ai`，但它沿用 **Command Code provider 插件发布的 route id 约定与默认凭据名**（`commandcode*` / `COMMANDCODE_API_KEY`）——与本插件对 Z.ai、Kimi、MiniMax、Ollama、OpenRouter 的默认凭据名做法一致。换用别的 provider 插件、或改了那个环境变量名时，写一行 `monitors.<id>.credentialRef` 覆盖即可，不需要改代码。
+
+与 OpenCode Go、Z.ai 一样，没有任何 Command Code 路由的安装也会看到一张「未配置」的占位卡片；Command Code 是转售上游模型，它的路由不参与本插件的模型价格估算。
 
 Z.ai 全球区使用 `api.z.ai`，中国区使用 `open.bigmodel.cn`。MiniMax 优先使用官方 `www.minimax.io` / `www.minimaxi.com` Token Plan 地址，并解析 5 小时与周窗口的剩余比例和重置时间。
 
@@ -322,7 +345,7 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
 
 </details>
 
-支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`opencode-go`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`declarative`。
+支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`orcarouter-balance`、`opencode-go`、`commandcode-goat`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`ollama`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`declarative`。
 
 `warning.warnBelow` 与 `warning.criticalBelow` 是余额绝对值阈值。具有总额度的余额和 Token Plan 会自动产生 `normal / warning / critical` 剩余比例状态（默认 30% / 10%）。
 
@@ -471,6 +494,8 @@ node scripts/check-balance.mjs
 
 - [Javis603/token-monitor](https://github.com/Javis603/token-monitor)：参考多 provider 配额归一化与 Z.ai 限额解析。
 - [xiaoqi20/dsh-opencode-go-usage](https://github.com/xiaoqi20/dsh-opencode-go-usage)：参考 DSH 凭据接入、OpenCode `auth.json` 回退与 Bearer usage endpoint。
+- [Plocr/dsh-commandcode-goat](https://github.com/Plocr/dsh-commandcode-goat)：参考 Command Code 官方 CLI 的 `/alpha/*` 账户端点、档位命名与 credits 口径。
+- [#121](https://github.com/Ychris12138/dsh-usage-stats/pull/121)（@hanxucn）：Command Code 适配器与三条窗口的归一化实现主要取自该 PR（作者已关闭未合并），本 PR 在其基础上按维护者 review 意见补上可配置客户端版本、README 契约说明，并修掉 provider 插件注册 route 不带 `apiKeyEnv` 导致的一律「未配置」。
 
 本项目重新实现统一 account protocol、adapter 与单供应商 UI，不复制参考项目界面。
 

@@ -589,7 +589,7 @@ async function testV4CacheUpgradeRefoldsBilling(root) {
 	assert.equal(migratedContext.session.currency, "USD");
 	assert.equal(migratedContext.session.tokens, 1_000_000);
 	const migrated = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
-	assert.equal(migrated.version, 5, "the rewritten cache must use schema v5");
+	assert.equal(migrated.version, 7, "the rewritten cache must use schema v7");
 	assert.equal(typeof migrated.pricingFingerprint, "string");
 	assert.equal(migrated.sessions[sessionId].currentRoute.providerId, "route-a");
 	assert.equal(migrated.sessions[sessionId].billing.sampleCount, 1);
@@ -607,7 +607,7 @@ async function testPricingFingerprintInvalidatesDerivedCosts(root) {
 	}] }));
 	oldFingerprint.pricingCatalog = [];
 	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
-		version: 5,
+		version: 7,
 		pricingFingerprint: JSON.stringify(oldFingerprint),
 		sessions: {
 			[sessionId]: {
@@ -643,7 +643,7 @@ async function testPricingFingerprintInvalidationWritesWithoutLive(root) {
 		config: { monitors: {} }
 	});
 	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
-		version: 5,
+		version: 7,
 		pricingFingerprint: oldFingerprint,
 		sessions: {}
 	}), "utf8");
@@ -845,7 +845,7 @@ async function testMalformedCacheRebuild(root) {
 	const usage = await plugin.collectUsage(context);
 	assert.equal(usage.total.tokens, 17, "a malformed cache must rebuild from authoritative session events");
 	const rebuilt = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
-	assert.equal(rebuilt.version, 5);
+	assert.equal(rebuilt.version, 7);
 	assert.equal(rebuilt.sessions.recovered.consumed, 1);
 }
 
@@ -1790,9 +1790,37 @@ async function testPricingTransitionKeepsTokenFolds(root) {
 	gate = null;
 }
 
+async function testWebSearchCacheReplacement(root) {
+	const home = join(root, "web-search-cache");
+	const time = Date.UTC(2026, 7, 24, 2);
+	const event = (seq, eventId) => ({ seq, time: time + seq, type: "web/deepseek-search-usage", data: {
+		provider: "deepseek-official", model: "deepseek-v4-flash", eventId,
+		usage: { input_tokens: 10, output_tokens: 2 }
+	} });
+	const session = { id: "search-cache", events: [event(0, "A"), event(1, "B")] };
+	const context = makeContext({ sessions: { list: () => [session] }, persistence: { listSnapshots: async () => [], list: async () => [] }, settings: { get: () => void 0 } });
+	const plugin = await freshModule("web-search-cache", home);
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 24);
+	const path = join(home, "storages", "usage-stats-cache.json");
+	const saved = JSON.parse(await readFile(path, "utf8"));
+	assert.equal(saved.sessions[session.id].webSearchSamples.length, 2);
+	session.events.push(event(2, "A"));
+	const reloaded = await freshModule("web-search-cache-reload", home);
+	assert.equal((await reloaded.collectUsage(context)).total.tokens, 24, "restart must retain nonadjacent search identities");
+	// Older accounting semantics must replay unchanged authoritative logs.
+	saved.version = 6;
+	saved.sessions[session.id].consumed = session.events.length;
+	saved.sessions[session.id].days = {};
+	await writeFile(path, JSON.stringify(saved), "utf8");
+	const migrated = await freshModule("web-search-v6-refold", home);
+	assert.equal((await migrated.collectUsage(context)).total.tokens, 24);
+	assert.equal(JSON.parse(await readFile(path, "utf8")).version, 7);
+}
+
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
+	await testWebSearchCacheReplacement(root);
 	await testDeepSeekDesktopAccountRoute(root);
 	await testOrcaRouterIntegrationRoute(root);
 	await testSessionContext(root);
@@ -1833,3 +1861,4 @@ try {
 	delete process.env.DSH_HOME;
 	await rm(root, { recursive: true, force: true });
 }
+

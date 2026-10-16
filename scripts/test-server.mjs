@@ -589,7 +589,7 @@ async function testV4CacheUpgradeRefoldsBilling(root) {
 	assert.equal(migratedContext.session.currency, "USD");
 	assert.equal(migratedContext.session.tokens, 1_000_000);
 	const migrated = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
-	assert.equal(migrated.version, 6, "the rewritten cache must use schema v6");
+	assert.equal(migrated.version, 7, "the rewritten cache must use schema v7");
 	assert.equal(typeof migrated.pricingFingerprint, "string");
 	assert.equal(migrated.sessions[sessionId].currentRoute.providerId, "route-a");
 	assert.equal(migrated.sessions[sessionId].billing.sampleCount, 1);
@@ -607,7 +607,7 @@ async function testPricingFingerprintInvalidatesDerivedCosts(root) {
 	}] }));
 	oldFingerprint.pricingCatalog = [];
 	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
-		version: 6,
+		version: 7,
 		pricingFingerprint: JSON.stringify(oldFingerprint),
 		sessions: {
 			[sessionId]: {
@@ -643,7 +643,7 @@ async function testPricingFingerprintInvalidationWritesWithoutLive(root) {
 		config: { monitors: {} }
 	});
 	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
-		version: 6,
+		version: 7,
 		pricingFingerprint: oldFingerprint,
 		sessions: {}
 	}), "utf8");
@@ -845,7 +845,7 @@ async function testMalformedCacheRebuild(root) {
 	const usage = await plugin.collectUsage(context);
 	assert.equal(usage.total.tokens, 17, "a malformed cache must rebuild from authoritative session events");
 	const rebuilt = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
-	assert.equal(rebuilt.version, 6);
+	assert.equal(rebuilt.version, 7);
 	assert.equal(rebuilt.sessions.recovered.consumed, 1);
 }
 
@@ -1807,14 +1807,14 @@ async function testWebSearchCacheReplacement(root) {
 	session.events.push(event(2, "A"));
 	const reloaded = await freshModule("web-search-cache-reload", home);
 	assert.equal((await reloaded.collectUsage(context)).total.tokens, 24, "restart must retain nonadjacent search identities");
-	// Pre-search caches must replay unchanged logs instead of skipping usage.
-	saved.version = 5;
+	// Older accounting semantics must replay unchanged authoritative logs.
+	saved.version = 6;
 	saved.sessions[session.id].consumed = session.events.length;
 	saved.sessions[session.id].days = {};
 	await writeFile(path, JSON.stringify(saved), "utf8");
-	const migrated = await freshModule("web-search-v5-refold", home);
+	const migrated = await freshModule("web-search-v6-refold", home);
 	assert.equal((await migrated.collectUsage(context)).total.tokens, 24);
-	assert.equal(JSON.parse(await readFile(path, "utf8")).version, 6);
+	assert.equal(JSON.parse(await readFile(path, "utf8")).version, 7);
 }
 
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));

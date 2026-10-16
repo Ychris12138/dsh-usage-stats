@@ -100,7 +100,8 @@ function webSearchUsage(seq, time, providerId, model, value, eventId) {
 			...(eventId === void 0 ? {} : { eventId }),
 			provider: providerId,
 			model,
-			usage: value
+			usage: value,
+			reasoningTokensMode: "additional"
 		}
 	};
 }
@@ -397,5 +398,19 @@ const ruleC = Date.parse("2026-08-24T02:00:00Z");
 	console.log("session/global reconciliation, unchanged token aggregation, O(new), and cache round-trip ok");
 }
 
-console.log("BILLING + BUDGET TESTS PASSED");
+{
+	for (const [mode, expected] of [["included", 12], ["additional", 15], [undefined, 0], ["guess", 0]]) {
+		const event = webSearchUsage(1, ruleC, "deepseek-official", "deepseek-v4-flash", { input_tokens: 2, output_tokens: 10, reasoning_tokens: 3 }, "reasoning");
+		event.data.reasoningTokensMode = mode;
+		const state = createUsageState();
+		applyUsageDelta(state, [event]);
+		assert.equal(renderSessionUsage("reasoning", state).tokens, expected);
+	}
+	const event = webSearchUsage(1, ruleC, "deepseek-official", "deepseek-v4-flash", { inputTokens: 2, input_tokens: 3 }, "aliases");
+	const state = createUsageState();
+	applyUsageDelta(state, [event]);
+	assert.equal(renderSessionUsage("aliases", state).tokens, 0);
+	console.log("search reasoning requires explicit semantics; contradictory aliases are rejected");
+}
 
+console.log("BILLING + BUDGET TESTS PASSED");

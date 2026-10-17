@@ -185,6 +185,8 @@ DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key �
 
 此适配器仍为实验性集成，要求宿主插件通过 `ctx.provide('creditBalance', service)` 提供以下接口：同步的 `supportedProviders()` 返回 `{ id, displayName? }[]`，异步的 `creditsBalances(providerId)` 返回 `{ accounts: [{ accountId, nickname?, balance, error? }] }`。仅有 `accountPool` 或内部 `credits.balances` RPC 不满足此契约；上游服务的已发布版本与真实双插件验收仍待确认。
 
+2026-10-17 核对的 [上游](https://gitee.com/iJetLi/deepseek-harness-codearts) 已改名为 `dsh-providers-hub`，当前公开入口仍未注册这个余额服务。安装本 PR 不会自动补齐上游服务。标准 MiniMax Coding Plan 的修复另由 #135 提供，不依赖该服务。
+
 本插件经 `ctx.get('creditBalance')` 读取服务计算的 `CreditBalance`。服务清单只补充不存在的 provider，并为这些条目标记明确的宿主来源；不会覆盖已注册的同名路由。裸 `minimax` 仍按内置 MiniMax token plan 查询，缺少 `apiKeyEnv` / `baseURL` 不能证明它属于 CodeArts。
 
 若已注册的 `minimax` 实际使用 CodeArts 账号池，需要在现有 usage-stats 配置下显式选择适配器：
@@ -197,6 +199,9 @@ monitors:
 
 - 数据所有权完全在宿主插件：本插件不读取、不复制、不转发 AK/SK、token、Cookie；只读余额结果与积分包元数据；
 - 积分按**包**展示（每个包的已用比例与到期日），不压成单一余额数字——用户要看的正是「哪个包快过期」；
+- 活跃包可由 `total - used` 补出缺失的剩余额度；只有 `remaining` 时显示绝对值，不猜百分比。所有分包都不可读而有有效汇总余额时使用汇总，不叠加重复统计；
+- 过期包可保留已知的历史消耗比例，但不参与当前剩余额度告警或侧栏最低额度。缺失金额显示 `—`；
+- 宿主响应缺少 `accounts` 列表时报响应异常；标记 `stale` 的旧余额不作为新鲜额度展示；
 - 宿主插件缺席时这些卡片显示“不支持”，不影响其余 provider，也不会让插件启动失败；
 - 查询失败不会显示成 0；`reason` / `partial` 只包含固定安全原因码，不包含上游原始错误、失败账号的昵称或 ID。
 

@@ -42,6 +42,13 @@ function specFor(providerId, monitor = {}) {
 	return spec;
 }
 
+async function snapshotForBalance(balance) {
+	return queryAccount(specFor("zcode"), null, {
+		now: () => NOW,
+		creditBalance: fakeCreditBalance({ creditsBalances: async () => ({ accounts: [{ accountId: "zcode-account", nickname: "ZCode 账号", balance }] }) })
+	});
+}
+
 const NOW = 1_800_000_000_000;
 
 // ── 分类：CodeArts 独有 route 与宿主明确提供的 route ──
@@ -155,6 +162,68 @@ test("缺 used 时由 (total-remaining)/total 反推已用比例", async () => {
 	assert.equal(snapshot.windows[0].remainingPercent, 25);
 });
 
+test("ZCode 活跃包缺 remaining 时可由 total 与 used 推导，不丢弃有效窗口", async () => {
+	for (const remaining of [void 0, null, ""]) {
+		const snapshot = await snapshotForBalance({ total: 75, packages: [{ name: "有效包", remaining, total: 100, used: 25, active: true }] });
+		assert.equal(snapshot.status, "ok");
+		assert.equal(snapshot.windows.length, 1);
+		assert.equal(snapshot.windows[0].label, "有效包");
+		assert.equal(snapshot.windows[0].amount, 75);
+		assert.equal(snapshot.windows[0].usedPercent, 25);
+		assert.equal(snapshot.windows[0].remainingPercent, 75);
+	}
+});
+
+test("ZCode 只提供 remaining 时显示真实金额，不假造百分比分母", async () => {
+	for (const remaining of [75, 0, "12.5"]) {
+		const snapshot = await snapshotForBalance({ packages: [{ name: "余额包", remaining, active: true }] });
+		assert.equal(snapshot.status, "ok");
+		assert.equal(snapshot.windows.length, 1);
+		assert.equal(snapshot.windows[0].amount, Number(remaining));
+		assert.equal(snapshot.windows[0].usedPercent, void 0);
+		assert.equal(snapshot.windows[0].remainingPercent, void 0);
+		assert.equal(snapshot.alert.level, "unknown");
+	}
+});
+
+test("包 total 为 0 但 remaining 为正时保留金额，不能渲染为剩余 0", async () => {
+	const snapshot = await snapshotForBalance({ total: 75, packages: [{ name: "余额包", total: 0, used: 0, remaining: 75, active: true }] });
+	assert.equal(snapshot.status, "ok");
+	assert.equal(snapshot.windows[0].amount, 75);
+	assert.equal(snapshot.windows[0].usedPercent, void 0);
+	assert.equal(snapshot.windows[0].remainingPercent, void 0);
+});
+
+test("包没有可用数据但汇总余额有效时回退到真实汇总金额", async () => {
+	for (const total of [75, 0]) {
+		const snapshot = await snapshotForBalance({ total, packages: [{ name: "残缺包", remaining: null, total: null, used: null }, null] });
+		assert.equal(snapshot.status, "ok");
+		assert.equal(snapshot.windows.length, 1);
+		assert.equal(snapshot.windows[0].amount, total);
+		assert.equal(snapshot.windows[0].label, "ZCode 账号");
+		assert.equal(snapshot.windows[0].usedPercent, void 0);
+		assert.equal(snapshot.alert.level, "unknown");
+	}
+});
+
+test("已有可用包时不叠加汇总窗口重复计数", async () => {
+	const snapshot = await snapshotForBalance({ total: 75, packages: [
+		{ name: "有效包", remaining: 75, total: 100, used: 25, active: true },
+		{ name: "残缺包" }
+	] });
+	assert.equal(snapshot.status, "ok");
+	assert.equal(snapshot.windows.length, 1);
+	assert.equal(snapshot.windows[0].label, "有效包");
+});
+
+test("负数及无效额度不变成余额 0 或有效百分比", async () => {
+	for (const value of [-1, "-1", "invalid", Number.NaN, Number.POSITIVE_INFINITY, true, {}, []]) {
+		const snapshot = await snapshotForBalance({ total: value, packages: [{ remaining: value, total: value, used: value, active: true }] });
+		assert.equal(snapshot.status, "unavailable", `无效额度 ${String(value)}`);
+		assert.deepEqual(snapshot.windows, []);
+	}
+});
+
 test("过期包不谎报「用光 100%」（用 used/total 而非 1-remaining）", async () => {
 	// 包过期后 remaining 归零而 used 停在真实消耗值。若用 1-remaining 算，
 	// 一个只用了 25% 的包会显示成用光 100%。
@@ -170,6 +239,51 @@ test("过期包不谎报「用光 100%」（用 used/total 而非 1-remaining）
 	const snapshot = await queryAccount(specFor("codearts"), { resolve: async () => void 0 }, { creditBalance: service, now: () => NOW });
 	assert.equal(snapshot.windows[0].usedPercent, 25);
 	assert.equal(snapshot.windows[0].kind, "expired");
+	assert.equal(snapshot.windows[0].remainingPercent, void 0, "未消费的历史额度不是可用余额");
+	assert.equal(snapshot.alert.level, "unknown");
+});
+
+test("过期包缺 used 时不虚构已用 100% 或仍有可用额度", async () => {
+	const snapshot = await snapshotForBalance({ total: 0, packages: [{ name: "过期包", remaining: 0, total: 100, active: false }] });
+	assert.equal(snapshot.status, "ok");
+	assert.equal(snapshot.windows.length, 1);
+	assert.equal(snapshot.windows[0].kind, "expired");
+	assert.equal(snapshot.windows[0].usedPercent, void 0);
+	assert.equal(snapshot.windows[0].remainingPercent, void 0);
+	assert.equal(snapshot.alert.level, "unknown");
+});
+
+test("过期包缺 remaining 时不把 total-used 当作可用余额", async () => {
+	const snapshot = await snapshotForBalance({ total: 0, packages: [{ name: "过期包", total: 100, used: 25, active: false }] });
+	assert.equal(snapshot.status, "ok");
+	assert.equal(snapshot.windows.length, 1);
+	assert.equal(snapshot.windows[0].kind, "expired");
+	assert.equal(snapshot.windows[0].usedPercent, 25);
+	assert.equal(snapshot.windows[0].remainingPercent, void 0);
+	assert.notEqual(snapshot.windows[0].amount, 75, "历史未消耗额度不能成为当前余额");
+	assert.equal(snapshot.alert.level, "unknown");
+});
+
+test("过期包缺 total 时不能由清零的 remaining 与 used 拼造历史总额", async () => {
+	const snapshot = await snapshotForBalance({ total: 0, packages: [{ name: "过期包", remaining: 0, used: 25, active: false }] });
+	assert.equal(snapshot.status, "ok");
+	assert.equal(snapshot.windows[0].amount, 0);
+	assert.equal(snapshot.windows[0].usedPercent, void 0);
+	assert.equal(snapshot.windows[0].remainingPercent, void 0);
+	assert.equal(snapshot.alert.level, "unknown");
+});
+
+test("已用光的过期包不污染新包告警，告警只取活跃窗口", async () => {
+	for (const remaining of [100, 5]) {
+		const snapshot = await snapshotForBalance({ total: remaining, packages: [
+			{ name: "旧包", remaining: 0, total: 100, used: 100, active: false },
+			{ name: "新包", remaining, total: 100, used: 100 - remaining, active: true }
+		] });
+		assert.equal(snapshot.status, "ok");
+		assert.equal(snapshot.windows.length, 2);
+		assert.equal(snapshot.alert.value, remaining);
+		assert.equal(snapshot.alert.level, remaining === 100 ? "normal" : "critical");
+	}
 });
 
 test("到期日取 deductionEndTime（expiredTime 为空串时的真实到期字段）", async () => {
@@ -350,6 +464,27 @@ test("账号池为空 → not-configured（而不是余额 0）", async () => {
 	assert.equal(snapshot.status, "not-configured");
 });
 
+test("宿主响应缺少 accounts 列表时是响应异常，不误报未配置", async () => {
+	for (const result of [null, {}, { accounts: null }, { accounts: {} }]) {
+		const snapshot = await queryAccount(specFor("zcode"), null, {
+			creditBalance: fakeCreditBalance({ creditsBalances: async () => result }), now: () => NOW
+		});
+		assert.equal(snapshot.status, "invalid-response");
+		assert.equal(snapshot.reason, "upstream-invalid-response");
+	}
+});
+
+test("宿主标记 stale 的旧余额不冒充新鲜额度", async () => {
+	const snapshot = await queryAccount(specFor("zcode"), null, {
+		creditBalance: fakeCreditBalance({ creditsBalances: async () => ({ accounts: [{
+			accountId: "stale-account", stale: true, at: NOW - 600000, balance: { total: 75, packages: [] }
+		}] }) }), now: () => NOW
+	});
+	assert.equal(snapshot.status, "unavailable");
+	assert.deepEqual(snapshot.windows, []);
+	assert.equal(JSON.stringify(snapshot).includes("stale-account"), false);
+});
+
 test("全部账号查询失败 → unavailable 且带原因，绝不退化成 0", async () => {
 	const service = fakeCreditBalance({
 		creditsBalances: async () => ({
@@ -393,13 +528,13 @@ test("空 packages 且 total 为 0 → 显示「剩余 0」（非 null 的 0 是
 	assert.equal(snapshot.windows[0].amount, 0);
 });
 
-test("包缺 remaining → 跳过该包（不把缺字段当 0）", async () => {
+test("包缺 remaining 且没有 total/used 或汇总可推导时仍不可用", async () => {
 	const service = fakeCreditBalance({
 		creditsBalances: async () => ({
 			accounts: [{
 				accountId: "a1",
 				nickname: "主号",
-				balance: { total: 10, expiredTotal: 0, packages: [{ name: "残缺包", total: 10, used: 1 }] }
+				balance: { total: null, expiredTotal: 0, packages: [{ name: "残缺包", total: 10 }] }
 			}]
 		})
 	});

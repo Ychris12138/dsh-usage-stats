@@ -2360,6 +2360,97 @@ console.log("snapshot -> " + snapshot.status);
 }
 
 {
+	let host = null;
+	let login = "credential-stored";
+	let balanceCalls = 0;
+	const clientMetadata = { version: "0.2.0", locale: "zh-CN", timezoneOffsetSeconds: 28800 };
+	const service = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [{ id: "deepseek-account" }],
+		config: validateAccountConfig({ refresh: { enabled: false } }),
+		deps: { includeLegacyProviders: false, now: () => now, deepseekAccount: () => host }
+	});
+	assert.equal((await service.get("deepseek-account", { clientMetadata })).status, "unsupported");
+	host = {
+		getState: async () => ({ status: login }),
+		getBalance: async () => { balanceCalls += 1; return { status: "ready", value: [{ currency: "CNY", balance: "12" }], bonusWallets: [] }; }
+	};
+	assert.equal((await service.providerViews())[0].configured, true);
+	assert.equal((await service.get("deepseek-account", { clientMetadata })).balance.remaining, 12);
+	login = "signed-out";
+	const signedOutView = (await service.providerViews())[0];
+	assert.equal(signedOutView.configured, false, "discovery must not keep cached signed-in state");
+	assert.equal(signedOutView.status, "signed-out");
+	assert.equal(signedOutView.alert, null, "discovery must not retain the signed-out account's balance alert");
+	assert.equal((await service.get("deepseek-account", { clientMetadata })).balance, null);
+	assert.equal(balanceCalls, 1, "signed-out reads must not query a wallet");
+	login = "credential-stored";
+	assert.equal((await service.providerViews())[0].configured, true, "a later sign-in must clear cached signed-out state");
+	host = { getState: async () => ({ status: login }), getBalance: async () => ({ status: "failed" }) };
+	const replaced = await service.get("deepseek-account", { clientMetadata });
+	assert.equal(replaced.status, "unavailable");
+	assert.equal(replaced.balance, null, "a replacement service's failed read cannot retain another service's wallet");
+	assert.equal(replaced.stale, false);
+	await service.refreshAll();
+	await service.refreshDue({ force: true });
+	assert.equal(balanceCalls, 1, "the account service remains excluded from background refresh");
+	host = null;
+	assert.equal((await service.get("deepseek-account", { clientMetadata })).status, "unsupported");
+	assert.equal((await service.providerViews())[0].configured, false);
+	console.log("DeepSeek Account late service, replacement, sign-out, and sign-in invalidate obsolete snapshots ok");
+}
+
+{
+	let resolveBalance;
+	let balanceCalls = 0;
+	let methodReceiver;
+	const host = {
+		getState: async () => ({ status: "credential-stored" }),
+		async getBalance() {
+			methodReceiver = this;
+			balanceCalls += 1;
+			await new Promise((resolve) => { resolveBalance = resolve; });
+			return { status: "ready", value: [{ currency: "CNY", balance: "3" }], bonusWallets: [] };
+		}
+	};
+	const service = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [],
+		deps: {
+			includeLegacyProviders: false,
+			deepseekAccount: () => new Proxy(host, { get: (target, key, receiver) => key === Symbol.for("cordis.original") ? target : Reflect.get(target, key, receiver) })
+		}
+	});
+	const clientMetadata = { version: "0.2.0", locale: "en", timezoneOffsetSeconds: 0 };
+	const first = service.get("deepseek-account", { clientMetadata });
+	await new Promise((resolve) => setImmediate(resolve));
+	const second = service.get("deepseek-account", { clientMetadata });
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(balanceCalls, 1, "fresh Cordis wrappers must still share the same in-flight service query");
+	assert.notEqual(methodReceiver, host, "service calls must retain their traceable proxy receiver");
+	resolveBalance();
+	assert.equal((await first).balance.remaining, 3);
+	assert.equal((await second).balance.remaining, 3);
+	assert.equal((await service.providerViews())[0].status, "ok", "fresh wrappers must not invalidate a valid cached snapshot");
+	console.log("DeepSeek Account fresh Cordis wrappers preserve single-flight and scoped service calls ok");
+}
+
+{
+	const service = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [{ id: "deepseek-official", apiKeyEnv: "DEEPSEEK_API_KEY" }],
+		deps: { deepseekAccount: () => null }
+	});
+	const views = await service.providerViews();
+	assert.equal(views.some((entry) => entry.id === "deepseek-account"), false);
+	assert.ok(views.some((entry) => entry.id === "deepseek-official"));
+	assert.ok(views.some((entry) => entry.id === "opencode-go"));
+	assert.ok(views.some((entry) => entry.id === "zai"));
+	assert.equal((await service.get("deepseek-official")).status, "not-configured");
+	console.log("missing optional DeepSeek Account service preserves legacy provider discovery ok");
+}
+
+{
 	// A MiniMax CN route that declares only its credential ref (the host's
 	// built-in minimax-cn profile) must reach the CN quota hosts. Without the
 	// route-id hint the key is rejected globally and the panel shows

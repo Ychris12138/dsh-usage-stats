@@ -30,6 +30,10 @@ assert.equal(pkg.dsh?.client?.platform, "web");
 for (const required of ["lib/", "cordis.patch.yml", "README.md", "LICENSE", "SECURITY.md", "docs/release-checklist.md", "docs/release-notes-v0.3.0.md"]) {
 	assert.ok(pkg.files?.includes(required), `npm files is missing ${required}`);
 }
+// Prerelease builds share the target stable version's release notes.
+const releaseNotes = `docs/release-notes-v${pkg.version.replace(/[-+].*$/, "")}.md`;
+assert.ok(pkg.files?.includes(releaseNotes), `npm files is missing current release notes: ${releaseNotes}`);
+await readFile(releaseNotes, "utf8");
 
 assert.equal(lock.name, pkg.name, "package-lock root name drifted");
 assert.equal(lock.version, pkg.version, "package-lock root version drifted");

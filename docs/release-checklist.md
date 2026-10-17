@@ -2,6 +2,19 @@
 
 This checklist prepares `@ychris12138/dsh-usage-stats` v0.3.6. It does not authorize npm publishing, tagging, or creating a GitHub Release. Historical acceptance belongs in the corresponding release notes; unchecked items below are not completed by prior-version checks.
 
+## Candidate evidence and open decisions (2026-10-17)
+
+- [x] Independently checked source candidate `6df461289ed355c02bec53590dd0931950813b4a`: `npm ci --ignore-scripts`, `TZ=UTC npm run check`, and all 13 `TZ=UTC npm test` suites passed on Node 24.19.0. GitHub CI runs 39008020547 and 39008017562 are green for the same SHA.
+- [x] Independently packed that source: 28 files match the checkout byte-for-byte, and all relative document links resolve. SHA-256: `11ba959fd067fd7ab415db5dfc4c95415586e2607dc2a8eed11a1a3e8a9d186e`.
+- [x] Confirmed ancestry retains #130 `bcddd0d`, #135 `77e1721`, #136 `72681ed`, and main `da11021`; #128/#133 implementation is absent and schema remains 5.
+- [x] Located candidate-specific acceptance records in [PR #134](https://github.com/Ychris12138/dsh-usage-stats/pull/134): isolated web install, existing Desktop upgrade, retained configuration/totals/selection and live MiniMax CN/DeepSeek cards. This checkbox means the record was reviewed; no new independent real-account run is claimed.
+- [x] Independently installed the documentation-review tarball using published DSH 0.2.0-rc.2 into a new isolated web profile. All installed runtime files match the source. Providers, usage, account and JSON export returned 200; non-GET data requests/preflight returned 405; a foreign Host returned 403; foreign-Origin reads received no CORS allow header. No real account was configured. The connected browser could not reach the isolated server, so this run does not certify visual rendering, provider switching or Desktop behavior. Test Host processes were stopped afterward.
+- [ ] Resolve Z.ai acceptance: exact tested source/DSH version and absence of the earlier credential override are still unconfirmed in [#129](https://github.com/Ychris12138/dsh-usage-stats/issues/129). Obtain confirmation or explicitly record the maintainer's decision to release with this evidence limit. Do not silently treat the screenshot as default-path acceptance.
+- [ ] Finalize immutable publication commit and pack. Candidate checks and old hashes do not certify a changed tarball.
+- [ ] Obtain final publication authorization. npm `latest` independently resolves to 0.3.5; this review has not published, tagged, merged or changed the public catalog.
+
+Sections below are the final publication gates, not a duplicate ledger of the source-candidate checks above. Leave final-package items open until they apply to the immutable publication artifact.
+
 ## 1. Scope and provenance
 
 - [ ] Record the reviewed integrated commit as `RC_SHA`; include #126, #130, #135, and #136, with the source heads in [the release plan](release-plan-v0.3.6.md).

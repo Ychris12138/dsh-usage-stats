@@ -39,6 +39,94 @@ function statusErrorFromTest(status, message) {
 }
 
 const now = Date.parse("2026-08-15T00:00:00Z");
+
+// BEGIN MiniMax id-only regression matrix
+{
+	const cases = [
+		{ name: "id-only global", key: "minimax-mock-secret", host: "www.minimax.io" },
+		{ name: "id-only CN", provider: { id: "minimax-cn" }, keys: { MINIMAX_API_KEY: "wrong-mock-secret", MINIMAX_CN_API_KEY: "cn-mock-secret" }, key: "cn-mock-secret", host: "www.minimaxi.com" },
+		{ name: "explicit CN", monitor: { region: "cn" }, key: "minimax-mock-secret", host: "www.minimaxi.com" },
+		{ name: "configured CN overrides global inference", keys: { MINIMAX_API_KEY: "minimax-mock-secret", MINIMAX_API_REGION: "cn" }, key: "minimax-mock-secret", host: "www.minimaxi.com" },
+		{ name: "configured global overrides CN inference", provider: { id: "minimax-cn" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret", MINIMAX_API_REGION: "global" }, key: "cn-mock-secret", host: "www.minimax.io" },
+		{ name: "monitor global overrides configured CN", monitor: { region: "global" }, keys: { MINIMAX_API_KEY: "minimax-mock-secret", MINIMAX_API_REGION: "cn" }, key: "minimax-mock-secret", host: "www.minimax.io" },
+		{ name: "monitor CN overrides configured global", monitor: { region: "cn" }, keys: { MINIMAX_API_KEY: "minimax-mock-secret", MINIMAX_API_REGION: "global" }, key: "minimax-mock-secret", host: "www.minimaxi.com" },
+		{ name: "empty configured region preserves CN inference", provider: { id: "minimax-cn" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret", MINIMAX_API_REGION: "   " }, key: "cn-mock-secret", host: "www.minimaxi.com" },
+		{ name: "provider ref", provider: { apiKeyEnv: "PROVIDER_KEY" }, keys: { PROVIDER_KEY: "provider-mock-secret" }, key: "provider-mock-secret" },
+		{ name: "monitor ref", provider: { apiKeyEnv: "PROVIDER_KEY" }, monitor: { credentialRef: "MONITOR_KEY" }, keys: { PROVIDER_KEY: "wrong-mock-secret", MONITOR_KEY: "monitor-mock-secret" }, key: "monitor-mock-secret" },
+		{ name: "CN provider ref", provider: { id: "minimax-cn", apiKeyEnv: "PROVIDER_KEY" }, keys: { MINIMAX_CN_API_KEY: "wrong-mock-secret", PROVIDER_KEY: "provider-mock-secret" }, key: "provider-mock-secret", host: "www.minimaxi.com" },
+		{ name: "CN monitor ref", provider: { id: "minimax-cn", apiKeyEnv: "PROVIDER_KEY" }, monitor: { credentialRef: "MONITOR_KEY" }, keys: { MINIMAX_CN_API_KEY: "wrong-mock-secret", PROVIDER_KEY: "wrong-mock-secret", MONITOR_KEY: "monitor-mock-secret" }, key: "monitor-mock-secret", host: "www.minimaxi.com" },
+		{ name: "missing default", keys: {}, missingRef: "MINIMAX_API_KEY" },
+		{ name: "missing CN default never borrows global key", provider: { id: "minimax-cn" }, missingRef: "MINIMAX_CN_API_KEY" },
+		{ name: "missing explicit ref", monitor: { credentialRef: "MISSING_KEY" } },
+		{ name: "missing provider ref", provider: { apiKeyEnv: "MISSING_KEY" } },
+		{ name: "missing CN explicit ref", provider: { id: "minimax-cn" }, monitor: { credentialRef: "MISSING_KEY" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret" } },
+		{ name: "missing CN provider ref", provider: { id: "minimax-cn", apiKeyEnv: "MISSING_KEY" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret" } },
+		{ name: "custom route", provider: { id: "custom-minimax" }, monitor: { adapter: "minimax-token-plan" } },
+		{ name: "minimax-coding alias has no invented default", provider: { id: "minimax-coding" } },
+		{ name: "minimaxi alias has no invented default", provider: { id: "minimaxi" } },
+		{ name: "custom endpoint", monitor: { usageBaseURL: "https://quota.example.invalid/usage" } },
+		{ name: "provider endpoint", provider: { baseURL: "https://api.minimax.io/anthropic" } },
+		{ name: "CN custom endpoint", provider: { id: "minimax-cn" }, monitor: { usageBaseURL: "https://quota.example.invalid/usage" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret" } },
+		{ name: "CN provider endpoint", provider: { id: "minimax-cn", baseURL: "https://api.minimaxi.com/anthropic" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret" } },
+		{ name: "custom endpoint with explicit reference", monitor: { usageBaseURL: "https://quota.example.invalid/usage", credentialRef: "MONITOR_KEY" }, keys: { MINIMAX_API_KEY: "wrong-mock-secret", MONITOR_KEY: "monitor-mock-secret" }, key: "monitor-mock-secret", host: "quota.example.invalid" },
+		{ name: "different adapter", monitor: { adapter: "general" } }
+	];
+	for (const test of cases) {
+		const calls = [];
+		const provider = { id: "minimax", ...test.provider };
+		const service = createAccountService({
+			credentials: credentials(test.keys ?? { MINIMAX_API_KEY: "minimax-mock-secret" }),
+			getProviders: async () => [provider],
+			config: validateAccountConfig(test.monitor === void 0 ? {} : { monitors: { [provider.id]: { adapter: "minimax-token-plan", ...test.monitor } } }),
+			deps: { includeLegacyProviders: false, now: () => now, fetch: async (url, init) => {
+				calls.push({ url: String(url), authorization: init.headers.authorization });
+				return jsonResponse({ base_resp: { status_code: 0 }, model_remains: [{ model_name: "MiniMax-M2", current_interval_remaining_percent: 55 }] });
+			} }
+		});
+		const before = await service.providerViews();
+		assert.equal(before[0].configured, test.key !== void 0, test.name);
+		assert.equal(calls.length, 0, "discovery must not call upstream");
+		const account = await service.get(provider.id);
+		assert.equal(account.status, test.key === void 0 ? "not-configured" : "ok", test.name);
+		assert.equal(calls.length, test.key === void 0 ? 0 : 1, test.name);
+		if (test.key !== void 0) {
+			assert.equal(new URL(calls[0].url).hostname, test.host ?? "www.minimax.io", test.name);
+			assert.ok(calls[0].authorization.includes(test.key), test.name);
+		}
+		if (test.missingRef !== void 0) assert.deepEqual(account.missingCredentials, [test.missingRef], test.name);
+		const after = await service.providerViews();
+		assert.equal(after[0].configured, before[0].configured, test.name);
+		const refreshed = await service.refreshDue({ force: true });
+		assert.equal(refreshed[0].status, account.status, test.name);
+		assert.equal(calls.length, test.key === void 0 ? 0 : 2, `${test.name}: forced refresh`);
+		for (const call of calls) {
+			assert.equal(new URL(call.url).hostname, test.host ?? "www.minimax.io", `${test.name}: refresh preserves region`);
+			assert.equal(call.authorization, `Bearer ${test.key}`, `${test.name}: refresh preserves credential`);
+		}
+		for (const secret of ["minimax-mock-secret", "cn-mock-secret", "provider-mock-secret", "monitor-mock-secret", "wrong-mock-secret"]) {
+			assert.equal(JSON.stringify({ before, account, after, refreshed }).includes(secret), false, test.name);
+		}
+	}
+	for (const route of [
+		{ id: "minimax", keys: { MINIMAX_API_KEY: "rejected-mock-secret" }, host: "www.minimax.io" },
+		{ id: "minimax-cn", keys: { MINIMAX_CN_API_KEY: "rejected-mock-secret" }, host: "www.minimaxi.com" },
+		{ id: "minimax", keys: { MINIMAX_API_KEY: "rejected-mock-secret", MINIMAX_API_REGION: "cn" }, host: "www.minimaxi.com" }
+	]) {
+		for (const failure of [{ http: 401 }, { code: 1004 }, { code: 2049 }]) {
+			const calls = [];
+			const rejected = await queryAccount(resolveAccountSpec({ id: route.id }, validateAccountConfig()), credentials(route.keys), {
+				now: () => now, fetch: async (url) => {
+					calls.push(String(url));
+					return jsonResponse({ base_resp: { status_code: failure.code ?? 0 } }, failure.http ?? 200);
+				}
+			});
+			assert.equal(rejected.status, "unauthorized");
+			assert.deepEqual(calls, [`https://${route.host}/v1/token_plan/remains`], "rejected inferred/configured-region credentials must not cross regions");
+		}
+	}
+	console.log("MiniMax id-only discovery/query/refresh, credential boundaries, and region regression matrix ok");
+}
+// END MiniMax id-only regression matrix
 const relay = {
 	id: "relay-a",
 	displayName: "Relay A",
@@ -2741,3 +2829,4 @@ console.log("snapshot -> " + snapshot.status);
 }
 
 console.log("ACCOUNT TESTS PASSED");
+

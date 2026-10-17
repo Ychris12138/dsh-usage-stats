@@ -121,6 +121,8 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | Sub2API 面板（真实） | 余额 | provider 推理 Token | `/user/balance`（复用 apiKey） |
 | General / Declarative | 余额或订阅 | 配置中的 credential ref | 受限 GET + JSON |
 
+DSH 注册表仅返回 `minimax` 路由 ID、未提供连接字段时，插件会使用 `MINIMAX_API_KEY` 查询 Coding Plan 用量。该裸路由沿用全球区默认值；中国区账户需显式配置 `monitors.minimax.region: cn`（并确认所引用凭据属于中国区）。显式 `credentialRef` / provider `apiKeyEnv` 仍优先，引用缺失时不会借用默认 Key；自定义路由或自定义 `usageBaseURL` 不会自动继承该凭据。这里显示的是订阅额度，不代表支持任意 MiniMax API 钱包余额。
+
 没有公开账户接口的供应商仍会正常统计 Token；账户卡片会明确显示“不支持”，不会猜测余额。
 
 ## 凭据与供应商配置 / Configuration
@@ -502,3 +504,4 @@ node scripts/check-balance.mjs
 ## License
 
 [MIT](LICENSE)
+

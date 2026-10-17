@@ -39,6 +39,62 @@ function statusErrorFromTest(status, message) {
 }
 
 const now = Date.parse("2026-08-15T00:00:00Z");
+
+// BEGIN MiniMax id-only regression matrix
+{
+	const cases = [
+		{ name: "id-only global", key: "minimax-mock-secret", host: "www.minimax.io" },
+		{ name: "explicit CN", monitor: { region: "cn" }, key: "minimax-mock-secret", host: "www.minimaxi.com" },
+		{ name: "provider ref", provider: { apiKeyEnv: "PROVIDER_KEY" }, keys: { PROVIDER_KEY: "provider-mock-secret" }, key: "provider-mock-secret" },
+		{ name: "monitor ref", provider: { apiKeyEnv: "PROVIDER_KEY" }, monitor: { credentialRef: "MONITOR_KEY" }, keys: { PROVIDER_KEY: "wrong-mock-secret", MONITOR_KEY: "monitor-mock-secret" }, key: "monitor-mock-secret" },
+		{ name: "missing default", keys: {} },
+		{ name: "missing explicit ref", monitor: { credentialRef: "MISSING_KEY" } },
+		{ name: "missing provider ref", provider: { apiKeyEnv: "MISSING_KEY" } },
+		{ name: "custom route", provider: { id: "custom-minimax" }, monitor: { adapter: "minimax-token-plan" } },
+		{ name: "custom endpoint", monitor: { usageBaseURL: "https://quota.example.invalid/usage" } },
+		{ name: "provider endpoint", provider: { baseURL: "https://api.minimax.io/anthropic" } },
+		{ name: "different adapter", monitor: { adapter: "general" } }
+	];
+	for (const test of cases) {
+		const calls = [];
+		const provider = { id: "minimax", ...test.provider };
+		const service = createAccountService({
+			credentials: credentials(test.keys ?? { MINIMAX_API_KEY: "minimax-mock-secret" }),
+			getProviders: async () => [provider],
+			config: validateAccountConfig(test.monitor === void 0 ? {} : { monitors: { [provider.id]: { adapter: "minimax-token-plan", ...test.monitor } } }),
+			deps: { includeLegacyProviders: false, now: () => now, fetch: async (url, init) => {
+				calls.push({ url: String(url), authorization: init.headers.authorization });
+				return jsonResponse({ base_resp: { status_code: 0 }, model_remains: [{ model_name: "MiniMax-M2", current_interval_remaining_percent: 55 }] });
+			} }
+		});
+		const before = await service.providerViews();
+		assert.equal(before[0].configured, test.key !== void 0, test.name);
+		assert.equal(calls.length, 0, "discovery must not call upstream");
+		const account = await service.get(provider.id);
+		assert.equal(account.status, test.key === void 0 ? "not-configured" : "ok", test.name);
+		assert.equal(calls.length, test.key === void 0 ? 0 : 1, test.name);
+		if (test.key !== void 0) {
+			assert.equal(new URL(calls[0].url).hostname, test.host ?? "www.minimax.io", test.name);
+			assert.ok(calls[0].authorization.includes(test.key), test.name);
+		}
+		if (test.name === "missing default") assert.deepEqual(account.missingCredentials, ["MINIMAX_API_KEY"]);
+		const after = await service.providerViews();
+		assert.equal(after[0].configured, before[0].configured, test.name);
+		const refreshed = await service.refreshDue({ force: true });
+		assert.equal(refreshed[0].status, account.status, test.name);
+		for (const secret of ["minimax-mock-secret", "provider-mock-secret", "monitor-mock-secret", "wrong-mock-secret"]) {
+			assert.equal(JSON.stringify({ before, account, after, refreshed }).includes(secret), false, test.name);
+		}
+	}
+	const calls = [];
+	const rejected = await queryAccount(resolveAccountSpec({ id: "minimax" }, validateAccountConfig()), credentials({ MINIMAX_API_KEY: "rejected-mock-secret" }), {
+		now: () => now, fetch: async (url) => { calls.push(String(url)); return jsonResponse({ base_resp: { status_code: 2049 } }); }
+	});
+	assert.equal(rejected.status, "unauthorized");
+	assert.deepEqual(calls, ["https://www.minimax.io/v1/token_plan/remains"], "rejected global credentials must not cross regions");
+	console.log("MiniMax id-only discovery/query/refresh, credential boundaries, and region regression matrix ok");
+}
+// END MiniMax id-only regression matrix
 const relay = {
 	id: "relay-a",
 	displayName: "Relay A",
@@ -2563,3 +2619,4 @@ console.log("snapshot -> " + snapshot.status);
 }
 
 console.log("ACCOUNT TESTS PASSED");
+

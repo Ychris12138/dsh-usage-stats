@@ -121,7 +121,9 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | Sub2API 面板（真实） | 余额 | provider 推理 Token | `/user/balance`（复用 apiKey） |
 | General / Declarative | 余额或订阅 | 配置中的 credential ref | 受限 GET + JSON |
 
-DSH 注册表仅返回 `minimax` 路由 ID、未提供连接字段时，插件会使用 `MINIMAX_API_KEY` 查询 Coding Plan 用量。该裸路由沿用全球区默认值；中国区账户需显式配置 `monitors.minimax.region: cn`（并确认所引用凭据属于中国区）。显式 `credentialRef` / provider `apiKeyEnv` 仍优先，引用缺失时不会借用默认 Key；自定义路由或自定义 `usageBaseURL` 不会自动继承该凭据。这里显示的是订阅额度，不代表支持任意 MiniMax API 钱包余额。
+DSH 注册表仅返回路由 ID、未提供连接字段时，`minimax` 默认读取 `MINIMAX_API_KEY` 并请求全球区，`minimax-cn` 默认读取 `MINIMAX_CN_API_KEY` 并请求中国区。两条默认凭据不会互相回退。显式 `credentialRef` / provider `apiKeyEnv` 仍优先，引用缺失时不会借用默认 Key；自定义路由、provider endpoint 或自定义 `usageBaseURL` 不会自动继承这些凭据。这里显示的是 Coding Plan 订阅额度，不代表支持任意 MiniMax API 钱包余额或 Providers Hub 的 MiniMax Code 账号池。
+
+MiniMax 区域优先级为 `monitors.<id>.region` > `MINIMAX_API_REGION` > route/baseURL/credential ref 推断。中国区与全球区凭据请匹配相应区域；明确区域的请求不会因 1004/2049 拒绝而切到另一区域，显式 `usageBaseURL` 仍只访问指定地址。
 
 没有公开账户接口的供应商仍会正常统计 Token；账户卡片会明确显示“不支持”，不会猜测余额。
 
@@ -212,6 +214,8 @@ KIMI_API_KEY: your-kimi-key
 MINIMAX_API_KEY: your-minimax-key
 # 中国区 MiniMax 用户可选；默认 global
 MINIMAX_API_REGION: cn
+# DSH 中国区 minimax-cn 路由默认使用此凭据名
+MINIMAX_CN_API_KEY: your-minimax-cn-key
 OLLAMA_API_KEY: sk-ollama-your-key
 COMMANDCODE_API_KEY: user-your-command-code-key
 ```

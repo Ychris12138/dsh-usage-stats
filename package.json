@@ -1,7 +1,7 @@
 {
   "name": "@ychris12138/dsh-usage-stats",
   "description": "Token usage, provider accounts, session cost estimates, budgets, and exports for the dsh web GUI",
-  "version": "0.3.5",
+  "version": "0.3.6",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Ychris12138/dsh-usage-stats.git"
@@ -22,12 +22,14 @@
     "cordis.patch.yml",
     "docs/images/usage-panel.svg",
     "docs/release-checklist.md",
+    "docs/release-plan-v0.3.6.md",
     "docs/release-notes-v0.3.0.md",
     "docs/release-notes-v0.3.1.md",
     "docs/release-notes-v0.3.2.md",
     "docs/release-notes-v0.3.3.md",
     "docs/release-notes-v0.3.4.md",
     "docs/release-notes-v0.3.5.md",
+    "docs/release-notes-v0.3.6.md",
     "scripts/install.mjs",
     "README.md",
     "LICENSE",

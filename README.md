@@ -1,6 +1,6 @@
 # dsh-usage-stats
 
-<!-- stable-version: 0.3.5 -->
+<!-- stable-version: 0.3.6 -->
 
 [![GitHub Release](https://img.shields.io/github/v/release/Ychris12138/dsh-usage-stats?display_name=tag&sort=semver&color=1f6feb)](https://github.com/Ychris12138/dsh-usage-stats/releases/latest)
 [![CI](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml)
@@ -34,7 +34,9 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 
 ## 快速安装 / Quick start
 
-需要 DeepSeek Harness `web` profile（基础功能支持 `@deepseek-ai/dsh >= 0.1.0-rc.6`）。DSH Desktop 的 **DeepSeek Account 登录余额**接入依赖 DSH `0.2.0-rc.2+` 提供的 Host account service；旧版 Harness 仍继续使用 API Key 余额路径。
+本分支准备的包为 `@ychris12138/dsh-usage-stats@0.3.6`，尚未发布；测试候选版本请安装从指定提交构建的本地 `.tgz`。下方 npm 安装命令仍使用已发布版本。
+
+基础功能支持 `@deepseek-ai/dsh >= 0.1.0-rc.6`。安装时选择实际使用的 profile：命令行网页通常是 `web`，Desktop 使用 `desktop`；不要把插件装到另一个 profile 后只刷新当前窗口。DSH Desktop 的 **DeepSeek Account 登录余额**接入依赖 DSH `0.2.0-rc.2+` 提供的 Host account service；旧版 Harness 仍继续使用 API Key 余额路径。
 
 稳定版优先安装 npm 上的精确版本；这也是 DSH Desktop Market 使用的同一个包：
 
@@ -42,9 +44,9 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.5"
 ```
 
-只有测试尚未发布的 source/RC 时才使用 `dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"`。GitHub `main` 可能领先 npm stable，不应把 source 安装当作市场安装验收。
+Desktop 安装时将上面的 `--profile web` 改为 `--profile desktop`，并使用 Desktop 对应的 DSH CLI。只有明确测试未发布 source/RC 时才使用 GitHub 来源；验收指定候选版本时优先安装从该提交打出的本地 `.tgz`，以免跟随分支变化。GitHub `main` 可能领先 npm stable。
 
-然后重启已经运行的 `dsh web`，并在浏览器中硬刷新。侧边栏底部会出现“用量/余额”（Usage/Balance）入口。
+安装后重启对应 profile 的 DSH Host；Desktop 需要退出并重新打开应用，然后刷新客户端。只刷新窗口不会加载新的服务端插件。侧边栏底部会出现“用量/余额”（Usage/Balance）入口。
 
 ### 插件市场 GUI 安装（DSH Community Market，Path A 标准来源）
 
@@ -53,9 +55,9 @@ dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.5"
 - `catalog/catalog-source.json` — 来源 manifest（`catalog-source.schema.json` v1.0.0）
 - `catalog/v1/plugins.json` — 标准 provider page（`catalog-provider-page.schema.json` v1.0.0）
 
-**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`。当前 stable/catalog 版本是 `0.3.5`；每个新版本都按以下顺序发布：
+**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`。已发布的 npm 版本仍是 `0.3.5`。本分支正准备 `0.3.6`，候选 catalog 元数据不代表已发布；每个新版本都按以下顺序发布：
 
-1. 运行 `npm run release:sync -- <version>` 同步 `package.json` / `package-lock.json` / `catalog/v1/plugins.json`，再由 `npm run check:release` 阻止身份或版本漂移。
+1. 在 release 分支运行 `npm run release:sync -- <version>` 同步 package、lockfile、README 与 catalog，检查候选包。npm 发布前不要把新 catalog 合入 `main`，因为 Pages 会自动部署。
 2. 发布 scoped 公共包：`npm publish --access public`。
 3. 把 `catalog/v1/plugins.json` 内容发布到 `https://ychris12138.github.io/dsh-usage-stats/v1/plugins`（GitHub Pages，manifest 与 endpoint 必须同源、HTTPS 443、无凭据）。
 4. 在 DSH 插件市场 → 来源管理 → 添加来源，粘贴 manifest URL：`https://ychris12138.github.io/dsh-usage-stats/catalog-source.json`，选择后即可走「可恢复安装边界」GUI 安装。
@@ -111,9 +113,9 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | OrcaRouter | 余额 | `ORCAROUTER_API_KEY` | `/v1/balance`（旧部署回退到账单摘要接口） |
 | Moonshot / Kimi API | 余额 | provider `apiKeyEnv` | `/v1/users/me/balance` |
 | OpenCode Go | 订阅 | `OPENCODE_GO_API_KEY` 或本地 `auth.json` | `/zen/go/v1/usage` |
-| Z.ai / 智谱 | 订阅 | `ZAI_API_KEY` | Coding Plan quota/subscription |
+| Z.ai / 智谱 | 订阅 | 全球区 `ZAI_API_KEY`；中国区 `ZAI_CODING_CN_API_KEY` | Coding Plan quota/subscription |
 | Kimi For Coding | 订阅 | `KIMI_API_KEY` | `/coding/v1/usages` |
-| MiniMax Coding Plan | 订阅 | `MINIMAX_API_KEY` | `/v1/token_plan/remains` |
+| MiniMax Coding Plan | 订阅 | 全球区 `MINIMAX_API_KEY`；中国区 `MINIMAX_CN_API_KEY` | `/v1/token_plan/remains` |
 | Ollama 云 | 订阅 | `OLLAMA_API_KEY` | `/api/usage`（5小时 + 周窗口） |
 | Command Code（Go / GOAT / Pro / Max） | 订阅 + 余额 | `COMMANDCODE_API_KEY` | `/alpha/billing/credits` 等 `/alpha/*`（**实验性**：未公开端点） |
 | New API | 余额 | provider 推理 Token | `/api/usage/token/` |
@@ -397,13 +399,13 @@ Constraints:
 
 Procedure:
 1. Confirm node, npx, and dsh are available.
-2. Prefer the exact npm stable used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.5"` (or update the existing scoped package).
-3. Use `github:Ychris12138/dsh-usage-stats` only when I explicitly ask to test unreleased source/RC code.
+2. Resolve the actual profile first (Desktop: desktop; CLI web: web). Prefer the exact published npm version used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.5"` (or update the existing scoped package).
+3. Use a local tarball built from the specified candidate commit when I ask to test an RC; use `github:Ychris12138/dsh-usage-stats` only for an explicitly requested source test.
 4. If dsh plugin is unavailable, use the compatible source installer only with my approval: `npx --yes github:Ychris12138/dsh-usage-stats`.
 5. Do not combine bundle installation with an existing manual dsh-usage-stats Cordis entry.
 6. For npx, require a verified package and exactly one Cordis entry, then run again with --check.
 7. Report the exact package identity/version, installation path, and resolved profile paths.
-8. If dsh web is running, report that a restart is needed and stop.
+8. If the target Host is running, report that a Host restart is needed; a client refresh alone cannot reload the server plugin. Restart it only if I have authorized that action.
 
 Optional account setup (never handle secret values yourself):
 - OpenRouter account balance requires OPENROUTER_MANAGEMENT_KEY, not the inference key.
@@ -497,7 +499,7 @@ node scripts/check-balance.mjs
 
 ## 兼容性与致谢 / Compatibility & credits
 
-当前 npm stable 为 `0.3.5`；`v0.3.5` 的完整发布门禁见 [`docs/release-checklist.md`](docs/release-checklist.md)，变更摘要见 [`docs/release-notes-v0.3.5.md`](docs/release-notes-v0.3.5.md)。DSH `0.2.0-rc.2+` 的 `deepseek-account` Host service 已完成真实 Desktop 登录/退出/重新登录验收；旧版 Harness 的 API Key 路径继续保持兼容。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
+已发布的 npm 版本仍是 `0.3.5`，历史变更见 [`v0.3.5 notes`](docs/release-notes-v0.3.5.md)。本分支是未发布的 `0.3.6` 整合候选，范围与实际验收记录见 [`release plan`](docs/release-plan-v0.3.6.md)、[`v0.3.6 notes`](docs/release-notes-v0.3.6.md) 和 [`release checklist`](docs/release-checklist.md)。DSH `0.2.0-rc.2+` 的 `deepseek-account` Host service 已完成真实 Desktop 登录/退出/重新登录验收；旧版 Harness 的 API Key 路径继续保持兼容。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
 
 持久化与活跃会话的读取按**能力探测**分支，不按版本号判断，因此 `>= 0.1.0-rc.6` 的支持范围未变：`0.1.3-alpha.1`–`0.1.5-rc.2` 用 `list()` 快照 + `open(id, "read")` 读句柄，`0.1.0-rc.7`–`0.1.2-rc.1` 用 `listSnapshots()` + `readFrom()`；活跃会话同时支持 `seq`/`snapshotEvents()` 与旧版 `events` 数组。`session/disposed` 在该范围内均存在（缺少它时已结束会话改由后台全量扫描补读）。缓存格式仍为 `version: 5`，旧缓存直接复用并原地重折叠。
 
@@ -513,4 +515,3 @@ node scripts/check-balance.mjs
 ## License
 
 [MIT](LICENSE)
-

@@ -1,7 +1,5 @@
 # v0.3.6 release notes
 
-Status: unpublished release candidate. The published npm version remains 0.3.5.
-
 This release restores account lookup for native DSH Z.ai / 智谱 and MiniMax routes, recovers DeepSeek Desktop balances after account-service loading, and includes the experimental Command Code adapter already merged into main.
 
 ## Changes
@@ -13,9 +11,16 @@ This release restores account lookup for native DSH Z.ai / 智谱 and MiniMax ro
 
 ## Validation and compatibility
 
-A real MiniMax CN subscription returned live 5-hour and weekly quota windows in DSH Desktop 0.2.0-rc.2 on 2026-10-17, and manual refresh succeeded. A real signed-in DeepSeek Desktop account recovered its balance after installing the fix and restarting the Host on the same day. Those observations used local test packages still labelled 0.3.5. The Z.ai issue reporter confirmed a working card on 2026-10-15; no independent maintainer-owned Z.ai account test is claimed.
+On 2026-10-17, Node 24.19.0 and DSH Desktop 0.2.0-rc.2 were used to validate the integrated 0.3.6 package:
 
-The final 0.3.6 tarball still requires its own automated gates and isolated installation smoke. Global MiniMax real-account acceptance, post-call quota movement, and new independent Command Code real-account acceptance are not claimed. See [the release plan](release-plan-v0.3.6.md) for source heads and [the release checklist](release-checklist.md) for the final handoff.
+- Clean dependency installation, static/release checks, and all 13 offline test suites passed. GitHub CI also passed for the accepted integration commit.
+- An isolated web profile installed the packaged tarball. Provider, usage, account, and export endpoints returned HTTP 200; panel open/close, provider switching, manual refresh, retained selection after reload, light/dark themes, and a narrow panel were checked.
+- The existing Desktop profile upgraded to the packaged 0.3.6 build. Both a real MiniMax CN subscription and a real signed-in DeepSeek Account returned live results. MiniMax showed 5-hour and weekly windows, and manual refresh succeeded.
+- The Desktop upgrade retained Token totals, provider selection, and profile patch/credential-file metadata. Installed runtime files matched the accepted source. The final documentation-only release preparation retains that runtime; its exact source commit and archive hashes are recorded outside the package in the frozen release manifest.
+
+The Z.ai issue reporter confirmed a working card on 2026-10-15. No independent maintainer-owned Z.ai, global MiniMax, or new Command Code real-account acceptance is claimed. MiniMax official-dashboard reconciliation and post-call quota movement were not checked. Account sign-out and service-removal behavior are covered by automated tests; the live account was not signed out for this release test.
+
+See [the release plan](release-plan-v0.3.6.md) for scope and [the release checklist](release-checklist.md) for the final artifact and publication handoff.
 
 DSH 0.1.x API-key compatibility remains covered by capability detection. Cache schema stays at 5; no cache deletion, migration, or one-time archive rescan is needed. Existing credentials and account monitors are retained. Costs remain estimates; unknown pricing and incomplete or mixed-currency amounts remain unknown rather than being guessed.
 

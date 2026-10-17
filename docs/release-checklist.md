@@ -1,67 +1,55 @@
 # v0.3.6 release checklist
 
-This checklist prepares `@ychris12138/dsh-usage-stats` v0.3.6. It does not authorize npm publishing, tagging, or creating a GitHub Release. Historical acceptance belongs in the corresponding release notes; unchecked items below are not completed by prior-version checks.
+The maintainer delegated non-npm preparation and post-npm release closeout; npm publication remains the user's step. The checklist distinguishes accepted integration evidence from the final frozen artifact and public release.
 
-## 1. Scope and provenance
+## 1. Frozen scope and accepted integration
 
-- [ ] Record the reviewed integrated commit as `RC_SHA`; include #126, #130, #135, and #136, with the source heads in [the release plan](release-plan-v0.3.6.md).
-- [ ] Keep #133, #128, and #74 out of the advertised support and code scope.
-- [ ] Review v0.3.6 notes, package file allow-list, and README status. Describe Command Code as experimental, MiniMax as subscription quota, and all costs as estimates.
-- [ ] Synchronize package, lockfile, candidate catalog, and README metadata with `npm run release:sync -- 0.3.6`. Candidate metadata does not change which version is published on npm.
-- [ ] Keep the candidate catalog off `main` until npm 0.3.6 exists: the Pages workflow automatically deploys catalog changes from `main`.
+- [x] Include #126, #130, #135, and #136; retain the source heads in [the release plan](release-plan-v0.3.6.md).
+- [x] Exclude #133, #128, and #74. Label Command Code experimental, MiniMax as subscription quota, and costs as estimates.
+- [x] Synchronize package, lockfile, README identity, and catalog metadata to 0.3.6. Include current release notes and enforce their presence in the package file allow-list.
+- [x] Accepted integration passed `npm ci`, `npm run check`, 13 offline suites, and exact-head GitHub CI on 2026-10-17. Missing/omitted release-note guards were verified.
+- [x] Accepted tarball matched all packed source files and excluded local output, credentials, caches, screenshots, backups, and review artifacts.
+- [x] Keep credential override, regional pinning, service lifecycle, incremental persistence, malformed-settings, and loopback/API/export safety regression coverage.
 
-## 2. Exact-candidate automated gates
+## 2. Packaged DSH acceptance completed on 2026-10-17
 
-Run from a clean checkout of the candidate:
+- [x] Install packaged 0.3.6 into an isolated web profile with Node 24.19.0 / DSH 0.2.0-rc.2. Provider, usage, account, and export endpoints return HTTP 200.
+- [x] Verify the panel opens/closes, provider switching and manual refresh work, selection survives client reload, and light/dark themes and a narrow panel render. Retain sidebar-only integration.
+- [x] Upgrade the existing Desktop profile to packaged 0.3.6, retaining Token totals, provider selection, and profile patch/credential-file metadata. Installed runtime matches the accepted source.
+- [x] Real `minimax-cn` returns live 5-hour and weekly subscription windows; refresh succeeds. A real signed-in DeepSeek Account returns a live Host-owned balance.
+
+Account sign-out/service removal and separate-wallet normalization are covered by automated tests; the live account was not changed to repeat those cases. Z.ai has reporter confirmation. Independent maintainer-owned Z.ai/global MiniMax/new Command Code tests, MiniMax official-dashboard reconciliation, and post-call quota movement remain untested and must not be described as live acceptance.
+
+## 3. Final immutable artifact and user handoff
+
+Record completion of these final gates in the external release manifest; the packaged checklist stays immutable after the source is frozen.
+
+- [x] Finalize install references and release documentation before freezing the source; avoid candidate-only/stale install wording in the published package.
+- [ ] Commit the final documentation preparation, ensure the checkout is clean, and record `RELEASE_SHA` in an external manifest/release asset. Do not embed a commit's own hash in its source files.
+- [ ] Confirm executable/runtime files are identical to the accepted integration. Run final static/release checks and require successful GitHub CI on `RELEASE_SHA`; rerun substantive tests if executable code changes.
+- [ ] Pack from exactly `RELEASE_SHA`, inspect its manifest, compare every packed file with that commit, and record the archive SHA-256 and npm SHA-512 integrity. Do not overwrite the frozen artifact later.
+- [ ] Create/update an unpublished GitHub draft release targeting the full `RELEASE_SHA`, attach the frozen tarball and sanitized verification manifest, and confirm no `v0.3.6` tag was created.
+- [ ] Hand the exact archive path and hashes to the user. The user verifies npm identity and publishes that tarball, without repacking the current directory:
 
 ```bash
-npm ci
-npm run check
-npm test
-npm pack --json
+npm whoami --registry=https://registry.npmjs.org/
+npm publish "$RELEASE_ARCHIVE" --access public --registry=https://registry.npmjs.org/
 ```
 
-- [ ] All checks and 13 offline test suites pass for this integrated commit; GitHub CI reports success for the same commit.
-- [ ] The pack contains v0.3.6 notes, the quoted Cordis identity, and the matching client loader identity. It contains no credentials, local test output, caches, screenshots, backups, or review artifacts.
-- [ ] Preserve coverage for malformed settings, loopback/GET API and export restrictions, explicit credential overrides, region pinning, DeepSeek service lifecycle, and cache persistence/incremental folding.
+`RELEASE_ARCHIVE` is the absolute path of the frozen, hash-verified tarball. Do not replace it with `.` or run another `npm pack` for publication.
 
-## 3. Packaged DSH acceptance
+## 4. Post-npm closeout
 
-- [ ] Install the exact tarball into an isolated DSH profile, restart that Host, and hard-refresh the client. Record the tarball hash, source commit, Node/DSH versions, and resolved profile.
-- [ ] Verify no plugin/loader failures, the sidebar panel opens and closes, provider switching and manual refresh work, and the plugin registers no composer UI. Check light/dark rendering and a narrow panel.
-- [ ] Upgrade an existing 0.3.5 profile while retaining its monitor settings and schema-5 usage cache. Confirm totals and provider selection survive restart; no credentials or providers are inserted automatically.
-- [ ] On the final packaged candidate, recheck the available MiniMax CN subscription and DeepSeek Account. Preserve separate CNY/USD wallets and confirm previously cached balances are not retained after account/service removal.
+- [ ] Confirm npm exposes exact version 0.3.6. Compare registry `dist.integrity` and downloaded tarball bytes with the frozen manifest; verify package files match `RELEASE_SHA`. Registry `gitHead` alone is not sufficient proof.
+- [ ] Only after npm verification, fast-forward `main` to exactly `RELEASE_SHA`. Do not squash/rebase the already-published source or force-update a diverged `main`.
+- [ ] Verify the automatic Pages deployment and public catalog identity, content type, and exact 0.3.6 version. The workflow deploys catalog changes from `main`, so no earlier merge is permitted.
+- [ ] Create an annotated/signed `v0.3.6` tag explicitly at `RELEASE_SHA`; verify it resolves to that commit, then publish the prepared GitHub draft release.
+- [ ] Install exact npm 0.3.6 through DSH Desktop Community Market and restart its Host. Verify the installed package before closing the release and accepted issues.
 
-Already observed on 2026-10-17 using local 0.3.5-labelled fix packages:
-
-- [x] DSH Desktop 0.2.0-rc.2: a real `minimax-cn` account shows live 5-hour and weekly windows; manual refresh succeeds.
-- [x] DSH Desktop 0.2.0-rc.2: a real signed-in DeepSeek Account balance recovers after installing the service-lifecycle fix and restarting Desktop.
-
-These observations do not mark the final-tarball checks above complete. Z.ai has reporter confirmation and automated coverage; no independent maintainer-owned account test is claimed. Global MiniMax, post-call quota movement, and new independent Command Code real-account checks remain untested. They must not be described as verified release behavior.
-
-## 4. Immutable release handoff
-
-- [ ] Finish the candidate checks and review the final notes before creating the release metadata commit.
-- [ ] Once publishing is authorized, replace candidate-only wording and update npm installation examples to 0.3.6 before creating the immutable release commit. Repack that final documentation with the accepted code.
-- [ ] Commit all accepted source/version/release metadata; record the exact clean commit as `RELEASE_SHA`. Confirm the committed package version is 0.3.6, not just the working-tree version.
-- [ ] Repeat check/test/pack if the release commit changes executable code or the package manifest after candidate acceptance; inspect the final pack in all cases.
-
-The release identity must remain:
+The immutable release identity is:
 
 ```text
-npm published source commit
-== v0.3.6 tag commit
-== GitHub Release commit
-== package/catalog version commit
-== RELEASE_SHA
+frozen tarball files == committed package files at RELEASE_SHA
+registry tarball bytes == frozen tarball bytes
+main at publication == v0.3.6 tag target == GitHub Release source == RELEASE_SHA
 ```
-
-## 5. Publish and Market closeout
-
-Only execute after the immutable release commit exists and the maintainer explicitly authorizes publishing.
-
-- [ ] Confirm the npm publisher, then publish from a clean checkout at exactly `RELEASE_SHA` using the public npm registry.
-- [ ] Confirm npm exposes exactly 0.3.6. Only then merge/push the catalog/release commit to `main`, without recreating the version changes.
-- [ ] Create the annotated/signed `v0.3.6` tag explicitly at `RELEASE_SHA`; verify the tag resolves to that commit and create its GitHub Release.
-- [ ] Verify public Pages catalog identity/content type/version, then install exact npm 0.3.6 through DSH Desktop Community Market and restart the Host.
-- [ ] Close release/issues only after their accepted fixes are merged and the relevant checks pass.

@@ -188,11 +188,13 @@ DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key �
 
 ### CodeArts 系反代供应商（dsh-codearts-auth）
 
+**实验集成**：需要包含 `creditBalance` 服务的 Providers Hub 配套构建；当前普通 npm `1.9.261020` 不提供该服务。已有可复现的源码/运行包补丁与双插件联调，见[配套构建说明](integrations/providers-hub/README.md)。请在隔离 profile 验收，真实账户余额尚未对账，暂不宣称正式支持。
+
 `deepseek-harness-codearts` 的账号池路线包括 `codearts` / `buddy` / `workbuddy` / `lobsterai` / `qoder` / `qodercn` / `trae` / `cline` / `loomy` / `raccoon` / `zcode`，以及与内置供应商同名的 `minimax`。这些账号池路线的凭据由宿主插件持有，因此使用进程内余额接口。
 
-此适配器仍为实验性集成，要求宿主插件通过 `ctx.provide('creditBalance', service)` 提供以下接口：同步的 `supportedProviders()` 返回 `{ id, displayName? }[]`，异步的 `creditsBalances(providerId)` 返回 `{ accounts: [{ accountId, nickname?, balance, error? }] }`。仅有 `accountPool` 或内部 `credits.balances` RPC 不满足此契约；上游服务的已发布版本与真实双插件验收仍待确认。
+宿主配套通过 `ctx.provide('creditBalance', service)` 提供以下接口：同步的 `supportedProviders()` 返回 `{ id, displayName? }[]`，异步的 `creditsBalances(providerId)` 返回 `{ accounts: [{ accountId, nickname?, balance, error? }] }`。仅有 `accountPool` 或内部 `credits.balances` RPC 不满足此契约。
 
-2026-10-17 核对的 [上游](https://gitee.com/iJetLi/deepseek-harness-codearts) 已改名为 `dsh-providers-hub`，当前公开入口仍未注册这个余额服务。安装本 PR 不会自动补齐上游服务。标准 MiniMax Coding Plan 的修复另由 #135 提供，不依赖该服务。
+2026-10-20 已对[上游](https://gitee.com/iJetLi/deepseek-harness-codearts)当前源码与 npm `1.9.261020` 分别制作配套候选包，并在解包后通过真实 Cordis/宿主余额分派与本插件的联调。供应商取数使用合成读数；真实账户对账仍待完成。安装 Usage Stats 不会自动修改已安装的 Providers Hub。标准 MiniMax Coding Plan 不依赖这项实验集成。
 
 本插件经 `ctx.get('creditBalance')` 读取服务计算的 `CreditBalance`。服务清单只补充不存在的 provider，并为这些条目标记明确的宿主来源；不会覆盖已注册的同名路由。裸 `minimax` 仍按内置 MiniMax token plan 查询，缺少 `apiKeyEnv` / `baseURL` 不能证明它属于 CodeArts。
 
@@ -253,6 +255,8 @@ COMMANDCODE_API_KEY: user-your-command-code-key
 OpenCode Go 原生路由先读取当前 DSH 使用的 `OPENCODE_API_KEY`，缺少时才兼容旧 `OPENCODE_GO_API_KEY`，然后尝试旧版 OpenCode 的 `~/.local/share/opencode/auth.json`，最后才使用显式 `OPENCODE_GO_AUTH_COOKIE + OPENCODE_GO_WORKSPACE_ID` 兼容回退。显式 monitor/provider credential ref 始终优先，缺失时不借用本地文件或其他账户的凭据。先访问官方迁移后的 `/inference/go/v1/usage`，仅在 404/405 时用同一密钥尝试旧路径；401/403/429 不重试或更换密钥。Bearer usage endpoint 仍不是稳定的公开 API。
 
 若账户卡片显示「未配置」，说明未找到凭据，还未发起额度查询。OpenCode V2 的凭据存储不再等同于旧 `auth.json`；已登录 OpenCode 不代表 DSH 已配置密钥。请在 DSH 的 OpenCode Go 模型设置中配置自己的 Console API Key，或在 DSH credentials 中配置上述引用。不要导出 OpenCode 的凭据数据库或把密钥、Cookie 贴到 issue；本插件不会扫描或解密 V2 凭据数据库。
+
+也可以使用官方 Console 查看账户额度，或用 OpenCode 的 `stats` 查看该客户端的本地 token/费用；数据范围与限制见 [OpenCode 用量来源](docs/opencode-usage-sources.md)。Providers Hub 的 OpenCode 通道可用数不作为 Go 额度显示。
 
 Cookie 路径仅在没有选中任何 API Key 时使用；已选中的 Key 查询失败，不会再切换到 Cookie 所属的另一账户。
 

@@ -106,7 +106,8 @@ const noLocalAuth = {
 {
 	for (const status of [401, 403, 429, 500, 404, 405]) {
 		const calls = [];
-		const account = await collectSubscription("opencode-go", credentials({ OPENCODE_API_KEY: "new-dsh-key", OPENCODE_GO_API_KEY: "legacy-other-account" }), {}, {
+		const account = await collectSubscription("opencode-go", credentials({ OPENCODE_API_KEY: "new-dsh-key", OPENCODE_GO_API_KEY: "legacy-other-account",
+			OPENCODE_GO_AUTH_COOKIE: "another-cookie-account", OPENCODE_GO_WORKSPACE_ID: "wrk_OTHER" }), {}, {
 			...noLocalAuth, now: () => now,
 			fetch: async (url, init) => {
 				calls.push(String(url));

@@ -227,6 +227,8 @@ OpenCode Go 原生路由先读取当前 DSH 使用的 `OPENCODE_API_KEY`，缺�
 
 若账户卡片显示「未配置」，说明未找到凭据，还未发起额度查询。OpenCode V2 的凭据存储不再等同于旧 `auth.json`；已登录 OpenCode 不代表 DSH 已配置密钥。请在 DSH 的 OpenCode Go 模型设置中配置自己的 Console API Key，或在 DSH credentials 中配置上述引用。不要导出 OpenCode 的凭据数据库或把密钥、Cookie 贴到 issue；本插件不会扫描或解密 V2 凭据数据库。
 
+Cookie 路径仅在没有选中任何 API Key 时使用；已选中的 Key 查询失败，不会再切换到 Cookie 所属的另一账户。
+
 Ollama 云读取 `OLLAMA_API_KEY`，调用 `/api/usage` 展示两个订阅窗口（5 小时会话 + 每周），无余额；`usage` 按 0..1 比例换算为进度条。
 
 Ollama 适配器只对**已配置的 provider** 生效，不会自动添加账户：当 provider 的 id 为 `ollama`，或其 baseURL 主机为 `ollama.com`（含子域）时自动选用；本地 Ollama（`localhost:11434`）不会被当作云配额账户。特殊代理/自定义端点可用显式 monitor 绑定：
@@ -411,7 +413,7 @@ Procedure:
 
 Optional account setup (never handle secret values yourself):
 - OpenRouter account balance requires OPENROUTER_MANAGEMENT_KEY, not the inference key.
-- OpenCode Go may reuse local auth.json or use OPENCODE_GO_API_KEY.
+- OpenCode Go uses DSH's OPENCODE_API_KEY, retains the legacy OPENCODE_GO_API_KEY fallback, and can reuse a legacy local auth.json when no explicit reference was selected.
 - Z.ai uses ZAI_API_KEY; China accounts may set ZAI_API_REGION=bigmodel-cn.
 - Kimi and MiniMax use KIMI_API_KEY and MINIMAX_API_KEY.
 - Never ask me to paste a key or browser cookie into chat.

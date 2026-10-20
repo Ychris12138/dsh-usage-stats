@@ -46,7 +46,7 @@ const noLocalAuth = {
 	const go = providers[0];
 	assert.equal(go.status, "ok");
 	assert.deepEqual(go.windows.map((window) => [window.kind, window.usedPercent]), [["session", 9], ["weekly", 12], ["monthly", 6]]);
-	assert.equal(calls[0].url, "https://opencode.ai/zen/go/v1/usage");
+	assert.equal(calls[0].url, "https://opencode.ai/inference/go/v1/usage");
 	assert.equal(calls[0].init.headers.authorization, `Bearer ${secret}`);
 	assert.equal(JSON.stringify(go).includes(secret), false, "API key must not cross the module interface");
 	console.log("OpenCode Go Bearer endpoint normalization ok");
@@ -99,8 +99,30 @@ const noLocalAuth = {
 		}
 	});
 	assert.equal(providers[0].status, "ok");
-	assert.deepEqual(calls, ["https://opencode.ai/zen/go/v1/usage"]);
+	assert.deepEqual(calls, ["https://opencode.ai/inference/go/v1/usage"]);
 	console.log("OpenCode auth.json fallback ok");
+}
+
+{
+	for (const status of [401, 403, 429, 500, 404, 405]) {
+		const calls = [];
+		const account = await collectSubscription("opencode-go", credentials({ OPENCODE_API_KEY: "new-dsh-key", OPENCODE_GO_API_KEY: "legacy-other-account" }), {}, {
+			...noLocalAuth, now: () => now,
+			fetch: async (url, init) => {
+				calls.push(String(url));
+				assert.equal(init.headers.authorization, "Bearer new-dsh-key");
+				if (String(url).includes("/inference/")) return { ok: false, status };
+				return { ok: true, status: 200, json: async () => ({ usage: { rolling: { percent: 0.5 }, weekly: { percent: 2 } } }) };
+			}
+		});
+		assert.equal(calls.length, status === 404 || status === 405 ? 2 : 1);
+		if (calls.length === 2) {
+			assert.equal(calls[1], "https://opencode.ai/zen/go/v1/usage");
+			assert.equal(account.status, "ok");
+			assert.equal(account.windows[0].usedPercent, 0.5, "API percentages below 1 are not ratios");
+		} else assert.equal(account.status, status === 429 ? "rate-limited" : status === 500 ? "unavailable" : "unauthorized");
+	}
+	console.log("OpenCode migrated endpoint compatibility, current key precedence and no authentication retry ok");
 }
 
 {

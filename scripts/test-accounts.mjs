@@ -40,6 +40,50 @@ function statusErrorFromTest(status, message) {
 
 const now = Date.parse("2026-08-15T00:00:00Z");
 
+{
+	const secret = "opencode-go-native-test-key";
+	const service = createAccountService({
+		credentials: credentials({ OPENCODE_API_KEY: secret, OPENCODE_GO_API_KEY: "other-legacy-account" }),
+		getProviders: async () => [{ id: "opencode-go" }],
+		deps: { includeLegacyProviders: false, now: () => now, fetch: async (url, init) => {
+			assert.equal(String(url), "https://opencode.ai/inference/go/v1/usage");
+			assert.equal(init.headers.authorization, `Bearer ${secret}`);
+			return jsonResponse({ usage: { rolling: { percent: 1 }, weekly: { percent: 4 }, monthly: { percent: 9 } } });
+		} }
+	});
+	assert.equal((await service.providerViews())[0].configured, true, "native id-only routes must discover the same key used by the collector");
+	assert.equal((await service.get("opencode-go")).status, "ok");
+	const overridden = resolveAccountSpec({ id: "opencode-go" }, validateAccountConfig({ monitors: {
+		"opencode-go": { adapter: "opencode-go", credentialRef: "CUSTOM_GO_KEY" }
+	} }));
+	assert.equal(overridden.apiKeyRef, "CUSTOM_GO_KEY");
+	assert.equal(resolveAccountSpec({ id: "custom-go" }, validateAccountConfig({ monitors: {
+		"custom-go": { adapter: "opencode-go" }
+	} })).apiKeyRef, void 0, "custom routes must not inherit the native reference");
+	assert.equal(JSON.stringify(await service.providerViews()).includes(secret), false);
+	const native = resolveAccountSpec({ id: "opencode-go" }, validateAccountConfig());
+	const legacy = await queryAccount(native, credentials({ OPENCODE_GO_API_KEY: "legacy-go-key" }), {
+		fetch: async (_url, init) => {
+			assert.equal(init.headers.authorization, "Bearer legacy-go-key");
+			return jsonResponse({ usage: { rolling: { percent: 2 } } });
+		}
+	});
+	assert.equal(legacy.status, "ok");
+	const absent = await queryAccount(overridden, credentials({ OPENCODE_API_KEY: secret }), {
+		readFile: async () => { throw new Error("explicit missing references must not read another local account"); },
+		fetch: async () => { throw new Error("explicit missing references must not fetch"); }
+	});
+	assert.equal(absent.status, "not-configured");
+	assert.deepEqual(absent.missingCredentials, ["CUSTOM_GO_KEY"]);
+	const custom = resolveAccountSpec({ id: "custom-go" }, validateAccountConfig({ monitors: {
+		"custom-go": { adapter: "opencode-go" }
+	} }));
+	assert.equal((await queryAccount(custom, credentials({ OPENCODE_API_KEY: secret }), {
+		fetch: async () => { throw new Error("a custom route cannot borrow a native key"); }
+	})).status, "not-configured");
+	console.log("OpenCode Go canonical route discovery and explicit reference precedence ok");
+}
+
 // BEGIN MiniMax id-only regression matrix
 {
 	const cases = [

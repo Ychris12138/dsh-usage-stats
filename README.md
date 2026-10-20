@@ -380,7 +380,9 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
               currencyValue: CNY
 ```
 
-`param` 为 1–128 个字母、数字或 `_ . ~ -` 字符；密钥保存在 DSH credentials 中，不要写入 `request.path`。同名查询参数会被替换，其他查询参数会保留。缺少凭据时不发请求，且沿用 HTTPS、同源、DNS/IP 校验、禁跟随重定向和响应大小限制；请求 URL 与上游错误不会进入账户快照。既有 `bearer`、`raw`、`x-api-key` 配置继续有效。
+`param` 为 1–64 个字符，以字母或 `_` 开头，后续允许字母、数字、`_ . -`；query auth 只接受 `type`、`param`、`credentialRef`。密钥保存在 DSH credentials 中，不得写入 `request.path`、base URL 或 headers。配置中的同名认证查询参数（包括编码后的同名项）、path fragment，以及 base URL 的查询串或 fragment 均拒绝；其他非敏感 path 查询参数会保留。缺少凭据时不发请求，且沿用 HTTPS、同源、DNS/IP 校验、禁跟随重定向和响应大小限制。上游在套餐名、币种或额度标签等快照字段中回显凭据原值或 URL 编码值时，查询返回固定的 `invalid-response`，回显内容不会写入账户缓存。既有 `bearer`、`raw`、`x-api-key` 配置继续有效。
+
+查询参数认证会让目标服务及其 TLS 终止代理看到含密钥的请求 URL；插件无法保证第三方访问日志不记录它。若接口支持请求头认证，优先选择请求头。
 
 </details>
 

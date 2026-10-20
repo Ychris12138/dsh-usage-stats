@@ -215,6 +215,86 @@ async function testDeepSeekDesktopAccountRoute(root) {
 	}
 }
 
+async function testDeepSeekDesktopAccountServiceLifecycle(root) {
+	const previousVersion = process.env.DSH_CLIENT_VERSION;
+	process.env.DSH_CLIENT_VERSION = "0.2.0-rc.2";
+	try {
+		const plugin = await freshModule("deepseek-account-lifecycle", join(root, "deepseek-account-lifecycle"));
+		const routes = new Map();
+		let activeService;
+		let registeredProviders = [];
+		const balanceCalls = [];
+		const service = (label, currency, amount) => ({
+			getState: async () => ({ status: "credential-stored" }),
+			getBalance: async (client) => {
+				balanceCalls.push({ label, client });
+				return { status: "ready", value: [{ currency, balance: String(amount) }], bonusWallets: [] };
+			}
+		});
+		const context = makeContext({
+			sessions: { list: () => [] },
+			persistence: { list: async () => [] },
+			routes,
+			settings: { get: () => void 0 },
+			llm: { listProviders: () => registeredProviders }
+		});
+		const originalGet = context.get;
+		context.get = (name) => name === "deepseekAccount" ? activeService : originalGet(name);
+		await plugin.apply(context, {}, { disableBackgroundRefresh: true });
+		const read = async (path, query = "") => {
+			const response = makeResponse();
+			await routes.get(path)({
+				method: "GET", url: `${path}${query}`,
+				headers: {
+					host: "localhost:3080",
+					"x-dsh-usage-stats-client-locale": "zh-CN",
+					"x-dsh-usage-stats-timezone-offset": "28800"
+				},
+				socket: { remoteAddress: "127.0.0.1" }
+			}, response);
+			assert.equal(response.status, 200);
+			assert.doesNotMatch(response.body, /"(?:token|authorization|cookie)"\s*:/i, "lifecycle responses must remain credential-free");
+			return JSON.parse(response.body);
+		};
+		const accountQuery = "?provider=deepseek-account";
+		const before = await read(plugin.PROVIDERS_PATH);
+		assert.equal(before.providers.some((entry) => entry.id === "deepseek-account"), false, "an absent service adds no synthetic provider at startup");
+		assert.equal((await read(plugin.ACCOUNT_PATH, accountQuery)).error, "unknown-provider");
+
+		activeService = service("late", "CNY", 31);
+		const discovered = (await read(plugin.PROVIDERS_PATH)).providers.filter((entry) => entry.id === "deepseek-account");
+		assert.equal(discovered.length, 1, "a service registered after apply must add a synthetic provider without a registry route");
+		assert.equal(discovered[0].configured, true);
+		assert.equal(discovered[0].adapter, "deepseek-account");
+		const late = (await read(plugin.ACCOUNT_PATH, accountQuery)).account;
+		assert.equal(late.status, "ok");
+		assert.deepEqual(late.balance.wallets, [{ currency: "CNY", remaining: 31, breakdown: { toppedUp: 31, granted: 0 } }]);
+		assert.deepEqual(balanceCalls, [{ label: "late", client: { version: "0.2.0-rc.2", locale: "zh-CN", timezoneOffsetSeconds: 28800 } }]);
+
+		activeService = service("replacement", "USD", 9);
+		const replaced = (await read(plugin.ACCOUNT_PATH, accountQuery)).account;
+		assert.equal(replaced.status, "ok");
+		assert.deepEqual(replaced.balance.wallets, [{ currency: "USD", remaining: 9, breakdown: { toppedUp: 9, granted: 0 } }], "an ordinary read must not return the previous service's cached wallet");
+		assert.deepEqual(balanceCalls.map((entry) => entry.label), ["late", "replacement"]);
+		assert.deepEqual(balanceCalls[1].client, { version: "0.2.0-rc.2", locale: "zh-CN", timezoneOffsetSeconds: 28800 });
+
+		// A still-registered route must lose its old balance as soon as the
+		// backing service disappears, even without an explicit refresh request.
+		registeredProviders = [{ id: "deepseek-account", name: "DeepSeek Account" }];
+		activeService = void 0;
+		const removed = (await read(plugin.ACCOUNT_PATH, accountQuery)).account;
+		assert.equal(removed.status, "unsupported");
+		assert.equal(removed.balance, null);
+		assert.deepEqual(balanceCalls.map((entry) => entry.label), ["late", "replacement"], "removal must not call the detached service");
+		registeredProviders = [];
+		assert.equal((await read(plugin.PROVIDERS_PATH)).providers.some((entry) => entry.id === "deepseek-account"), false);
+		assert.equal((await read(plugin.ACCOUNT_PATH, accountQuery)).error, "unknown-provider", "a removed synthetic provider must not expose cached balances");
+	} finally {
+		if (previousVersion === void 0) delete process.env.DSH_CLIENT_VERSION;
+		else process.env.DSH_CLIENT_VERSION = previousVersion;
+	}
+}
+
 async function testOrcaRouterIntegrationRoute(root) {
 	const plugin = await freshModule("orcarouter-integration", join(root, "orcarouter-integration"));
 	const routes = new Map();
@@ -1815,6 +1895,39 @@ async function testWebSearchCacheReplacement(root) {
 	const migrated = await freshModule("web-search-v6-refold", home);
 	assert.equal((await migrated.collectUsage(context)).total.tokens, 24);
 	assert.equal(JSON.parse(await readFile(path, "utf8")).version, 7);
+
+	// Cold statistics restart with no live Session and no usage cache. The
+	// persistence seam reads the complete synthetic event log from disk; replay
+	// and corrections must reach the same API/export used by the panel.
+	const archivePath = join(home, "search-events.jsonl");
+	let diskEvents = [routeEvent(0, "minimax-cn", "MiniMax-M3"), ...session.events.map((entry, index) => ({ ...entry, seq: index + 1 }))];
+	const saveEvents = () => writeFile(archivePath, diskEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+	await saveEvents();
+	const readEvents = async () => (await readFile(archivePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+	const diskPersistence = {
+		list: async () => [{ header: { id: session.id }, revision: (await readEvents()).length }],
+		open: async () => ({ read: async (offset = 0) => ({ eventState: "detached", events: (await readEvents()).filter((entry) => entry.seq >= offset) }), close: async () => {} })
+	};
+	const coldHome = join(root, "web-search-disk-cold");
+	const cold = await freshModule("web-search-disk-cold", coldHome);
+	const routes = new Map();
+	const coldContext = makeContext({ sessions: { list: () => [] }, persistence: diskPersistence, routes });
+	const accounts = { validate: async () => {}, providerViews: async () => [], get: async () => null, subscriptionAccounts: async () => [] };
+	await cold.apply(coldContext, {}, { disableBackgroundRefresh: true, accounts });
+	assert.equal((await cold.collectUsage(coldContext)).total.tokens, 24);
+	const readRoute = async (route) => {
+		const response = makeResponse();
+		await routes.get(route)({ method: "GET", url: route, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, response);
+		assert.equal(response.status, 200);
+		return JSON.parse(response.body);
+	};
+	assert.equal((await readRoute(cold.USAGE_PATH)).total.tokens, 24);
+	assert.equal((await readRoute(cold.JSON_EXPORT_PATH)).usage.total.tokens, 24);
+	diskEvents.push({ ...event(4, "A"), data: { ...event(4, "A").data, usage: { input_tokens: 15, output_tokens: 2 } } });
+	await saveEvents();
+	assert.equal((await cold.collectUsage(coldContext)).total.tokens, 29, "a corrected sample replaces its old value after a cold disk replay");
+	const finalCache = JSON.parse(await readFile(join(coldHome, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.equal(finalCache.sessions[session.id].currentRoute.providerId, "minimax-cn", "auxiliary search cannot change the conversation route");
 }
 
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
@@ -1822,6 +1935,7 @@ try {
 	await testRouteFence(root);
 	await testWebSearchCacheReplacement(root);
 	await testDeepSeekDesktopAccountRoute(root);
+	await testDeepSeekDesktopAccountServiceLifecycle(root);
 	await testOrcaRouterIntegrationRoute(root);
 	await testSessionContext(root);
 	await testModernLiveSessionAPI(root);

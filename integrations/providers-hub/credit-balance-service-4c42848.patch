@@ -1,0 +1,467 @@
+From 45b889e507cd0ee18503996372c69bd4f5cff3e2 Mon Sep 17 00:00:00 2001
+From: rui-zju <12245039@zju.edu.cn>
+Date: Tue, 20 Oct 2026 22:54:11 +0800
+Subject: [PATCH] feat: expose read-only cross-plugin credit balances
+
+---
+ docs/credit-balance-service.md            |  43 +++++++
+ src/credit-balance-service.ts             | 144 ++++++++++++++++++++++
+ src/index.ts                              |   2 +
+ src/jet-hub-rpc.ts                        |   8 ++
+ tests/unit/credit-balance-service.spec.ts |  99 +++++++++++++++
+ tests/unit/credit-balance-wiring.spec.ts  | 100 +++++++++++++++
+ 6 files changed, 396 insertions(+)
+ create mode 100644 docs/credit-balance-service.md
+ create mode 100644 src/credit-balance-service.ts
+ create mode 100644 tests/unit/credit-balance-service.spec.ts
+ create mode 100644 tests/unit/credit-balance-wiring.spec.ts
+
+diff --git a/docs/credit-balance-service.md b/docs/credit-balance-service.md
+new file mode 100644
+index 0000000000000000000000000000000000000000..4575656ae97e2a181aa3c805db8999af3b48860c
+--- /dev/null
++++ b/docs/credit-balance-service.md
+@@ -0,0 +1,43 @@
++# 跨插件余额服务
++
++本改动为 Usage Stats 的 PR #144 提供宿主侧配套。服务只返回余额和额度包，凭据解析、供应商协议、自愈与缓存仍由 Providers Hub 的既有余额路径负责。
++
++## 接口
++
++宿主在 connection 服务就绪后注册一个 `creditBalance` 实例；connection 移除时由 Cordis 撤销，重新挂载后创建新实例。
++
++```ts
++ctx.creditBalance.supportedProviders()
++// Array<{ id: string; displayName: string }>
++
++await ctx.creditBalance.creditsBalances(providerId)
++// { accounts: PublicCreditAccount[] }
++```
++
++类型定义见 `src/credit-balance-service.ts`。清单从真实 registry 派生，并排除 OpenCode：它在本插件里的数字表示本地可用通道数，不能当成 Go 订阅剩余额度。
++
++## 读数语义
++
++- `balance.total` 是当前剩余额度，不是百分比分母；包的 `total` 与 `used` 才能用于消费百分比。
++- 零余额仍是成功读数；缺少余额、坏数值、单号失败和旧读数不伪装成零。
++- 部分账号失败不会遮住其他账号的余额。旧读数标记为 `stale: true`，投影不把它当成新余额返回。
++- 账号 ID 与昵称换成本次响应内的序号。凭据、原始账号记录、RPC 错误、私有附加字段不跨服务边界。
++- 供应商未知或不支持余额时，在读取之前以 `UnsupportedProviderError` 拒绝。
++- 服务不签到、不选择默认账号、不实现自己的登录或续期；正常余额查询仍可能触发宿主既有的凭据自愈及缓存写入。
++- 原生 MiniMax API Key 路由与 Providers Hub 的 MiniMax Code 账号池不是同一个账户；消费方不得按名字覆盖原生路由。
++
++## 验证
++
++```sh
++pnpm run build:all
++pnpm exec vitest run tests/unit/credit-balance-service.spec.ts tests/unit/credit-balance-wiring.spec.ts
++
++# 在 Usage Stats 的 PR #144 分支中，指向本仓库的已构建目录：
++node scripts/test-providers-hub-integration.mjs /absolute/path/to/dsh-providers-hub
++```
++
++最后一项使用真实 Cordis、真实余额分派和真实 Usage Stats 消费/缓存/导出，只把供应商取数替换成合成读数。它不会访问真实账户或供应商网络，不能替代真实控制台对账。
++
++## 交付边界
++
++当前配套基于官方 Gitee 提交 `4c428487bd75e0a02d7b4faa789e456ff44955e0`。本地候选包供隔离验证，尚不代表上游已合并或 npm 已发布此服务。正式支持仍需上游发布含此服务的版本，并用明确选择的真实账户核对余额、额度包和到期时间。
+diff --git a/src/credit-balance-service.ts b/src/credit-balance-service.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..f76319d15588e6d20f5c55df6dbf807b43232387
+--- /dev/null
++++ b/src/credit-balance-service.ts
+@@ -0,0 +1,144 @@
++/**
++ * 跨插件只读余额投影。读取复用宿主已有的余额编排，不接收凭据、账号池或 fetch。
++ * 只允许白名单数值和展示字段跨越服务边界，登录标识与原始错误留在宿主内。
++ */
++export interface CreditBalanceService {
++  supportedProviders(): Array<{ id: string; displayName: string }>
++  creditsBalances(providerId: string): Promise<{ accounts: PublicCreditAccount[] }>
++}
++
++export interface PublicCreditPackage {
++  name: string
++  unit: string
++  remaining?: number
++  total?: number
++  used?: number
++  active?: boolean
++  expiredTime?: string
++  deductionEndTime?: number
++}
++
++export interface PublicCreditAccount {
++  /** 仅在本次响应内区分账号，不暴露登录标识，也不保证跨响应稳定。 */
++  accountId: string
++  nickname: string
++  balance: { total: number; packages: PublicCreditPackage[]; unit?: string } | null
++  stale?: boolean
++  error?: 'unknown' | 'upstream-invalid-response' | 'stale-balance'
++}
++
++declare module '@deepseek-ai/cordis' {
++  interface Context {
++    creditBalance: CreditBalanceService
++  }
++}
++
++interface ProviderDescriptor {
++  readonly id: string
++  readonly label: string
++  readonly credits: { readonly balance: boolean }
++}
++
++function record(value: unknown): Record<string, unknown> | undefined {
++  return value !== null && typeof value === 'object' && !Array.isArray(value)
++    ? value as Record<string, unknown>
++    : undefined
++}
++
++function amount(value: unknown): value is number {
++  return typeof value === 'number' && Number.isFinite(value) && value >= 0
++}
++
++function label(value: unknown, fallback: string): string {
++  return typeof value === 'string'
++    ? value.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, 160) || fallback
++    : fallback
++}
++
++function failure(reason: 'unknown' | 'upstream-invalid-response'): Error & { safeReason: string } {
++  return Object.assign(new Error(reason), { safeReason: reason })
++}
++
++function projectPackage(value: unknown, index: number): PublicCreditPackage | undefined {
++  const source = record(value)
++  if (source === undefined) return undefined
++  for (const key of ['remaining', 'total', 'used']) {
++    if (source[key] !== undefined && !amount(source[key])) return undefined
++  }
++  if (!amount(source.remaining) && !(amount(source.total) && amount(source.used))) return undefined
++  const projected: PublicCreditPackage = {
++    name: label(source.name, `额度包 ${index + 1}`),
++    unit: label(source.unit, 'credit'),
++  }
++  if (amount(source.remaining)) projected.remaining = source.remaining
++  if (amount(source.total)) projected.total = source.total
++  if (amount(source.used)) projected.used = source.used
++  if (typeof source.active === 'boolean') projected.active = source.active
++  // 保留宿主明确的毫秒单位；未知或越界时间不制造到期判据。
++  if (amount(source.deductionEndTime) && source.deductionEndTime > 0 && source.deductionEndTime <= 8.64e15) {
++    projected.deductionEndTime = source.deductionEndTime
++  }
++  if (typeof source.expiredTime === 'string' && source.expiredTime !== '') {
++    const timestamp = Date.parse(source.expiredTime)
++    if (Number.isFinite(timestamp)) projected.expiredTime = new Date(timestamp).toISOString()
++  }
++  return projected
++}
++
++function projectAccount(value: unknown, index: number): PublicCreditAccount {
++  const result: PublicCreditAccount = {
++    accountId: `account-${index + 1}`,
++    nickname: `账号 ${index + 1}`,
++    balance: null,
++  }
++  const source = record(value)
++  if (source === undefined) return { ...result, error: 'upstream-invalid-response' }
++  if (source.stale === true) return { ...result, stale: true, error: 'stale-balance' }
++  if (source.error !== undefined && source.error !== null && source.error !== '') {
++    return { ...result, error: 'unknown' }
++  }
++  const balance = record(source.balance)
++  if (balance === undefined) return { ...result, error: 'unknown' }
++  if (!amount(balance.total) || !Array.isArray(balance.packages)) {
++    return { ...result, error: 'upstream-invalid-response' }
++  }
++  const packages = balance.packages.map(projectPackage)
++  // 不丢弃坏包后再返回成功，避免误报成少量余额或真实的零余额。
++  if (packages.some((entry) => entry === undefined)) return { ...result, error: 'upstream-invalid-response' }
++  result.balance = {
++    total: balance.total,
++    packages: packages as PublicCreditPackage[],
++    ...(typeof balance.unit === 'string' ? { unit: label(balance.unit, 'credit') } : {}),
++  }
++  return result
++}
++
++export function createCreditBalanceService(deps: {
++  providers: () => readonly ProviderDescriptor[]
++  read: (providerId: string) => Promise<unknown>
++}): CreditBalanceService {
++  const supportedProviders = () => deps.providers()
++    .filter((provider) => provider.credits.balance === true)
++    .map((provider) => ({ id: provider.id, displayName: provider.label }))
++  return {
++    supportedProviders,
++    async creditsBalances(providerId) {
++      if (!supportedProviders().some((provider) => provider.id === providerId)) {
++        const error = new Error('unsupported-provider')
++        error.name = 'UnsupportedProviderError'
++        throw error
++      }
++      let response: unknown
++      try {
++        response = await deps.read(providerId)
++      } catch {
++        throw failure('unknown')
++      }
++      const envelope = record(response)
++      if (envelope?.ok === false) throw failure('unknown')
++      const payload = record(envelope?.value)
++      if (envelope?.ok !== true || !Array.isArray(payload?.accounts)) throw failure('upstream-invalid-response')
++      return { accounts: payload.accounts.map(projectAccount) }
++    },
++  }
++}
+diff --git a/src/index.ts b/src/index.ts
+index 5108928ca7bb49cbe82a052ac79e4f12b429ca25..08414942086ba1f4059459b05586945e7f96f8bc 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -213,6 +213,8 @@ function lazyOpencodeUserAgent(): () => string {
+  */
+ const OPENCODE_CATALOG_TIMEOUT_MS = 8_000
+ 
++export type { CreditBalanceService, PublicCreditAccount, PublicCreditPackage } from './credit-balance-service.js'
++
+ export const name = 'codearts-auth'
+ // `connection` 刻意不列入静态 inject：它只由 Web bundle（dsh-client-connection）
+ // 提供，headless/CLI profile 里并不存在。静态 inject 会让本插件在那些 profile
+diff --git a/src/jet-hub-rpc.ts b/src/jet-hub-rpc.ts
+index e84eb256323af0895b71f66c075f5f77a534af5a..17acb8338c0906c87c69c8771e5c99a47fe366ba 100644
+--- a/src/jet-hub-rpc.ts
++++ b/src/jet-hub-rpc.ts
+@@ -372,6 +372,7 @@ import {
+   createBadgePreferenceStore,
+ } from './badge-preferences.js'
+ import { createUsageBadge, type BadgeRpcResult } from './usage-badge.js'
++import { createCreditBalanceService } from './credit-balance-service.js'
+ import { createAutoCheckin, createAutoCheckinStore } from './auto-checkin.js'
+ 
+ /** Jet Hub RPC API 路径 */
+@@ -3525,6 +3526,13 @@ function registerJetHubEndpoints(
+     warn: (message) => ctx.logger?.warn?.(message),
+   })
+ 
++  // 余额仍走本宿主的账号隔离、自愈及缓存路径；其他插件只拿脱敏后的投影。
++  // OpenCode 这里的“余额”其实是本地通道可用数，不能当作 Go 订阅额度导出。
++  ctx.provide?.('creditBalance', createCreditBalanceService({
++    providers: () => PROVIDER_REGISTRY.filter((provider) => provider.id !== OPENCODE.id),
++    read: (provider) => handleMethod('credits.balances', { provider }),
++  }))
++
+   connection.fetch.register({
+     path: JET_HUB_API_PATH,
+     methods: ['POST'],
+diff --git a/tests/unit/credit-balance-service.spec.ts b/tests/unit/credit-balance-service.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..50b5bc054bd9551a85d3803a4040e5cc64f5ba86
+--- /dev/null
++++ b/tests/unit/credit-balance-service.spec.ts
+@@ -0,0 +1,99 @@
++import { describe, expect, it, vi } from 'vitest'
++import { createCreditBalanceService } from '../../src/credit-balance-service.js'
++import { PROVIDER_REGISTRY } from '../../src/provider-registry.js'
++
++const secret = 'PRIVATE_LOGIN_TOKEN_EMAIL_URL_MUST_NOT_ESCAPE'
++const balance = (extra: Record<string, unknown> = {}) => ({ total: 42.5, packages: [], ...extra })
++const account = (extra: Record<string, unknown> = {}) => ({ accountId: secret, nickname: secret, balance: balance(), ...extra })
++const wrap = (...accounts: unknown[]) => ({ ok: true, value: { accounts, credentialRef: secret } })
++const make = (read: (id: string) => Promise<unknown>) => createCreditBalanceService({ providers: () => PROVIDER_REGISTRY, read })
++
++describe('跨插件余额投影', () => {
++  it('能力清单来自 registry，发现过程不查询余额', () => {
++    const read = vi.fn()
++    const service = make(read)
++    expect(service.supportedProviders()).toEqual(PROVIDER_REGISTRY.filter((p) => p.credits.balance).map((p) => ({ id: p.id, displayName: p.label })))
++    expect(service.supportedProviders().map((p) => p.id)).toEqual(expect.arrayContaining(['zcode', 'minimax', 'minimaxintl']))
++    expect(read).not.toHaveBeenCalled()
++  })
++
++  it.each(['unknown', 'constructor', '__proto__', '', 'MINIMAX'])('拒绝未知供应商 %s，不调用读取端', async (id) => {
++    const read = vi.fn()
++    await expect(make(read).creditsBalances(id)).rejects.toMatchObject({ name: 'UnsupportedProviderError', message: 'unsupported-provider' })
++    expect(read).not.toHaveBeenCalled()
++  })
++
++  it('空账号池是空结果，不是假零余额', async () => {
++    expect(await make(async () => wrap()).creditsBalances('zcode')).toEqual({ accounts: [] })
++  })
++
++  it('原样区分零余额和小数余额，仅传递选中的供应商', async () => {
++    const read = vi.fn(async () => wrap(account({ balance: balance({ total: 0 }) }), account()))
++    const result = await make(read).creditsBalances('minimaxintl')
++    expect(read).toHaveBeenCalledExactlyOnceWith('minimaxintl')
++    expect(result.accounts.map((a) => a.balance?.total)).toEqual([0, 42.5])
++    expect(result.accounts.map((a) => a.accountId)).toEqual(['account-1', 'account-2'])
++    expect(JSON.stringify(result)).not.toContain(secret)
++  })
++
++  it('多桶、过期包和缺失 remaining 保留原始数值，不制造百分比或补零', async () => {
++    const result = await make(async () => wrap(account({ balance: balance({ packages: [
++      { name: '长期', unit: 'token', remaining: 90, total: 100, used: 10, active: true },
++      { name: '过期', unit: 'credit', total: 100, used: 20, active: false },
++      { name: '临时', unit: 'credit', remaining: 0.5 },
++    ] }) }))).creditsBalances('zcode')
++    expect(result.accounts[0].balance?.packages).toEqual([
++      { name: '长期', unit: 'token', remaining: 90, total: 100, used: 10, active: true },
++      { name: '过期', unit: 'credit', total: 100, used: 20, active: false },
++      { name: '临时', unit: 'credit', remaining: 0.5 },
++    ])
++    expect(result.accounts[0].balance?.packages[1]).not.toHaveProperty('remaining')
++  })
++
++  it('保留明确的单位与毫秒到期时间，未知日期不透传', async () => {
++    const result = await make(async () => wrap(account({ balance: balance({ unit: 'USD', packages: [
++      { remaining: 1, name: '\u0000测试\n', unit: 'credit', deductionEndTime: 1793000000000, expiredTime: '2026-10-27T00:00:00Z', token: secret },
++      { remaining: 2, expiredTime: secret, deductionEndTime: 9e99 },
++    ] }) }))).creditsBalances('buddy')
++    expect(result.accounts[0].balance?.unit).toBe('USD')
++    expect(result.accounts[0].balance?.packages[0]).toEqual({ name: '测试', unit: 'credit', remaining: 1, deductionEndTime: 1793000000000, expiredTime: '2026-10-27T00:00:00.000Z' })
++    expect(result.accounts[0].balance?.packages[1]).toEqual({ name: '额度包 2', unit: 'credit', remaining: 2 })
++    expect(JSON.stringify(result)).not.toContain(secret)
++  })
++
++  it('失败与 stale 账号不返回旧余额，不暴露账号、昵称或错误文本', async () => {
++    const result = await make(async () => wrap(account(), account({ error: secret }), account({ stale: true }), null)).creditsBalances('zcode')
++    expect(result.accounts.map((a) => a.balance?.total ?? null)).toEqual([42.5, null, null, null])
++    expect(result.accounts.map((a) => a.error)).toEqual([undefined, 'unknown', 'stale-balance', 'upstream-invalid-response'])
++    expect(result.accounts[2].stale).toBe(true)
++    expect(JSON.stringify(result)).not.toContain(secret)
++  })
++
++  it.each([-1, NaN, Infinity, '0', null])('坏的余额 %s 不能变成可用的零', async (total) => {
++    const result = await make(async () => wrap(account({ balance: balance({ total }) }))).creditsBalances('buddy')
++    expect(result.accounts[0]).toMatchObject({ balance: null, error: 'upstream-invalid-response' })
++  })
++
++  it.each([{ remaining: -1 }, { remaining: NaN }, { remaining: 2, used: -1 }, {}, null])('坏的积分包拒绝整个账号', async (pkg) => {
++    const result = await make(async () => wrap(account({ balance: balance({ packages: [pkg] }) }))).creditsBalances('buddy')
++    expect(result.accounts[0]).toMatchObject({ balance: null, error: 'upstream-invalid-response' })
++  })
++
++  it.each([null, [], {}, { ok: true }, { ok: true, value: { accounts: {} } }])('异常 envelope 拒绝并返回固定原因', async (response) => {
++    await expect(make(async () => response).creditsBalances('zcode')).rejects.toMatchObject({ message: 'upstream-invalid-response', safeReason: 'upstream-invalid-response' })
++  })
++
++  it('宿主异常与 RPC 失败不透传原文', async () => {
++    for (const read of [async () => { throw new Error(secret) }, async () => ({ ok: false, error: { message: secret } })]) {
++      await expect(make(read).creditsBalances('zcode')).rejects.toMatchObject({ message: 'unknown', safeReason: 'unknown' })
++    }
++  })
++
++  it('只投影允许字段，不改动宿主对象', async () => {
++    const response = wrap(account({ credential: secret, balance: balance({ packages: [{ remaining: 2, token: secret }], extra: secret }) }))
++    const before = structuredClone(response)
++    const result = await make(async () => response).creditsBalances('buddy')
++    expect(response).toEqual(before)
++    expect(result.accounts[0]).toEqual({ accountId: 'account-1', nickname: '账号 1', balance: { total: 42.5, packages: [{ name: '额度包 1', unit: 'credit', remaining: 2 }] } })
++  })
++})
+diff --git a/tests/unit/credit-balance-wiring.spec.ts b/tests/unit/credit-balance-wiring.spec.ts
+new file mode 100644
+index 0000000000000000000000000000000000000000..06c0224f1c688f770fb88fa0e5ef5a3d06e0e060
+--- /dev/null
++++ b/tests/unit/credit-balance-wiring.spec.ts
+@@ -0,0 +1,100 @@
++import { Context } from '@deepseek-ai/cordis'
++import { afterEach, describe, expect, it, vi } from 'vitest'
++import { AccountPool } from '../../src/account-pool.js'
++import { registerJetHubRpc } from '../../src/jet-hub-rpc.js'
++import { PROVIDER_REGISTRY } from '../../src/provider-registry.js'
++import type { CreditBalance } from '../../src/credits.js'
++import { clearProviderRuntimes } from '../../src/provider-runtime.js'
++
++const probes = vi.hoisted(() => ({
++  read: vi.fn(async () => ({ total: 42.5, packages: [], expiredTotal: 0 } as CreditBalance)),
++  claim: vi.fn(),
++}))
++
++// 只替换供应商的取数原语，注册、账号池、凭据解析和既有余额分派全部走真实现。
++vi.mock('../../src/provider-credits.js', async (importOriginal) => {
++  const actual = await importOriginal<typeof import('../../src/provider-credits.js')>()
++  return { ...actual, createProviderCredits: () => ({ buddy: { fetchBalance: probes.read, claim: probes.claim } }) }
++})
++
++const disposers: Array<() => Promise<unknown>> = []
++afterEach(async () => {
++  for (const dispose of disposers.splice(0).reverse()) await dispose()
++  clearProviderRuntimes()
++  vi.unstubAllGlobals()
++  vi.clearAllMocks()
++})
++
++async function setup() {
++  const ctx = new Context()
++  const resolve = vi.fn(async (ref: string) => ({ value: JSON.stringify({ access_token: `${ref}-PRIVATE` }), source: 'fixture' }))
++  ctx.provide('credentials', { resolve } as never)
++  ctx.provide('commands', { register: () => () => {}, definitions: [] } as never)
++  ctx.provide('llm', { listModels: async () => [] } as never)
++  const state: { value: unknown } = { value: undefined }
++  ctx.provide('settings', {
++    register: () => ({ get: () => state.value, replace: (value: unknown) => { state.value = value } }),
++    describe: () => [],
++  } as never)
++  const pool = new AccountPool(ctx)
++  for (const provider of ['buddy', 'workbuddy']) {
++    await pool.addAccount({ id: `${provider}-PRIVATE-ID`, provider, nickname: 'PRIVATE-EMAIL', credentialRef: `${provider.toUpperCase()}_KEY`, enabled: true, refreshable: false, createdAt: 1 })
++  }
++  vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('单测不得访问真实网络') }))
++  const fork = ctx.plugin((inner) => {
++    registerJetHubRpc(inner, pool, Object.fromEntries(PROVIDER_REGISTRY.map((p) => [p.id, {}])) as never)
++  })
++  disposers.push(async () => fork.dispose())
++  const mountConnection = () => {
++    const connection = ctx.plugin((inner) => {
++      inner.provide('connection', { fetch: { register: () => () => {} } } as never)
++    })
++    disposers.push(async () => connection.dispose())
++    return connection
++  }
++  return { ctx, pool, resolve, mountConnection }
++}
++
++describe('宿主余额服务真实接线', () => {
++  it('connection 延迟出现时注册，移除时撤销，重新挂载时创建新实例', async () => {
++    const { ctx, mountConnection } = await setup()
++    expect(ctx.creditBalance).toBeUndefined()
++    const connection = mountConnection()
++    await expect.poll(() => ctx.creditBalance).toBeDefined()
++    const first = ctx.creditBalance
++    expect(first.supportedProviders().map((p) => p.id)).toEqual(expect.arrayContaining(['zcode', 'minimax', 'minimaxintl']))
++    expect(first.supportedProviders().some((p) => p.id === 'opencode')).toBe(false)
++    await connection.dispose()
++    await expect.poll(() => ctx.creditBalance).toBeUndefined()
++    mountConnection()
++    await expect.poll(() => ctx.creditBalance).toBeDefined()
++    expect(ctx.creditBalance).not.toBe(first)
++  })
++
++  it('经现有余额编排读取且仅查询指定供应商，不签到、不选号，返回脱敏读数', async () => {
++    const { ctx, pool, resolve, mountConnection } = await setup()
++    mountConnection()
++    await expect.poll(() => ctx.creditBalance).toBeDefined()
++    const select = vi.spyOn(pool, 'getAvailableAccount')
++    const result = await ctx.creditBalance.creditsBalances('buddy')
++    expect(result).toEqual({ accounts: [{ accountId: 'account-1', nickname: '账号 1', balance: { total: 42.5, packages: [] } }] })
++    expect(probes.read).toHaveBeenCalledOnce()
++    expect(resolve.mock.calls.length).toBeGreaterThan(0)
++    expect(resolve.mock.calls.every(([ref]) => ref === 'BUDDY_KEY')).toBe(true)
++    expect(probes.claim).not.toHaveBeenCalled()
++    expect(select).not.toHaveBeenCalled()
++    expect(JSON.stringify(result)).not.toContain('PRIVATE')
++    expect(globalThis.fetch).not.toHaveBeenCalled()
++  })
++
++  it('OpenCode 通道数和未知供应商不作为余额暴露，也不读取凭据', async () => {
++    const { ctx, resolve, mountConnection } = await setup()
++    mountConnection()
++    await expect.poll(() => ctx.creditBalance).toBeDefined()
++    for (const id of ['opencode', '__proto__', 'unknown']) {
++      await expect(ctx.creditBalance.creditsBalances(id)).rejects.toMatchObject({ name: 'UnsupportedProviderError' })
++    }
++    expect(resolve).not.toHaveBeenCalled()
++    expect(probes.read).not.toHaveBeenCalled()
++  })
++})

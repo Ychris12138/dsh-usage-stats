@@ -112,7 +112,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | OpenRouter | 余额 | `OPENROUTER_MANAGEMENT_KEY` | `/api/v1/credits` |
 | OrcaRouter | 余额 | `ORCAROUTER_API_KEY` | `/v1/balance`（旧部署回退到账单摘要接口） |
 | Moonshot / Kimi API | 余额 | provider `apiKeyEnv` | `/v1/users/me/balance` |
-| OpenCode Go | 订阅 | `OPENCODE_GO_API_KEY` 或本地 `auth.json` | `/zen/go/v1/usage` |
+| OpenCode Go | 订阅 | `OPENCODE_API_KEY`，兼容旧 `OPENCODE_GO_API_KEY` | `/inference/go/v1/usage`（兼容旧 `/zen/go/v1/usage`） |
 | Z.ai / 智谱 | 订阅 | 全球区 `ZAI_API_KEY`；中国区 `ZAI_CODING_CN_API_KEY` | Coding Plan quota/subscription |
 | Kimi For Coding | 订阅 | `KIMI_API_KEY` | `/coding/v1/usages` |
 | MiniMax Coding Plan | 订阅 | 全球区 `MINIMAX_API_KEY`；中国区 `MINIMAX_CN_API_KEY` | `/v1/token_plan/remains` |
@@ -236,7 +236,7 @@ OrcaRouter 优先读取其余额接口 `/v1/balance`，将 paid、free 和 promo
 
 ```yaml
 # ~/.dsh/.credentials.yaml
-OPENCODE_GO_API_KEY: sk-opencode-your-key
+OPENCODE_API_KEY: sk-opencode-your-key
 ZAI_API_KEY: your-zai-key
 # 中国区 Z.ai 用户可选；默认 global
 ZAI_API_REGION: bigmodel-cn
@@ -250,7 +250,11 @@ OLLAMA_API_KEY: sk-ollama-your-key
 COMMANDCODE_API_KEY: user-your-command-code-key
 ```
 
-OpenCode Go 依次尝试 Harness credential、`~/.local/share/opencode/auth.json`，最后才使用显式 `OPENCODE_GO_AUTH_COOKIE + OPENCODE_GO_WORKSPACE_ID` 兼容回退。Bearer usage endpoint 目前不是公开 API，可能随上游变化；Cookie 等同登录凭据，不应进入日志或 issue。
+OpenCode Go 原生路由先读取当前 DSH 使用的 `OPENCODE_API_KEY`，缺少时才兼容旧 `OPENCODE_GO_API_KEY`，然后尝试旧版 OpenCode 的 `~/.local/share/opencode/auth.json`，最后才使用显式 `OPENCODE_GO_AUTH_COOKIE + OPENCODE_GO_WORKSPACE_ID` 兼容回退。显式 monitor/provider credential ref 始终优先，缺失时不借用本地文件或其他账户的凭据。先访问官方迁移后的 `/inference/go/v1/usage`，仅在 404/405 时用同一密钥尝试旧路径；401/403/429 不重试或更换密钥。Bearer usage endpoint 仍不是稳定的公开 API。
+
+若账户卡片显示「未配置」，说明未找到凭据，还未发起额度查询。OpenCode V2 的凭据存储不再等同于旧 `auth.json`；已登录 OpenCode 不代表 DSH 已配置密钥。请在 DSH 的 OpenCode Go 模型设置中配置自己的 Console API Key，或在 DSH credentials 中配置上述引用。不要导出 OpenCode 的凭据数据库或把密钥、Cookie 贴到 issue；本插件不会扫描或解密 V2 凭据数据库。
+
+Cookie 路径仅在没有选中任何 API Key 时使用；已选中的 Key 查询失败，不会再切换到 Cookie 所属的另一账户。
 
 Ollama 云读取 `OLLAMA_API_KEY`，调用 `/api/usage` 展示两个订阅窗口（5 小时会话 + 每周），无余额；`usage` 按 0..1 比例换算为进度条。
 
@@ -383,6 +387,30 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
               currency: /currency
 ```
 
+若余额接口只接受查询参数认证，可用 `auth.type: query`，让 Host 在发请求时从凭据引用注入密钥：
+
+```yaml
+        monitors:
+          aiflashapi:
+            adapter: declarative
+            usageBaseURL: https://api.aiflashapi.com
+            mode: balance
+            request:
+              path: /stats/balance
+              auth:
+                type: query
+                param: key
+                credentialRef: AIFLASHAPI_API_KEY
+            extract:
+              root: /data
+              remaining: /balance_cny
+              currencyValue: CNY
+```
+
+`param` 为 1–64 个字符，以字母或 `_` 开头，后续允许字母、数字、`_ . -`；query auth 只接受 `type`、`param`、`credentialRef`。密钥保存在 DSH credentials 中，不得写入 `request.path`、base URL 或 headers。配置中的同名认证查询参数（包括编码后的同名项）、path fragment，以及 base URL 的查询串或 fragment 均拒绝；其他非敏感 path 查询参数会保留。缺少凭据时不发请求，且沿用 HTTPS、同源、DNS/IP 校验、禁跟随重定向和响应大小限制。上游在套餐名、币种或额度标签等快照字段中回显凭据原值或 URL 编码值时，查询返回固定的 `invalid-response`，回显内容不会写入账户缓存。既有 `bearer`、`raw`、`x-api-key` 配置继续有效。
+
+查询参数认证会让目标服务及其 TLS 终止代理看到含密钥的请求 URL；插件无法保证第三方访问日志不记录它。若接口支持请求头认证，优先选择请求头。
+
 </details>
 
 支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`orcarouter-balance`、`opencode-go`、`commandcode-goat`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`ollama`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`declarative`。
@@ -436,7 +464,7 @@ Procedure:
 
 Optional account setup (never handle secret values yourself):
 - OpenRouter account balance requires OPENROUTER_MANAGEMENT_KEY, not the inference key.
-- OpenCode Go may reuse local auth.json or use OPENCODE_GO_API_KEY.
+- OpenCode Go uses DSH's OPENCODE_API_KEY, retains the legacy OPENCODE_GO_API_KEY fallback, and can reuse a legacy local auth.json when no explicit reference was selected.
 - Z.ai uses ZAI_API_KEY; China accounts may set ZAI_API_REGION=bigmodel-cn.
 - Kimi and MiniMax use KIMI_API_KEY and MINIMAX_API_KEY.
 - Never ask me to paste a key or browser cookie into chat.

@@ -356,6 +356,28 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
               currency: /currency
 ```
 
+若余额接口只接受查询参数认证，可用 `auth.type: query`，让 Host 在发请求时从凭据引用注入密钥：
+
+```yaml
+        monitors:
+          aiflashapi:
+            adapter: declarative
+            usageBaseURL: https://api.aiflashapi.com
+            mode: balance
+            request:
+              path: /stats/balance
+              auth:
+                type: query
+                param: key
+                credentialRef: AIFLASHAPI_API_KEY
+            extract:
+              root: /data
+              remaining: /balance_cny
+              currencyValue: CNY
+```
+
+`param` 为 1–128 个字母、数字或 `_ . ~ -` 字符；密钥保存在 DSH credentials 中，不要写入 `request.path`。同名查询参数会被替换，其他查询参数会保留。缺少凭据时不发请求，且沿用 HTTPS、同源、DNS/IP 校验、禁跟随重定向和响应大小限制；请求 URL 与上游错误不会进入账户快照。既有 `bearer`、`raw`、`x-api-key` 配置继续有效。
+
 </details>
 
 支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`orcarouter-balance`、`opencode-go`、`commandcode-goat`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`ollama`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`declarative`。

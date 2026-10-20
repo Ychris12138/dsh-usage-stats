@@ -747,6 +747,87 @@ console.log("IPv4/IPv6 private-address classification ok");
 }
 
 {
+	const monitor = {
+		adapter: "declarative",
+		mode: "balance",
+		usageBaseURL: "https://relay.example.com",
+		request: {
+			path: "/stats/balance?view=summary&key=old&key=duplicate",
+			auth: { type: "query", param: "key", credentialRef: "QUERY_KEY" }
+		},
+		extract: { root: "/data", valid: "/success", invalidMessage: "/message", remaining: "/balance_cny", currencyValue: "CNY" }
+	};
+	const config = validateAccountConfig({ monitors: { "relay-a": monitor } });
+	const spec = resolveAccountSpec(relay, config);
+	const secret = "query-key +/?&=#%中文";
+	let calls = 0;
+	const service = createAccountService({
+		getProviders: async () => [relay],
+		credentials: credentials({ QUERY_KEY: secret, RELAY_A_KEY: "wrong-provider-key" }),
+		config,
+		deps: { includeLegacyProviders: false, now: () => now, fetch: async (url, init) => {
+			calls += 1;
+			const target = new URL(url);
+			assert.equal(target.origin, "https://relay.example.com");
+			assert.equal(target.pathname, "/stats/balance");
+			assert.equal(target.searchParams.get("view"), "summary");
+			assert.deepEqual(target.searchParams.getAll("key"), [secret], "replace duplicate auth parameters and encode the key exactly once");
+			assert.equal(init.headers.authorization, void 0);
+			assert.equal(init.headers["x-api-key"], void 0);
+			assert.equal(init.redirect, "manual");
+			return jsonResponse({ data: { success: true, balance_cny: 50 } });
+		} }
+	});
+	const views = await service.providerViews();
+	assert.equal(views[0].configured, true, "discovery uses the same nested credential reference as the request");
+	assert.equal(calls, 0, "discovery does not send the query key");
+	const account = await service.get("relay-a");
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 50);
+	assert.equal(account.balance.currency, "CNY");
+	await service.refreshDue({ force: true });
+	assert.equal(calls, 2);
+	for (const value of [config, spec, views, account, service.cached("relay-a")]) {
+		assert.equal(JSON.stringify(value).includes(secret), false);
+		assert.equal(JSON.stringify(value).includes(encodeURIComponent(secret)), false);
+	}
+	const missing = await queryAccount(spec, credentials({ RELAY_A_KEY: "must-not-fall-back" }), {
+		now: () => now, fetch: async () => { throw new Error("must not send a request without QUERY_KEY"); }
+	});
+	assert.equal(missing.status, "not-configured");
+	assert.deepEqual(missing.missingCredentials, ["QUERY_KEY"]);
+	for (const response of [
+		() => { throw new Error(`network failure at https://relay.example.com/?key=${secret}`); },
+		() => jsonResponse({ data: { success: false, message: secret } }),
+		() => new Response(null, { status: 302, headers: { location: `https://elsewhere.example/?key=${secret}` } }),
+		() => jsonResponse({ message: secret }, 401)
+	]) {
+		const failed = await queryAccount(spec, credentials({ QUERY_KEY: secret }), { now: () => now, fetch: response });
+		assert.notEqual(failed.status, "ok");
+		assert.equal(JSON.stringify(failed).includes(secret), false, "URL, redirect and upstream errors cannot leak query credentials");
+	}
+	for (const param of [void 0, null, "", " key", "key=other", "key&extra", "key\n", "key?", "a".repeat(129), 1, {}]) {
+		assert.throws(() => validateAccountConfig({ monitors: { "relay-a": {
+			...monitor, request: { ...monitor.request, auth: { type: "query", param, credentialRef: "QUERY_KEY" } }
+		} } }), /request.auth.param/);
+	}
+	// A self-contained monitor may appear before its settings-backed provider.
+	const standalone = createAccountService({
+		getProviders: async () => [], credentials: credentials({ QUERY_KEY: secret }), config,
+		deps: { includeLegacyProviders: false }
+	});
+	await standalone.validate();
+	assert.equal((await standalone.providerViews())[0].configured, true);
+	const blocked = resolveAccountSpec(relay, validateAccountConfig({ monitors: { "relay-a": {
+		...monitor, usageBaseURL: "https://another.example.com"
+	} } }));
+	assert.equal((await queryAccount(blocked, credentials({ QUERY_KEY: secret }), {
+		fetch: async () => { throw new Error("cross-origin query credentials must not be sent"); }
+	})).status, "blocked");
+	console.log("declarative query authentication encoding, discovery, missing keys, secrecy, validation and origin policy ok");
+}
+
+{
 	const spec = resolveAccountSpec(relay, validateAccountConfig({ monitors: {
 		"relay-a": {
 			adapter: "declarative",

@@ -1,6 +1,6 @@
 # dsh-usage-stats
 
-<!-- stable-version: 0.3.5 -->
+<!-- stable-version: 0.3.6 -->
 
 [![GitHub Release](https://img.shields.io/github/v/release/Ychris12138/dsh-usage-stats?display_name=tag&sort=semver&color=1f6feb)](https://github.com/Ychris12138/dsh-usage-stats/releases/latest)
 [![CI](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml)
@@ -34,17 +34,19 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 
 ## 快速安装 / Quick start
 
-需要 DeepSeek Harness `web` profile（基础功能支持 `@deepseek-ai/dsh >= 0.1.0-rc.6`）。DSH Desktop 的 **DeepSeek Account 登录余额**接入依赖 DSH `0.2.0-rc.2+` 提供的 Host account service；旧版 Harness 仍继续使用 API Key 余额路径。
+本版本为 `@ychris12138/dsh-usage-stats@0.3.6`。npm 与市场安装要求该精确版本已经发布；发布前验收使用从冻结提交构建并核对哈希的本地 `.tgz`。
 
-稳定版优先安装 npm 上的精确版本；这也是 DSH Desktop Market 使用的同一个包：
+基础功能支持 `@deepseek-ai/dsh >= 0.1.0-rc.6`。安装时选择实际使用的 profile：命令行网页通常是 `web`，Desktop 使用 `desktop`；不要把插件装到另一个 profile 后只刷新当前窗口。DSH Desktop 的 **DeepSeek Account 登录余额**接入依赖 DSH `0.2.0-rc.2+` 提供的 Host account service；旧版 Harness 仍继续使用 API Key 余额路径。
+
+确认 npm 上存在本版本后，优先安装精确版本；DSH Desktop Market 使用同一个包：
 
 ```bash
-dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.5"
+dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.6"
 ```
 
-只有测试尚未发布的 source/RC 时才使用 `dsh plugin --profile web add "github:Ychris12138/dsh-usage-stats"`。GitHub `main` 可能领先 npm stable，不应把 source 安装当作市场安装验收。
+Desktop 安装时将上面的 `--profile web` 改为 `--profile desktop`，并使用 Desktop 对应的 DSH CLI。只有明确测试未发布 source/RC 时才使用 GitHub 来源；验收指定候选版本时优先安装从该提交打出的本地 `.tgz`，以免跟随分支变化。GitHub `main` 可能领先 npm stable。
 
-然后重启已经运行的 `dsh web`，并在浏览器中硬刷新。侧边栏底部会出现“用量/余额”（Usage/Balance）入口。
+安装后重启对应 profile 的 DSH Host；Desktop 需要退出并重新打开应用，然后刷新客户端。只刷新窗口不会加载新的服务端插件。侧边栏底部会出现“用量/余额”（Usage/Balance）入口。
 
 ### 插件市场 GUI 安装（DSH Community Market，Path A 标准来源）
 
@@ -53,11 +55,11 @@ dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.5"
 - `catalog/catalog-source.json` — 来源 manifest（`catalog-source.schema.json` v1.0.0）
 - `catalog/v1/plugins.json` — 标准 provider page（`catalog-provider-page.schema.json` v1.0.0）
 
-**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`。当前 stable/catalog 版本是 `0.3.5`；每个新版本都按以下顺序发布：
+**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`。本版本 package 与 catalog 元数据均为 `0.3.6`；目录中的版本号不代表 npm 发布已完成。每个新版本都按以下顺序发布：
 
-1. 运行 `npm run release:sync -- <version>` 同步 `package.json` / `package-lock.json` / `catalog/v1/plugins.json`，再由 `npm run check:release` 阻止身份或版本漂移。
-2. 发布 scoped 公共包：`npm publish --access public`。
-3. 把 `catalog/v1/plugins.json` 内容发布到 `https://ychris12138.github.io/dsh-usage-stats/v1/plugins`（GitHub Pages，manifest 与 endpoint 必须同源、HTTPS 443、无凭据）。
+1. 在 release 分支运行 `npm run release:sync -- <version>` 同步 package、lockfile、README 与 catalog，检查候选包。npm 发布前不要把新 catalog 合入 `main`，因为 Pages 会自动部署。
+2. 从冻结的 `.tgz` 发布 scoped 公共包：`npm publish /absolute/path/to/ychris12138-dsh-usage-stats-0.3.6.tgz --access public --registry=https://registry.npmjs.org/`，再核对 registry tarball 与冻结包的哈希。
+3. npm 包核验通过后，将 `main` 快进到冻结的发布提交，触发 Pages 部署；核验 `https://ychris12138.github.io/dsh-usage-stats/v1/plugins` 的精确版本（manifest 与 endpoint 必须同源、HTTPS 443、无凭据）。
 4. 在 DSH 插件市场 → 来源管理 → 添加来源，粘贴 manifest URL：`https://ychris12138.github.io/dsh-usage-stats/catalog-source.json`，选择后即可走「可恢复安装边界」GUI 安装。
 
 > 目录若先指向尚未发布的版本，市场安装会 fail-closed，这是预期行为。只有 npm、Pages catalog 与 Desktop Market 实际安装全部验证后，才算完成发布。
@@ -111,9 +113,9 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | OrcaRouter | 余额 | `ORCAROUTER_API_KEY` | `/v1/balance`（旧部署回退到账单摘要接口） |
 | Moonshot / Kimi API | 余额 | provider `apiKeyEnv` | `/v1/users/me/balance` |
 | OpenCode Go | 订阅 | `OPENCODE_GO_API_KEY` 或本地 `auth.json` | `/zen/go/v1/usage` |
-| Z.ai / 智谱 | 订阅 | `ZAI_API_KEY` | Coding Plan quota/subscription |
+| Z.ai / 智谱 | 订阅 | 全球区 `ZAI_API_KEY`；中国区 `ZAI_CODING_CN_API_KEY` | Coding Plan quota/subscription |
 | Kimi For Coding | 订阅 | `KIMI_API_KEY` | `/coding/v1/usages` |
-| MiniMax Coding Plan | 订阅 | `MINIMAX_API_KEY` | `/v1/token_plan/remains` |
+| MiniMax Coding Plan | 订阅 | 全球区 `MINIMAX_API_KEY`；中国区 `MINIMAX_CN_API_KEY` | `/v1/token_plan/remains` |
 | Ollama 云 | 订阅 | `OLLAMA_API_KEY` | `/api/usage`（5小时 + 周窗口） |
 | Command Code（Go / GOAT / Pro / Max） | 订阅 + 余额 | `COMMANDCODE_API_KEY` | `/alpha/billing/credits` 等 `/alpha/*`（**实验性**：未公开端点） |
 | New API | 余额 | provider 推理 Token | `/api/usage/token/` |
@@ -121,6 +123,10 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | Sub2API 面板（真实） | 余额 | provider 推理 Token | `/user/balance`（复用 apiKey） |
 | CodeArts 系反代（`dsh-codearts-auth`） | 订阅 | 宿主插件账号池；本插件不读取 AK/SK | `creditBalance.creditsBalances()`（进程内） |
 | General / Declarative | 余额或订阅 | 配置中的 credential ref | 受限 GET + JSON |
+
+DSH 注册表仅返回路由 ID、未提供连接字段时，`minimax` 默认读取 `MINIMAX_API_KEY` 并请求全球区，`minimax-cn` 默认读取 `MINIMAX_CN_API_KEY` 并请求中国区。两条默认凭据不会互相回退。显式 `credentialRef` / provider `apiKeyEnv` 仍优先，引用缺失时不会借用默认 Key；自定义路由、provider endpoint 或自定义 `usageBaseURL` 不会自动继承这些凭据。这里显示的是 Coding Plan 订阅额度，不代表支持任意 MiniMax API 钱包余额或 Providers Hub 的 MiniMax Code 账号池。
+
+MiniMax 区域优先级为 `monitors.<id>.region` > `MINIMAX_API_REGION` > route/baseURL/credential ref 推断。中国区与全球区凭据请匹配相应区域；明确区域的请求不会因 1004/2049 拒绝而切到另一区域，显式 `usageBaseURL` 仍只访问指定地址。
 
 没有公开账户接口的供应商仍会正常统计 Token；账户卡片会明确显示“不支持”，不会猜测余额。
 
@@ -177,6 +183,7 @@ DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key �
 - `deepseek-account`：使用 Desktop/Settings 已保存的账号 grant，通过官方 Host service 查询；
 - 充值余额与赠送余额按币种合并；CNY 与 USD 同时存在时**分别显示，绝不跨币种相加**；
 - Host Account 不参加后台账户轮询。只有带真实 UI 版本/语言/时区 metadata 的面板读取才会查询余额；退出或切换账号后，下一次 UI 读取不会继续复用旧余额；
+- Host 账户服务动态获取，服务晚加载或重载后可自动恢复；服务替换、移除或退出登录后不复用此前余额。Desktop 更新插件后若服务端尚未重新加载，需要重启 Desktop Host，单独刷新窗口不能替代服务端重载；
 - 未登录显示“未登录 DeepSeek Account”，不会误提示用户配置 `DEEPSEEK_API_KEY`。
 
 ### CodeArts 系反代供应商（dsh-codearts-auth）
@@ -237,6 +244,8 @@ KIMI_API_KEY: your-kimi-key
 MINIMAX_API_KEY: your-minimax-key
 # 中国区 MiniMax 用户可选；默认 global
 MINIMAX_API_REGION: cn
+# DSH 中国区 minimax-cn 路由默认使用此凭据名
+MINIMAX_CN_API_KEY: your-minimax-cn-key
 OLLAMA_API_KEY: sk-ollama-your-key
 COMMANDCODE_API_KEY: user-your-command-code-key
 ```
@@ -282,6 +291,10 @@ Provider 识别：id 为 `commandcode`、`commandcode-goat-autosync` 等 `comman
 与 OpenCode Go、Z.ai 一样，没有任何 Command Code 路由的安装也会看到一张「未配置」的占位卡片；Command Code 是转售上游模型，它的路由不参与本插件的模型价格估算。
 
 Z.ai 全球区使用 `api.z.ai`，中国区使用 `open.bigmodel.cn`。MiniMax 优先使用官方 `www.minimax.io` / `www.minimaxi.com` Token Plan 地址，并解析 5 小时与周窗口的剩余比例和重置时间。
+
+DSH 0.2 的 provider registry 可能只提供 `zai-coding-cn` 的 route id，而不再附带 `apiKeyEnv` 或 `baseURL`。当没有显式凭据引用且查询中国区时，插件优先读取 DSH 使用的 `ZAI_CODING_CN_API_KEY`，缺失时兼容旧的 `ZAI_API_KEY`；两者同时存在时使用前者。显式 `monitors.<provider>.credentialRef` 优先于 provider 的 `apiKeyEnv`，指定引用缺失时不会改用其他 Key，上游拒绝凭据时也不会轮换 Key 重试。自定义 provider 不会借用这些默认凭据。
+
+区域设置沿用 `monitors.<provider>.region` > `ZAI_API_REGION` > route/baseURL 推断的顺序，`zai-coding-cn` 默认请求中国区。若区域被覆盖为全球区，默认凭据只读取 `ZAI_API_KEY`，不会把 `ZAI_CODING_CN_API_KEY` 发送到全球区；全球 `zai` 路由也不会隐式借用 CN 路由的 Key。供应商“已配置”状态、手动查询与后台刷新使用相同的凭据解析规则。
 
 ### New API、Sub2API 与自定义 monitor
 
@@ -413,13 +426,13 @@ Constraints:
 
 Procedure:
 1. Confirm node, npx, and dsh are available.
-2. Prefer the exact npm stable used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.5"` (or update the existing scoped package).
-3. Use `github:Ychris12138/dsh-usage-stats` only when I explicitly ask to test unreleased source/RC code.
+2. Resolve the actual profile first (Desktop: desktop; CLI web: web). Verify the exact version exists in npm, then install the version used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.6"` (or update the existing scoped package).
+3. Use a local tarball built from the specified candidate commit when I ask to test an RC; use `github:Ychris12138/dsh-usage-stats` only for an explicitly requested source test.
 4. If dsh plugin is unavailable, use the compatible source installer only with my approval: `npx --yes github:Ychris12138/dsh-usage-stats`.
 5. Do not combine bundle installation with an existing manual dsh-usage-stats Cordis entry.
 6. For npx, require a verified package and exactly one Cordis entry, then run again with --check.
 7. Report the exact package identity/version, installation path, and resolved profile paths.
-8. If dsh web is running, report that a restart is needed and stop.
+8. If the target Host is running, report that a Host restart is needed; a client refresh alone cannot reload the server plugin. Restart it only if I have authorized that action.
 
 Optional account setup (never handle secret values yourself):
 - OpenRouter account balance requires OPENROUTER_MANAGEMENT_KEY, not the inference key.
@@ -513,7 +526,7 @@ node scripts/check-balance.mjs
 
 ## 兼容性与致谢 / Compatibility & credits
 
-当前 npm stable 为 `0.3.5`；`v0.3.5` 的完整发布门禁见 [`docs/release-checklist.md`](docs/release-checklist.md)，变更摘要见 [`docs/release-notes-v0.3.5.md`](docs/release-notes-v0.3.5.md)。DSH `0.2.0-rc.2+` 的 `deepseek-account` Host service 已完成真实 Desktop 登录/退出/重新登录验收；旧版 Harness 的 API Key 路径继续保持兼容。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
+本版本 `0.3.6` 的范围与验收记录见 [`release plan`](docs/release-plan-v0.3.6.md)、[`release notes`](docs/release-notes-v0.3.6.md) 和 [`release checklist`](docs/release-checklist.md)。2026-10-17 已在 DSH Desktop `0.2.0-rc.2` 完成真实 `0.3.6` 升级：MiniMax CN 订阅额度与 DeepSeek Account 余额均显示“实时”，原有 Token 总量、provider 选择及配置/凭据元数据保持不变。当前账户退出与服务移除场景通过自动化回归覆盖；没有修改真实账号登录状态来重复验收。旧版 Harness 的 API Key 路径继续保持兼容。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
 
 持久化与活跃会话的读取按**能力探测**分支，不按版本号判断，因此 `>= 0.1.0-rc.6` 的支持范围未变：`0.1.3-alpha.1`–`0.1.5-rc.2` 用 `list()` 快照 + `open(id, "read")` 读句柄，`0.1.0-rc.7`–`0.1.2-rc.1` 用 `listSnapshots()` + `readFrom()`；活跃会话同时支持 `seq`/`snapshotEvents()` 与旧版 `events` 数组。`session/disposed` 在该范围内均存在（缺少它时已结束会话改由后台全量扫描补读）。缓存格式仍为 `version: 5`，旧缓存直接复用并原地重折叠。
 

@@ -436,6 +436,47 @@ const noLocalAuth = {
 }
 
 {
+	// Route inference is a fallback. The monitor and the configured region
+	// remain deliberate choices, and every chosen region pins the credential.
+	const cases = [
+		{ name: "inferred global", options: { inferredRegion: "global" }, region: "global" },
+		{ name: "inferred CN", options: { inferredRegion: "cn" }, region: "cn" },
+		{ name: "configured CN beats inferred global", options: { inferredRegion: "global" }, configured: "cn", region: "cn" },
+		{ name: "configured global beats inferred CN", options: { inferredRegion: "cn" }, configured: "global", region: "global" },
+		{ name: "monitor CN beats configured global", options: { region: "cn", inferredRegion: "global" }, configured: "global", region: "cn" },
+		{ name: "monitor global beats configured CN", options: { region: "global", inferredRegion: "cn" }, configured: "cn", region: "global" },
+		{ name: "empty configured region keeps inference", options: { inferredRegion: "cn" }, configured: "   ", region: "cn" },
+		{ name: "trimmed configured region", options: { inferredRegion: "global" }, configured: " cn ", region: "cn" }
+	];
+	for (const test of cases) {
+		for (const failure of [null, { http: 401 }, { code: 1004 }, { code: 2049 }]) {
+			const calls = [];
+			const values = { MINIMAX_API_KEY: "region-mock-secret", ...(test.configured === void 0 ? {} : { MINIMAX_API_REGION: test.configured }) };
+			const result = await collectSubscription("minimax", credentials(values), test.options, {
+				now: () => now,
+				fetch: async (url, init) => {
+					calls.push(String(url));
+					assert.equal(init.headers.authorization, "Bearer region-mock-secret", test.name);
+					return {
+						ok: failure?.http === void 0,
+						status: failure?.http ?? 200,
+						json: async () => failure === null
+							? { base_resp: { status_code: 0 }, model_remains: [{ model_name: "general", current_interval_remaining_percent: 55 }] }
+							: { base_resp: { status_code: failure.code ?? 0 } }
+					};
+				}
+			});
+			const host = test.region === "cn" ? "www.minimaxi.com" : "www.minimax.io";
+			assert.equal(result.status, failure === null ? "ok" : "unauthorized", test.name);
+			assert.equal(result.region, test.region, test.name);
+			assert.deepEqual(calls, [`https://${host}/v1/token_plan/remains`], `${test.name}: never probe the other region`);
+			assert.equal(JSON.stringify(result).includes("region-mock-secret"), false, test.name);
+		}
+	}
+	console.log("MiniMax monitor/configured/inferred region precedence and rejection pinning ok");
+}
+
+{
 	// An explicit usage endpoint is the caller's answer for the region; a
 	// credential rejection there must not probe the other region's hosts.
 	const calls = [];

@@ -39,6 +39,94 @@ function statusErrorFromTest(status, message) {
 }
 
 const now = Date.parse("2026-08-15T00:00:00Z");
+
+// BEGIN MiniMax id-only regression matrix
+{
+	const cases = [
+		{ name: "id-only global", key: "minimax-mock-secret", host: "www.minimax.io" },
+		{ name: "id-only CN", provider: { id: "minimax-cn" }, keys: { MINIMAX_API_KEY: "wrong-mock-secret", MINIMAX_CN_API_KEY: "cn-mock-secret" }, key: "cn-mock-secret", host: "www.minimaxi.com" },
+		{ name: "explicit CN", monitor: { region: "cn" }, key: "minimax-mock-secret", host: "www.minimaxi.com" },
+		{ name: "configured CN overrides global inference", keys: { MINIMAX_API_KEY: "minimax-mock-secret", MINIMAX_API_REGION: "cn" }, key: "minimax-mock-secret", host: "www.minimaxi.com" },
+		{ name: "configured global overrides CN inference", provider: { id: "minimax-cn" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret", MINIMAX_API_REGION: "global" }, key: "cn-mock-secret", host: "www.minimax.io" },
+		{ name: "monitor global overrides configured CN", monitor: { region: "global" }, keys: { MINIMAX_API_KEY: "minimax-mock-secret", MINIMAX_API_REGION: "cn" }, key: "minimax-mock-secret", host: "www.minimax.io" },
+		{ name: "monitor CN overrides configured global", monitor: { region: "cn" }, keys: { MINIMAX_API_KEY: "minimax-mock-secret", MINIMAX_API_REGION: "global" }, key: "minimax-mock-secret", host: "www.minimaxi.com" },
+		{ name: "empty configured region preserves CN inference", provider: { id: "minimax-cn" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret", MINIMAX_API_REGION: "   " }, key: "cn-mock-secret", host: "www.minimaxi.com" },
+		{ name: "provider ref", provider: { apiKeyEnv: "PROVIDER_KEY" }, keys: { PROVIDER_KEY: "provider-mock-secret" }, key: "provider-mock-secret" },
+		{ name: "monitor ref", provider: { apiKeyEnv: "PROVIDER_KEY" }, monitor: { credentialRef: "MONITOR_KEY" }, keys: { PROVIDER_KEY: "wrong-mock-secret", MONITOR_KEY: "monitor-mock-secret" }, key: "monitor-mock-secret" },
+		{ name: "CN provider ref", provider: { id: "minimax-cn", apiKeyEnv: "PROVIDER_KEY" }, keys: { MINIMAX_CN_API_KEY: "wrong-mock-secret", PROVIDER_KEY: "provider-mock-secret" }, key: "provider-mock-secret", host: "www.minimaxi.com" },
+		{ name: "CN monitor ref", provider: { id: "minimax-cn", apiKeyEnv: "PROVIDER_KEY" }, monitor: { credentialRef: "MONITOR_KEY" }, keys: { MINIMAX_CN_API_KEY: "wrong-mock-secret", PROVIDER_KEY: "wrong-mock-secret", MONITOR_KEY: "monitor-mock-secret" }, key: "monitor-mock-secret", host: "www.minimaxi.com" },
+		{ name: "missing default", keys: {}, missingRef: "MINIMAX_API_KEY" },
+		{ name: "missing CN default never borrows global key", provider: { id: "minimax-cn" }, missingRef: "MINIMAX_CN_API_KEY" },
+		{ name: "missing explicit ref", monitor: { credentialRef: "MISSING_KEY" } },
+		{ name: "missing provider ref", provider: { apiKeyEnv: "MISSING_KEY" } },
+		{ name: "missing CN explicit ref", provider: { id: "minimax-cn" }, monitor: { credentialRef: "MISSING_KEY" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret" } },
+		{ name: "missing CN provider ref", provider: { id: "minimax-cn", apiKeyEnv: "MISSING_KEY" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret" } },
+		{ name: "custom route", provider: { id: "custom-minimax" }, monitor: { adapter: "minimax-token-plan" } },
+		{ name: "minimax-coding alias has no invented default", provider: { id: "minimax-coding" } },
+		{ name: "minimaxi alias has no invented default", provider: { id: "minimaxi" } },
+		{ name: "custom endpoint", monitor: { usageBaseURL: "https://quota.example.invalid/usage" } },
+		{ name: "provider endpoint", provider: { baseURL: "https://api.minimax.io/anthropic" } },
+		{ name: "CN custom endpoint", provider: { id: "minimax-cn" }, monitor: { usageBaseURL: "https://quota.example.invalid/usage" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret" } },
+		{ name: "CN provider endpoint", provider: { id: "minimax-cn", baseURL: "https://api.minimaxi.com/anthropic" }, keys: { MINIMAX_CN_API_KEY: "cn-mock-secret" } },
+		{ name: "custom endpoint with explicit reference", monitor: { usageBaseURL: "https://quota.example.invalid/usage", credentialRef: "MONITOR_KEY" }, keys: { MINIMAX_API_KEY: "wrong-mock-secret", MONITOR_KEY: "monitor-mock-secret" }, key: "monitor-mock-secret", host: "quota.example.invalid" },
+		{ name: "different adapter", monitor: { adapter: "general" } }
+	];
+	for (const test of cases) {
+		const calls = [];
+		const provider = { id: "minimax", ...test.provider };
+		const service = createAccountService({
+			credentials: credentials(test.keys ?? { MINIMAX_API_KEY: "minimax-mock-secret" }),
+			getProviders: async () => [provider],
+			config: validateAccountConfig(test.monitor === void 0 ? {} : { monitors: { [provider.id]: { adapter: "minimax-token-plan", ...test.monitor } } }),
+			deps: { includeLegacyProviders: false, now: () => now, fetch: async (url, init) => {
+				calls.push({ url: String(url), authorization: init.headers.authorization });
+				return jsonResponse({ base_resp: { status_code: 0 }, model_remains: [{ model_name: "MiniMax-M2", current_interval_remaining_percent: 55 }] });
+			} }
+		});
+		const before = await service.providerViews();
+		assert.equal(before[0].configured, test.key !== void 0, test.name);
+		assert.equal(calls.length, 0, "discovery must not call upstream");
+		const account = await service.get(provider.id);
+		assert.equal(account.status, test.key === void 0 ? "not-configured" : "ok", test.name);
+		assert.equal(calls.length, test.key === void 0 ? 0 : 1, test.name);
+		if (test.key !== void 0) {
+			assert.equal(new URL(calls[0].url).hostname, test.host ?? "www.minimax.io", test.name);
+			assert.ok(calls[0].authorization.includes(test.key), test.name);
+		}
+		if (test.missingRef !== void 0) assert.deepEqual(account.missingCredentials, [test.missingRef], test.name);
+		const after = await service.providerViews();
+		assert.equal(after[0].configured, before[0].configured, test.name);
+		const refreshed = await service.refreshDue({ force: true });
+		assert.equal(refreshed[0].status, account.status, test.name);
+		assert.equal(calls.length, test.key === void 0 ? 0 : 2, `${test.name}: forced refresh`);
+		for (const call of calls) {
+			assert.equal(new URL(call.url).hostname, test.host ?? "www.minimax.io", `${test.name}: refresh preserves region`);
+			assert.equal(call.authorization, `Bearer ${test.key}`, `${test.name}: refresh preserves credential`);
+		}
+		for (const secret of ["minimax-mock-secret", "cn-mock-secret", "provider-mock-secret", "monitor-mock-secret", "wrong-mock-secret"]) {
+			assert.equal(JSON.stringify({ before, account, after, refreshed }).includes(secret), false, test.name);
+		}
+	}
+	for (const route of [
+		{ id: "minimax", keys: { MINIMAX_API_KEY: "rejected-mock-secret" }, host: "www.minimax.io" },
+		{ id: "minimax-cn", keys: { MINIMAX_CN_API_KEY: "rejected-mock-secret" }, host: "www.minimaxi.com" },
+		{ id: "minimax", keys: { MINIMAX_API_KEY: "rejected-mock-secret", MINIMAX_API_REGION: "cn" }, host: "www.minimaxi.com" }
+	]) {
+		for (const failure of [{ http: 401 }, { code: 1004 }, { code: 2049 }]) {
+			const calls = [];
+			const rejected = await queryAccount(resolveAccountSpec({ id: route.id }, validateAccountConfig()), credentials(route.keys), {
+				now: () => now, fetch: async (url) => {
+					calls.push(String(url));
+					return jsonResponse({ base_resp: { status_code: failure.code ?? 0 } }, failure.http ?? 200);
+				}
+			});
+			assert.equal(rejected.status, "unauthorized");
+			assert.deepEqual(calls, [`https://${route.host}/v1/token_plan/remains`], "rejected inferred/configured-region credentials must not cross regions");
+		}
+	}
+	console.log("MiniMax id-only discovery/query/refresh, credential boundaries, and region regression matrix ok");
+}
+// END MiniMax id-only regression matrix
 const relay = {
 	id: "relay-a",
 	displayName: "Relay A",
@@ -2272,6 +2360,97 @@ console.log("snapshot -> " + snapshot.status);
 }
 
 {
+	let host = null;
+	let login = "credential-stored";
+	let balanceCalls = 0;
+	const clientMetadata = { version: "0.2.0", locale: "zh-CN", timezoneOffsetSeconds: 28800 };
+	const service = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [{ id: "deepseek-account" }],
+		config: validateAccountConfig({ refresh: { enabled: false } }),
+		deps: { includeLegacyProviders: false, now: () => now, deepseekAccount: () => host }
+	});
+	assert.equal((await service.get("deepseek-account", { clientMetadata })).status, "unsupported");
+	host = {
+		getState: async () => ({ status: login }),
+		getBalance: async () => { balanceCalls += 1; return { status: "ready", value: [{ currency: "CNY", balance: "12" }], bonusWallets: [] }; }
+	};
+	assert.equal((await service.providerViews())[0].configured, true);
+	assert.equal((await service.get("deepseek-account", { clientMetadata })).balance.remaining, 12);
+	login = "signed-out";
+	const signedOutView = (await service.providerViews())[0];
+	assert.equal(signedOutView.configured, false, "discovery must not keep cached signed-in state");
+	assert.equal(signedOutView.status, "signed-out");
+	assert.equal(signedOutView.alert, null, "discovery must not retain the signed-out account's balance alert");
+	assert.equal((await service.get("deepseek-account", { clientMetadata })).balance, null);
+	assert.equal(balanceCalls, 1, "signed-out reads must not query a wallet");
+	login = "credential-stored";
+	assert.equal((await service.providerViews())[0].configured, true, "a later sign-in must clear cached signed-out state");
+	host = { getState: async () => ({ status: login }), getBalance: async () => ({ status: "failed" }) };
+	const replaced = await service.get("deepseek-account", { clientMetadata });
+	assert.equal(replaced.status, "unavailable");
+	assert.equal(replaced.balance, null, "a replacement service's failed read cannot retain another service's wallet");
+	assert.equal(replaced.stale, false);
+	await service.refreshAll();
+	await service.refreshDue({ force: true });
+	assert.equal(balanceCalls, 1, "the account service remains excluded from background refresh");
+	host = null;
+	assert.equal((await service.get("deepseek-account", { clientMetadata })).status, "unsupported");
+	assert.equal((await service.providerViews())[0].configured, false);
+	console.log("DeepSeek Account late service, replacement, sign-out, and sign-in invalidate obsolete snapshots ok");
+}
+
+{
+	let resolveBalance;
+	let balanceCalls = 0;
+	let methodReceiver;
+	const host = {
+		getState: async () => ({ status: "credential-stored" }),
+		async getBalance() {
+			methodReceiver = this;
+			balanceCalls += 1;
+			await new Promise((resolve) => { resolveBalance = resolve; });
+			return { status: "ready", value: [{ currency: "CNY", balance: "3" }], bonusWallets: [] };
+		}
+	};
+	const service = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [],
+		deps: {
+			includeLegacyProviders: false,
+			deepseekAccount: () => new Proxy(host, { get: (target, key, receiver) => key === Symbol.for("cordis.original") ? target : Reflect.get(target, key, receiver) })
+		}
+	});
+	const clientMetadata = { version: "0.2.0", locale: "en", timezoneOffsetSeconds: 0 };
+	const first = service.get("deepseek-account", { clientMetadata });
+	await new Promise((resolve) => setImmediate(resolve));
+	const second = service.get("deepseek-account", { clientMetadata });
+	await new Promise((resolve) => setImmediate(resolve));
+	assert.equal(balanceCalls, 1, "fresh Cordis wrappers must still share the same in-flight service query");
+	assert.notEqual(methodReceiver, host, "service calls must retain their traceable proxy receiver");
+	resolveBalance();
+	assert.equal((await first).balance.remaining, 3);
+	assert.equal((await second).balance.remaining, 3);
+	assert.equal((await service.providerViews())[0].status, "ok", "fresh wrappers must not invalidate a valid cached snapshot");
+	console.log("DeepSeek Account fresh Cordis wrappers preserve single-flight and scoped service calls ok");
+}
+
+{
+	const service = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [{ id: "deepseek-official", apiKeyEnv: "DEEPSEEK_API_KEY" }],
+		deps: { deepseekAccount: () => null }
+	});
+	const views = await service.providerViews();
+	assert.equal(views.some((entry) => entry.id === "deepseek-account"), false);
+	assert.ok(views.some((entry) => entry.id === "deepseek-official"));
+	assert.ok(views.some((entry) => entry.id === "opencode-go"));
+	assert.ok(views.some((entry) => entry.id === "zai"));
+	assert.equal((await service.get("deepseek-official")).status, "not-configured");
+	console.log("missing optional DeepSeek Account service preserves legacy provider discovery ok");
+}
+
+{
 	// A MiniMax CN route that declares only its credential ref (the host's
 	// built-in minimax-cn profile) must reach the CN quota hosts. Without the
 	// route-id hint the key is rejected globally and the panel shows
@@ -2305,6 +2484,184 @@ console.log("snapshot -> " + snapshot.status);
 	assert.equal(calls[0].auth, "Bearer sk-cp-cn-key");
 	assert.equal(JSON.stringify(account).includes("sk-cp-cn-key"), false, "API key must never cross the account snapshot boundary");
 	console.log("MiniMax CN route id selects the CN quota hosts ok");
+}
+
+{
+	// DSH 0.2 provider registries may expose zai-coding-cn without the
+	// apiKeyEnv/baseURL fields that older settings profiles carried. The
+	// canonical route must still bind the standard Z.ai credential and CN host.
+	const calls = [];
+	const provider = { id: "zai-coding-cn", displayName: "Z.ai CN" };
+	const spec = resolveAccountSpec(provider, validateAccountConfig());
+	assert.equal(spec.adapter, "zai-token-plan");
+	assert.equal(spec.apiKeyRef, "ZAI_API_KEY");
+	const account = await queryAccount(spec, credentials({ ZAI_API_KEY: "zai-cn-secret" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), init });
+			if (String(url).endsWith("/quota/limit")) {
+				return jsonResponse({ data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, remaining: 900 }] } });
+			}
+			return jsonResponse({ data: [{ product_name: "GLM Coding Pro" }] });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.deepEqual(calls.map((call) => call.url), [
+		"https://open.bigmodel.cn/api/monitor/usage/quota/limit",
+		"https://open.bigmodel.cn/api/biz/subscription/list"
+	]);
+	assert.ok(calls.every((call) => call.init.headers.authorization === "zai-cn-secret"));
+	assert.equal(JSON.stringify(account).includes("zai-cn-secret"), false, "Z.ai key must not cross the account snapshot boundary");
+	const missing = await queryAccount(spec, credentials({}), {
+		now: () => now,
+		fetch: async () => { throw new Error("missing credentials must not reach upstream"); }
+	});
+	assert.equal(missing.status, "not-configured");
+	assert.deepEqual(missing.missingCredentials, ["ZAI_CODING_CN_API_KEY"]);
+	console.log("Z.ai CN route without connection metadata binds key and region safely ok");
+}
+
+{
+	// #129: the Host registry can expose only the route id while DSH stores
+	// its key under ZAI_CODING_CN_API_KEY. Discovery and queries must agree.
+	const defaults = { ZAI_CODING_CN_API_KEY: "cn-route-secret", ZAI_API_KEY: "legacy-secret" };
+	const cases = [
+		{ name: "CN route key only", keys: { ZAI_CODING_CN_API_KEY: defaults.ZAI_CODING_CN_API_KEY }, key: "cn-route-secret" },
+		{ name: "legacy key only", keys: { ZAI_API_KEY: defaults.ZAI_API_KEY }, key: "legacy-secret" },
+		{ name: "CN route key wins", key: "cn-route-secret" },
+		{ name: "empty CN key falls back locally", keys: { ...defaults, ZAI_CODING_CN_API_KEY: "  " }, key: "legacy-secret" },
+		{ name: "global route keeps global key", id: "zai", key: "legacy-secret", host: "api.z.ai" },
+		{ name: "global route cannot borrow CN key", id: "zai", keys: { ZAI_CODING_CN_API_KEY: "cn-route-secret" } },
+		{ name: "global route in CN still cannot borrow CN key", id: "zai", keys: { ZAI_CODING_CN_API_KEY: "cn-route-secret", ZAI_API_REGION: "cn" } },
+		{ name: "global environment never sends CN key", keys: { ...defaults, ZAI_API_REGION: "global" }, key: "legacy-secret", host: "api.z.ai" },
+		{ name: "global environment with only CN key stays unconfigured", keys: { ZAI_CODING_CN_API_KEY: "cn-route-secret", ZAI_API_REGION: "global" } },
+		{ name: "CN monitor overrides global environment", keys: { ...defaults, ZAI_API_REGION: "global" }, monitor: { region: "cn" }, key: "cn-route-secret" },
+		{ name: "global monitor overrides CN environment", keys: { ...defaults, ZAI_API_REGION: "cn" }, monitor: { region: "global" }, key: "legacy-secret", host: "api.z.ai" },
+		{ name: "provider credential wins", apiKeyEnv: "PROVIDER_KEY", keys: { ...defaults, PROVIDER_KEY: "provider-secret" }, key: "provider-secret" },
+		{ name: "monitor credential wins over provider", apiKeyEnv: "PROVIDER_KEY", monitor: { credentialRef: "MONITOR_KEY" }, keys: { ...defaults, PROVIDER_KEY: "provider-secret", MONITOR_KEY: "monitor-secret" }, key: "monitor-secret" },
+		{ name: "missing provider credential cannot fall back", apiKeyEnv: "MISSING_KEY" },
+		{ name: "missing monitor credential cannot fall back", apiKeyEnv: "ZAI_API_KEY", monitor: { credentialRef: "MISSING_KEY" } },
+		{ name: "custom provider cannot borrow defaults", id: "custom-zai", monitor: {} }
+	];
+	for (const test of cases) {
+		const id = test.id ?? "zai-coding-cn";
+		const calls = [];
+		const service = createAccountService({
+			credentials: credentials(test.keys ?? defaults),
+			getProviders: async () => [{ id, ...(test.apiKeyEnv === void 0 ? {} : { apiKeyEnv: test.apiKeyEnv }) }],
+			config: validateAccountConfig(test.monitor === void 0 ? {} : { monitors: { [id]: { adapter: "zai-token-plan", ...test.monitor } } }),
+			deps: {
+				includeLegacyProviders: false,
+				now: () => now,
+				fetch: async (url, init) => {
+					calls.push({ url: String(url), authorization: init.headers.authorization });
+					return jsonResponse({ data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, remaining: 900 }] } });
+				}
+			}
+		});
+		const before = await service.providerViews();
+		assert.equal(before[0].configured, test.key !== void 0, `${test.name}: initial provider view`);
+		assert.equal(calls.length, 0, `${test.name}: provider discovery must not query upstream`);
+		const account = await service.get(id);
+		assert.equal(account.status, test.key === void 0 ? "not-configured" : "ok", test.name);
+		assert.equal(calls.length, test.key === void 0 ? 0 : 2, test.name);
+		for (const call of calls) {
+			assert.equal(new URL(call.url).hostname, test.host ?? "open.bigmodel.cn", test.name);
+			assert.equal(call.authorization, test.key, test.name);
+		}
+		const after = await service.providerViews();
+		assert.equal(after[0].configured, before[0].configured, `${test.name}: cached provider view`);
+		const snapshots = JSON.stringify({ before, account, after });
+		for (const secret of ["cn-route-secret", "legacy-secret", "provider-secret", "monitor-secret"]) {
+			assert.equal(snapshots.includes(secret), false, `${test.name}: credentials must not cross the snapshot boundary`);
+		}
+		// Exercise the same binding through the server-owned refresh scheduler.
+		const refreshed = await service.refreshDue({ force: true });
+		assert.equal(refreshed[0].status, account.status, `${test.name}: scheduled refresh`);
+	}
+	console.log("Z.ai route credential discovery, precedence, region isolation, and refresh regression matrix ok");
+}
+
+{
+	const refs = [];
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "zai-coding-cn" }, validateAccountConfig());
+	const account = await queryAccount(spec, {
+		resolve: async (ref) => {
+			refs.push(ref);
+			return { value: { ZAI_CODING_CN_API_KEY: "rejected-cn-secret", ZAI_API_KEY: "other-account-secret" }[ref] };
+		}
+	}, {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), authorization: init.headers.authorization });
+			return jsonResponse({}, 401);
+		}
+	});
+	assert.equal(account.status, "unauthorized");
+	assert.equal(calls.length, 1, "a rejected CN key must not trigger a different-account retry");
+	assert.equal(calls[0].authorization, "rejected-cn-secret");
+	assert.equal(refs.includes("ZAI_API_KEY"), false, "a present CN key must not resolve the legacy key");
+	assert.equal(JSON.stringify(account).includes("rejected-cn-secret"), false);
+	console.log("Z.ai authentication failure never rotates to a different credential ok");
+}
+
+{
+	// An explicit monitor region remains authoritative over the canonical CN id.
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "zai-coding-cn", displayName: "Z.ai CN" }, validateAccountConfig({ monitors: {
+		"zai-coding-cn": { adapter: "zai-token-plan", region: "bigmodel-cn" }
+	} }));
+	const account = await queryAccount(spec, credentials({ ZAI_API_KEY: "zai-cn-secret", ZAI_API_REGION: "global" }), {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			return jsonResponse({ data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, remaining: 900 }] } });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(calls[0], "https://open.bigmodel.cn/api/monitor/usage/quota/limit");
+	console.log("Z.ai explicit monitor region precedence preserved ok");
+}
+
+{
+	// A user-supplied credentialRef must remain authoritative; the id-only
+	// fallback must not silently read ZAI_API_KEY instead.
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "zai-coding-cn", displayName: "Z.ai CN" }, validateAccountConfig({ monitors: {
+		"zai-coding-cn": { adapter: "zai-token-plan", credentialRef: "CUSTOM_ZAI_KEY" }
+	} }));
+	assert.equal(spec.apiKeyRef, "CUSTOM_ZAI_KEY");
+	const account = await queryAccount(spec, credentials({ ZAI_API_KEY: "wrong-key", CUSTOM_ZAI_KEY: "custom-key" }), {
+		now: () => now,
+		fetch: async (url, init) => {
+			calls.push({ url: String(url), authorization: init.headers.authorization });
+			return jsonResponse({ data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, remaining: 900 }] } });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(calls[0].authorization, "custom-key");
+	assert.equal(calls[0].url, "https://open.bigmodel.cn/api/monitor/usage/quota/limit");
+	assert.equal(JSON.stringify(account).includes("custom-key"), false);
+	console.log("Z.ai explicit credentialRef precedence preserved ok");
+}
+
+{
+	// Preserve the existing environment override: an explicit ZAI_API_REGION
+	// can still select global for a canonical CN route when no monitor region is
+	// configured.
+	const calls = [];
+	const spec = resolveAccountSpec({ id: "zai-coding-cn", displayName: "Z.ai CN" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ ZAI_API_KEY: "zai-key", ZAI_API_REGION: "global" }), {
+		now: () => now,
+		fetch: async (url) => {
+			calls.push(String(url));
+			return jsonResponse({ data: { limits: [{ type: "TOKENS_LIMIT", unit: 3, number: 5, usage: 100, remaining: 900 }] } });
+		}
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(calls[0], "https://api.z.ai/api/monitor/usage/quota/limit");
+	console.log("Z.ai environment region override remains compatible ok");
 }
 
 {

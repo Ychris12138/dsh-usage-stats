@@ -1,156 +1,55 @@
-# Release checklist
+# v0.3.6 release checklist
 
-This is the release gate for `@ychris12138/dsh-usage-stats`. Completing the checklist prepares a release; it does not authorize npm publishing, tagging, or creating a GitHub Release.
+The maintainer delegated non-npm preparation and post-npm release closeout; npm publication remains the user's step. The checklist distinguishes accepted integration evidence from the final frozen artifact and public release.
 
-## 1. Release candidate baseline
+## 1. Frozen scope and accepted integration
 
-- [ ] Start from the reviewed release-candidate PR merged into a clean `main`; record this commit as `RC_BASE_SHA` for provenance only.
-- [ ] Do not publish or tag `RC_BASE_SHA`: the release version has not been committed yet.
-- [ ] Confirm `cordis.patch.yml` quotes `@ychris12138/dsh-usage-stats` and `lib/client.js` registers the same identity through `__ModuleLoader__.load()`.
-- [ ] Confirm the release notes describe estimated costs as estimates and list every unsupported/fail-closed case.
+- [x] Include #126, #130, #135, and #136; retain the source heads in [the release plan](release-plan-v0.3.6.md).
+- [x] Exclude #133, #128, and #74. Label Command Code experimental, MiniMax as subscription quota, and costs as estimates.
+- [x] Synchronize package, lockfile, README identity, and catalog metadata to 0.3.6. Include current release notes and enforce their presence in the package file allow-list.
+- [x] Accepted integration passed `npm ci`, `npm run check`, 13 offline suites, and exact-head GitHub CI on 2026-10-17. Missing/omitted release-note guards were verified.
+- [x] Accepted tarball matched all packed source files and excluded local output, credentials, caches, screenshots, backups, and review artifacts.
+- [x] Keep credential override, regional pinning, service lifecycle, incremental persistence, malformed-settings, and loopback/API/export safety regression coverage.
 
-## 2. Automated gates
+## 2. Packaged DSH acceptance completed on 2026-10-17
 
-```bash
-npm ci
-npm run check
-npm test
-npm pack --json
-```
+- [x] Install packaged 0.3.6 into an isolated web profile with Node 24.19.0 / DSH 0.2.0-rc.2. Provider, usage, account, and export endpoints return HTTP 200.
+- [x] Verify the panel opens/closes, provider switching and manual refresh work, selection survives client reload, and light/dark themes and a narrow panel render. Retain sidebar-only integration.
+- [x] Upgrade the existing Desktop profile to packaged 0.3.6, retaining Token totals, provider selection, and profile patch/credential-file metadata. Installed runtime matches the accepted source.
+- [x] Real `minimax-cn` returns live 5-hour and weekly subscription windows; refresh succeeds. A real signed-in DeepSeek Account returns a live Host-owned balance.
 
-- [ ] Inspect the pack manifest: no credentials, local caches, screenshots, backups, review diffs, or untracked planning files.
-- [ ] Install the generated tarball into an isolated DSH profile; do not validate only against the source checkout.
-- [ ] Confirm malformed settings fail before routes or timers register.
-- [ ] Confirm non-GET and non-loopback export/API requests remain rejected.
+Account sign-out/service removal and separate-wallet normalization are covered by automated tests; the live account was not changed to repeat those cases. Z.ai has reporter confirmation. Independent maintainer-owned Z.ai/global MiniMax/new Command Code tests, MiniMax official-dashboard reconciliation, and post-call quota movement remain untested and must not be described as live acceptance.
 
-## 3. Fresh install and migration
+## 3. Final immutable artifact and user handoff
 
-- [ ] Fresh isolated profile: install, restart DSH, hard-refresh the browser, open Usage Stats.
-- [ ] Upgrade an existing v0.3.2 profile without deleting its usage cache or monitor configuration.
-- [ ] Confirm a valid old cache is migrated/refolded and retains exact token totals.
-- [ ] Replace the cache with malformed JSON; confirm the plugin rebuilds from authoritative session events without blocking DSH startup.
-- [ ] Confirm existing account monitors remain compatible and no new provider/monitor is inserted into user configuration.
-- [ ] Confirm legacy `display.currentSessionPill: true` and `false` configurations both start successfully and neither registers composer UI.
-- [ ] Confirm a persisted provider selection survives browser refresh and DSH restart; removing that provider clears the saved id and uses the existing fallback.
-- [ ] Confirm OrcaRouter is added only through the explicit fresh-user synthetic Add action; startup performs no settings mutation and existing provider configuration is not overwritten.
-- [ ] Confirm OrcaRouter balance succeeds through `/v1/balance` or the compatible billing fallback, pricing stays unknown/null, and no credential value reaches the browser or export payloads.
-- [ ] Confirm unchanged persisted fallback logs read only from the folded cursor, appended events remain incremental, and truncation/rewrite still refolds from sequence 0 (#58/#57).
+Record completion of these final gates in the external release manifest; the packaged checklist stays immutable after the source is frozen.
 
-## 4. Export and security
-
-- [ ] Download daily CSV, session CSV, and the versioned JSON export.
-- [ ] Check commas, quotes, CR/LF, Unicode titles, and spreadsheet-formula prefixes.
-- [ ] Confirm incomplete/mixed-currency estimates export as blank/null rather than partial amounts.
-- [ ] Search every export for credential names/values, Authorization, cookies, raw URLs with userinfo/query data, prompt text, response text, and file paths.
-- [ ] Confirm exported pricing provenance contains only public rule/source metadata.
-
-## 5. Real DSH release-candidate regression
-
-### v0.3.5-specific gates
-
-DSH 0.2 Desktop / DeepSeek Account:
-
-- [x] Real DSH Desktop acceptance completed on 2026-10-01 using the Host-owned `deepseek-account` route.
-- [x] The provider selector exposes DeepSeek Account separately from API-key DeepSeek.
-- [x] Signed-in account balance renders without requiring `DEEPSEEK_API_KEY`.
-- [x] Signing out invalidates the previous balance on the next UI read and renders a signed-out state; signing back in restores the balance.
-- [x] Browser/client payloads contain only locale/timezone metadata; raw account token, Cookie, PKCE, and Host-only token resolution never cross the Host boundary.
-- [x] CNY and USD wallets remain separate and are never summed across currencies.
-
-MiniMax Coding Plan:
-
-- [x] Known CN/global routes pin credentials to their own region; an upstream 1004/2049 rejection cannot send a known-region key to the other region.
-- [x] Only a route with no region signal may retry the other region after an explicit 1004/2049 credential rejection.
-- [x] Explicit `usageBaseURL` never falls back to another host.
-- [x] PR #122 contributor validated the CN Coding Plan path against a real account and observed two quota windows.
-- [x] QueryAccount-level regression coverage locks the global 2049 case to `.io` hosts only.
-
-Packaging/client compatibility:
-
-- [x] Obsolete `@deepseek-ai/dsh-client-runtime` is absent from `dsh.client.inject`; locale and UI-primitives activation entries remain.
-- [x] Recent-session cost estimates omit incomplete or mixed-currency amounts rather than showing partial costs.
-- [x] DeepSeek peak/off-peak countdown remains scoped to the official route and fails closed for custom relays.
-
-Persistence:
-
-- [ ] Current DSH `list()` entries shaped as `{ header, revision }` resolve to real session ids; no persisted read uses `"undefined"`.
-- [ ] The current DSH path uses `list()` + `open(id, "read")` + `handle.read()` and closes every read handle.
-- [ ] The current DSH modern path never calls the removed `readFrom()`.
-- [ ] The legacy `listSnapshots()` + `readFrom()` fallback remains covered.
-- [ ] An unchanged revision skips unnecessary reads.
-- [ ] Incremental cursor semantics remain intact.
-- [ ] Truncation/rewrite recovery still performs a full refold when needed.
-- [ ] `session/disposed` settled sessions are picked up without double counting.
-- [ ] A failed persisted read does not erase a previously valid fold.
-
-Declarative balance:
-
-- [ ] Explicit `remaining` wins, including `0`.
-- [ ] Missing `remaining` plus valid `used` and `total` derives `max(0, total - used)`.
-- [ ] The divisor applies after raw-unit derivation.
-- [ ] `used > total` derives `remaining: 0`.
-- [ ] Malformed explicit `remaining` is `invalid-response`.
-- [ ] Insufficient values do not expose `total` as `remaining`.
-
-- [ ] Test the latest supported `@deepseek-ai/dsh` Desktop/Web release candidate with an isolated profile.
-- [ ] Confirm DSH starts without `Failed to load plugins` or loader identity errors.
-- [ ] Confirm client bundle load and that `sidebar.footer.action` is the only extension point registered by dsh-usage-stats; verify panel open/close, provider switching, cost/budget states, and manual Retry.
-- [ ] At 700 / 500 / 400 / 320 px, confirm dsh-usage-stats registers no `conversation.input.*` component or composer DOM and leaves native Permission / Model / Context / Submit layout untouched. Record any remaining sub-400 px overlap as DSH host behavior rather than changing host controls from this plugin.
-- [ ] Test the sidebar action and panel in light and dark themes.
-- [ ] Confirm Last 14 days token values retain an 84 px minimum width, right alignment, and tabular numerals while the date column shrinks/ellipsizes without adding narrow-panel overflow (#75).
-- [ ] With `refresh.enabled: false`, confirm one first account fetch, no expiry-driven upstream requests, manual Retry, and a fresh fetch after provider configuration changes.
-- [ ] #53 and #14 are closed and are not v0.3.5 release blockers. If a real enterprise proxy or MiniMax Coding Plan environment is available, record sanitized observations; otherwise mark those checks `NOT TESTED` without claiming a fix.
-
-## 6. Create the immutable release commit
-
-Do not run this section until every release-candidate gate above passes and the maintainer approves preparing the release commit.
-
-- [ ] Create a release branch from the reviewed `main` at `RC_BASE_SHA`.
-- [ ] Run `npm run release:sync -- 0.3.5` once to update `package.json`, `package-lock.json`, the Community Market catalog, and documented stable-version references together.
-- [ ] Confirm the v0.3.5 release notes use final stable wording, preserve the historical v0.3.0/v0.3.1/v0.3.2/v0.3.3 notes, and do not claim unverified #14/#53 fixes or include out-of-scope behavior.
-- [ ] Run the release gates again against the synchronized version:
+- [x] Finalize install references and release documentation before freezing the source; avoid candidate-only/stale install wording in the published package.
+- [ ] Commit the final documentation preparation, ensure the checkout is clean, and record `RELEASE_SHA` in an external manifest/release asset. Do not embed a commit's own hash in its source files.
+- [ ] Confirm executable/runtime files are identical to the accepted integration. Run final static/release checks and require successful GitHub CI on `RELEASE_SHA`; rerun substantive tests if executable code changes.
+- [ ] Pack from exactly `RELEASE_SHA`, inspect its manifest, compare every packed file with that commit, and record the archive SHA-256 and npm SHA-512 integrity. Do not overwrite the frozen artifact later.
+- [ ] Create/update an unpublished GitHub draft release targeting the full `RELEASE_SHA`, attach the frozen tarball and sanitized verification manifest, and confirm no `v0.3.6` tag was created.
+- [ ] Hand the exact archive path and hashes to the user. The user verifies npm identity and publishes that tarball, without repacking the current directory:
 
 ```bash
-npm run check
-npm test
-npm pack --json
+npm whoami --registry=https://registry.npmjs.org/
+npm publish "$RELEASE_ARCHIVE" --access public --registry=https://registry.npmjs.org/
 ```
 
-- [ ] Inspect the final pack manifest, then commit all version/release metadata changes with `chore: prepare v0.3.5 release`.
-- [ ] Record that commit as `RELEASE_SHA`; this replaces `RC_BASE_SHA` as the only publish/tag identity.
-- [ ] Confirm the working tree is clean and `HEAD` equals `RELEASE_SHA`.
-- [ ] Confirm the committed package version, not merely the working-tree version:
+`RELEASE_ARCHIVE` is the absolute path of the frozen, hash-verified tarball. Do not replace it with `.` or run another `npm pack` for publication.
 
-```bash
-test "$(git show "$RELEASE_SHA:package.json" | jq -r .version)" = "0.3.5"
-```
+## 4. Post-npm closeout
 
-The release invariant is:
+- [ ] Confirm npm exposes exact version 0.3.6. Compare registry `dist.integrity` and downloaded tarball bytes with the frozen manifest; verify package files match `RELEASE_SHA`. Registry `gitHead` alone is not sufficient proof.
+- [ ] Only after npm verification, fast-forward `main` to exactly `RELEASE_SHA`. Do not squash/rebase the already-published source or force-update a diverged `main`.
+- [ ] Verify the automatic Pages deployment and public catalog identity, content type, and exact 0.3.6 version. The workflow deploys catalog changes from `main`, so no earlier merge is permitted.
+- [ ] Create an annotated/signed `v0.3.6` tag explicitly at `RELEASE_SHA`; verify it resolves to that commit, then publish the prepared GitHub draft release.
+- [ ] Install exact npm 0.3.6 through DSH Desktop Community Market and restart its Host. Verify the installed package before closing the release and accepted issues.
+
+The immutable release identity is:
 
 ```text
-npm published source commit
-== v0.3.5 tag commit
-== GitHub Release commit
-== package/catalog version commit
-== RELEASE_SHA
+frozen tarball files == committed package files at RELEASE_SHA
+registry tarball bytes == frozen tarball bytes
+main at publication == v0.3.6 tag target == GitHub Release source == RELEASE_SHA
 ```
-
-## 7. Publish and market closeout
-
-Do not run this section until the immutable release commit exists and the maintainer explicitly authorizes publishing.
-
-- [ ] `npm whoami` returns the expected publisher.
-- [ ] From a clean checkout/worktree at exactly `RELEASE_SHA`, run `npm publish --access public --registry=https://registry.npmjs.org/`.
-- [ ] `npm view "@ychris12138/dsh-usage-stats" version --registry=https://registry.npmjs.org/` equals the target version.
-- [ ] Merge or push the release commit to `main` according to the chosen branch workflow; verify `main` contains the exact `RELEASE_SHA` without recreating the release changes.
-- [ ] Only after npm and `main` verification: create the signed/annotated `v0.3.5` tag pointing explicitly to `RELEASE_SHA`.
-- [ ] Verify the tag resolves to the published source commit:
-
-```bash
-test "$(git rev-parse v0.3.5^{commit})" = "$RELEASE_SHA"
-```
-
-- [ ] Create the GitHub Release from `v0.3.5`; verify it resolves to `RELEASE_SHA`.
-- [ ] Verify the public Pages `catalog-source.json` and `/v1/plugins` response content type, package name, and exact version.
-- [ ] Install the exact npm version through DSH Desktop Community Market and restart the host.
-- [ ] Close the npm/market release issue only after the Desktop Market installation succeeds.

@@ -752,6 +752,41 @@ test("client.js 给 12 条 route 各自的两字母标识", () => {
 	}
 });
 
+test("坏的可选服务清单不会阻止其他 provider", async () => {
+	for (const supportedProviders of [() => { throw new Error("private-service-error"); }, () => ({}), async () => { throw new Error("private-async-error"); }]) {
+		const service = createAccountService({ getProviders: async () => [{ id: "deepseek-official" }], credentials: null,
+			deps: { includeLegacyProviders: false, creditBalance: fakeCreditBalance({ supportedProviders }) } });
+		assert.equal((await service.providerViews())[0].id, "deepseek-official");
+	}
+});
+
+test("替换或移除 Host 服务会失效旧余额；Cordis 包装不影响缓存", async () => {
+	let reads = 0;
+	const host = (remaining) => fakeCreditBalance({ creditsBalances: async () => {
+		reads += 1;
+		return { accounts: [{ accountId: "sample", balance: { total: remaining, packages: [] } }] };
+	} });
+	const first = host(100);
+	const second = host(20);
+	let active = first;
+	const service = createAccountService({ credentials: null, getProviders: async () => [{ id: "codearts" }],
+		config: { monitors: {}, refresh: { enabled: false } }, deps: { includeLegacyProviders: false, creditBalance: () => active } });
+	assert.equal((await service.get("codearts")).windows[0].amount, 100);
+	active = second;
+	assert.equal((await service.get("codearts")).windows[0].amount, 20, "a replacement cannot reuse the former service's balance");
+	active = null;
+	assert.equal((await service.get("codearts")).status, "unsupported");
+	active = first;
+	assert.equal((await service.get("codearts")).windows[0].amount, 100);
+	const original = { ...first, [Symbol.for("cordis.original")]: first };
+	const wrapped = createAccountService({ credentials: null, getProviders: async () => [{ id: "codearts" }],
+		config: { monitors: {}, refresh: { enabled: false } }, deps: { includeLegacyProviders: false, creditBalance: () => new Proxy(original, {}) } });
+	await wrapped.get("codearts");
+	const before = reads;
+	await wrapped.get("codearts");
+	assert.equal(reads, before, "fresh Cordis proxies must preserve cache reuse");
+});
+
 let failed = 0;
 for (const [name, fn] of tests) {
 	try {

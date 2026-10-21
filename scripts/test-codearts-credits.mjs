@@ -741,15 +741,25 @@ test("取值器返回 null（宿主未加载）时降级为 unsupported", async 
 	assert.equal(snapshot.status, "unsupported");
 });
 
-test("client.js 给 12 条 route 各自的两字母标识", () => {
-	// 默认回退取展示名前两字母，会让 CodeArts / CodeBuddy / Cline 全落成 "CO"。
+test("client.js 给 Providers Hub 全部 route 各自的两字母标识", () => {
+	// 默认回退取展示名前两字母，会让 CodeArts / CodeBuddy / Cline 全落成 "CO"，
+	// AutoClaw 与 AutoClaw 国际版落成 "AU"，Accio 与 AStudio 落成 "AS"。
 	const source = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
-	for (const [id, mark] of Object.entries({
+	const marks = {
+		// 旧包 dsh-codearts-auth 时代就有的 11 条
 		codearts: "CA", buddy: "CB", workbuddy: "WB", lobsterai: "LA", qoder: "QD",
-		qodercn: "QN", trae: "TR", cline: "CL", loomy: "LM", raccoon: "RC", zcode: "ZC"
-	})) {
+		qodercn: "QN", trae: "TR", cline: "CL", loomy: "LM", raccoon: "RC", zcode: "ZC",
+		// 新包 dsh-providers-hub 0.2.x 扩出来的 8 条
+		minimaxintl: "MX", gemini: "GM", officeace: "OA", accio: "AC",
+		astudio: "AU", autoclaw: "AW", autoclawintl: "AX", modelscope: "MS"
+	};
+	for (const [id, mark] of Object.entries(marks)) {
 		assert.match(source, new RegExp(`\\b${id}: "${mark}"`), `${id} 缺少标识 ${mark}`);
 	}
+	// 两张卡片撞简称就分不清 provider，故标识必须两两不同。
+	assert.equal(new Set(Object.values(marks)).size, Object.keys(marks).length, "两字母标识出现重复");
+	// opencode 被宿主的 creditBalance 排除（balance 语义是通道可用性），不该登记。
+	assert.doesNotMatch(source, /\bopencode: "[A-Z]{2}"/, "opencode 不应出现在 creditBalance 简称表");
 });
 
 test("坏的可选服务清单不会阻止其他 provider", async () => {

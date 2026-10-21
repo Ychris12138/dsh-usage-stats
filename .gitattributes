@@ -1,2 +1,5 @@
 * text=auto eol=lf
 *.png binary
+
+# 补丁上下文需逐字保留，其中的空白不作为本仓库源码的空白错误处理。
+integrations/providers-hub/*.patch -text -whitespace

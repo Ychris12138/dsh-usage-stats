@@ -461,6 +461,20 @@ if (!deepseekMarkup.includes("usg_accountCard") || !goMarkup.includes("usg_accou
 if (!deepseekMarkup.includes("data-account-mode=\"balance\"") || !deepseekMarkup.includes("DeepSeek") || deepseekMarkup.includes("progressbar")) throw new Error("DeepSeek must render only monetary balance data");
 if (!goMarkup.includes("data-account-mode=\"subscription\"") || !goMarkup.includes("OpenCode Go")) throw new Error("OpenCode Go must render the subscription account mode");
 if ((goMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !goMarkup.includes("width:12%")) throw new Error("OpenCode Go must render three quota meters");
+for (const [window, expected] of [
+	[{ kind: "quota", label: "ZCode credit", amount: 75 }, "75"],
+	[{ kind: "quota", label: "Zero credit", amount: 0 }, "0"],
+	[{ kind: "quota", label: "Unknown credit" }, "—"]
+]) {
+	const markup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+		provider: { id: "zcode", displayName: "ZCode", accountMode: "subscription" },
+		account: { mode: "subscription", status: "ok", windows: [window] },
+		accountLoading: false, accountError: null, translate: translateAccount, onRetry: () => {}
+	}));
+	assert.ok(markup.includes(expected), `CodeArts quota must display ${expected}`);
+	assert.equal(markup.includes('role="progressbar"'), false, "absolute or unknown quotas must not invent a progress bar");
+	if (window.amount === void 0) assert.equal(markup.includes('class="usg_quotaValue">Remaining 0'), false);
+}
 // Command Code reports a plan credit pool next to its rolling windows, so the
 // subscription card must show both instead of forcing a choice between them.
 const usd = (amount) => new Intl.NumberFormat(void 0, { style: "currency", currency: "USD" }).format(amount);
@@ -647,6 +661,10 @@ const subLow = badgeAccountValue({ mode: "subscription", status: "ok", windows: 
 if (subLow === null || subLow.kind !== "percent" || subLow.value !== 4 || subLow.display !== "4%") throw new Error(`subscription must warn on the lowest window, got ${JSON.stringify(subLow)}`);
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 4 }] }) !== true) throw new Error("subscription with a 4% window must warn");
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 55 }] }) !== false) throw new Error("subscription all above 5% must NOT warn");
+assert.equal(badgeAccountValue({ mode: "subscription", status: "ok", windows: [
+	{ kind: "expired", remainingPercent: 0 }, { kind: "quota", remainingPercent: 75 }
+] }).value, 75, "expired packages must not replace the active quota badge");
+assert.equal(badgeAccountValue({ mode: "subscription", status: "ok", windows: [{ kind: "expired", remainingPercent: 0 }] }), null);
 // not-configured / unavailable / empty => no misleading numeric value, no warning
 if (badgeAccountValue({ mode: "balance", status: "not-configured" }) !== null) throw new Error("not-configured balance must not show a numeric badge");
 if (badgeAccountValue({ mode: "balance", status: "signed-out" }) !== null) throw new Error("signed-out account must not show a numeric badge");

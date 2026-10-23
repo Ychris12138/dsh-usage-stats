@@ -661,6 +661,39 @@ const subLow = badgeAccountValue({ mode: "subscription", status: "ok", windows: 
 if (subLow === null || subLow.kind !== "percent" || subLow.value !== 4 || subLow.display !== "4%") throw new Error(`subscription must warn on the lowest window, got ${JSON.stringify(subLow)}`);
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 4 }] }) !== true) throw new Error("subscription with a 4% window must warn");
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 55 }] }) !== false) throw new Error("subscription all above 5% must NOT warn");
+// #148: the OpenCode Go summary is monthly quota, while every live window
+// still participates in the exhaustion warning. Never substitute a short cap.
+const goAccount = {
+	id: "opencode-go", adapter: "opencode-go", mode: "subscription", status: "ok",
+	windows: [
+		{ kind: "session", remainingPercent: 90 },
+		{ kind: "weekly", remainingPercent: 95 },
+		{ kind: "monthly", remainingPercent: 98 }
+	]
+};
+assert.deepEqual(badgeAccountValue(goAccount), { kind: "percent", period: "monthly", value: 98, display: "98%" });
+assert.equal(badgeAccountValue({ ...goAccount, id: "custom-go-route", windows: [...goAccount.windows].reverse() }).value, 98);
+assert.equal(badgeAccountValue({ ...goAccount, adapter: undefined }).value, 98, "legacy canonical snapshots retain monthly semantics");
+assert.equal(badgeAccountValue({ ...goAccount, adapter: "declarative" }).value, 90, "an explicit custom adapter owns its summary");
+assert.equal(badgeWarnOf(goAccount), false);
+for (const kind of ["session", "weekly", "monthly"]) {
+	const limited = { ...goAccount, windows: goAccount.windows.map((window) => window.kind === kind ? { ...window, remainingPercent: 0 } : window) };
+	assert.equal(badgeWarnOf(limited), true, `${kind} exhaustion must warn even when monthly remaining is high`);
+	assert.equal(badgeAccountValue(limited).value, kind === "monthly" ? 0 : 98);
+}
+for (const remainingPercent of [undefined, null, "98", NaN, Infinity, -1, 101]) {
+	const malformed = { ...goAccount, windows: [{ kind: "session", remainingPercent: 90 }, { kind: "monthly", remainingPercent }] };
+	assert.equal(badgeAccountValue(malformed), null, "an absent/invalid month must not display a five-hour percentage");
+}
+assert.equal(badgeAccountValue({ ...goAccount, windows: [{ kind: "session", remainingPercent: 0 }] }), null);
+assert.equal(badgeWarnOf({ ...goAccount, windows: [{ kind: "session", remainingPercent: 0 }] }), true);
+assert.equal(badgeAccountValue({ ...goAccount, windows: [...goAccount.windows, goAccount.windows[2]] }), null, "ambiguous monthly windows must not invent a summary");
+for (const status of ["not-configured", "unavailable", "rate-limited", "unauthorized"]) {
+	assert.equal(badgeAccountValue({ ...goAccount, status }), null);
+	assert.equal(badgeWarnOf({ ...goAccount, status }), false);
+}
+assert.equal(badgeAccountValue({ ...goAccount, stale: true }), null);
+assert.equal(badgeWarnOf({ ...goAccount, stale: true }), false);
 assert.equal(badgeAccountValue({ mode: "subscription", status: "ok", windows: [
 	{ kind: "expired", remainingPercent: 0 }, { kind: "quota", remainingPercent: 75 }
 ] }).value, 75, "expired packages must not replace the active quota badge");
@@ -754,7 +787,7 @@ const usageFixture = {
 const accountFixtureFor = (path) => {
 	const providerId = new URL(String(path), "http://local.test").searchParams.get("provider") ?? "deepseek-official";
 	return providerId === "opencode-go"
-		? { id: providerId, displayName: "OpenCode Go", mode: "subscription", status: "ok", windows: [{ kind: "weekly", remainingPercent: 18 }], alert: { level: "warning" } }
+		? { ...goAccount, displayName: "OpenCode Go", alert: { level: "normal" } }
 		: { id: providerId, displayName: providerId === "orcarouter" ? "OrcaRouter" : "DeepSeek", mode: "balance", status: providerId === "orcarouter" ? "unsupported" : "ok", balance: providerId === "orcarouter" ? null : { remaining: 5, currency: "USD" } };
 };
 const responseFixture = (payload, { ok = true, status = 200 } = {}) => ({ ok, status, json: async () => payload });
@@ -770,7 +803,8 @@ globalThis.fetch = async (path, options = {}) => {
 	return responseFixture(usageFixture);
 };
 let integrationRenderer;
-const panelTranslate = (key) => key === "orcarouter.choiceSuffix" ? "（赞助集成）" : key;
+const panelTranslate = (key) => key === "orcarouter.choiceSuffix" ? "（赞助集成）"
+	: key === "panel.monthlyRemaining" ? "Month left {value}" : key;
 writeSelectedProvider("opencode-go", localStorage);
 await act(async () => {
 	integrationRenderer = TestRenderer.create(react.createElement(UsageStatsPanel, { wide: true, t: panelTranslate }));
@@ -781,6 +815,9 @@ await act(async () => {
 	await flushPanelEffects();
 });
 if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).length !== 1) throw new Error("sidebar badge click must open the existing account panel");
+const goBadge = integrationRenderer.root.findByProps({ "data-usage-stats-badge": true });
+assert.match(goBadge.props["aria-label"], /Month left 98%/, "the mounted sidebar must identify the monthly percentage");
+assert.ok(integrationRenderer.root.findAll((node) => typeof node.props.className === "string" && node.props.className.includes("usg_badgeAmount")).some((node) => node.props.children === "Month left 98%"), "the visible badge must match the monthly window");
 assert.equal(integrationRequests.filter((request) => request.path.includes("/integrations/orcarouter") && request.method === "GET").length, 1, "opening the panel must read the secret-free OrcaRouter integration status once");
 assert.equal(integrationRequests.some((request) => request.path.includes("/integrations/orcarouter") && request.method === "POST"), false, "opening the panel must never mutate OrcaRouter settings");
 const exportLinks = integrationRenderer.root.findAll((node) => typeof node.props?.["data-export-format"] === "string");

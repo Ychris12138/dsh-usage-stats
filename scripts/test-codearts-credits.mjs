@@ -741,15 +741,58 @@ test("取值器返回 null（宿主未加载）时降级为 unsupported", async 
 	assert.equal(snapshot.status, "unsupported");
 });
 
-test("client.js 给 12 条 route 各自的两字母标识", () => {
-	// 默认回退取展示名前两字母，会让 CodeArts / CodeBuddy / Cline 全落成 "CO"。
+
+test("新增 Hub 别名不能仅凭名字接管独立 API 路由", () => {
+	for (const id of ["minimaxintl", "gemini", "officeace", "accio", "astudio", "autoclaw", "autoclawintl", "modelscope"]) {
+		for (const provider of [{ id }, { id, apiKeyEnv: "OWN_API_KEY", baseURL: "https://independent.example/v1" },
+			{ id, accountService: "creditBalance", apiKeyEnv: "OWN_API_KEY" }]) {
+			assert.equal(resolveProviderIdentity(provider).accountAdapter, null, id + " needs explicit ownership");
+		}
+		assert.equal(resolveProviderIdentity({ id, accountService: "creditBalance" }).accountAdapter, "codearts-credits");
+		assert.equal(resolveProviderIdentity({ id, apiKeyEnv: "OWN_API_KEY" }, { monitors: { [id]: { adapter: "codearts-credits" } } }).accountAdapter, "codearts-credits");
+	}
+});
+
+test("Hub 清单碰撞不读取独立 API 的账号池；显式 monitor 才可授权", async () => {
+	const ids = ["minimaxintl", "gemini", "officeace", "accio", "astudio", "autoclaw", "autoclawintl", "modelscope"];
+	const reads = [];
+	const service = fakeCreditBalance({
+		supportedProviders: () => ids.map((id) => ({ id, displayName: id })),
+		creditsBalances: async (id) => { reads.push(id); return { accounts: [{ accountId: "opaque-1", balance: { total: 8, packages: [] } }] }; }
+	});
+	const options = {
+		getProviders: async () => ids.map((id) => ({ id, baseURL: "https://independent.example/v1", apiKeyEnv: "OWN_API_KEY" })),
+		credentials: { resolve: async () => undefined },
+		deps: { includeLegacyProviders: false, creditBalance: service }
+	};
+	const stats = createAccountService(options);
+	for (const view of await stats.providerViews()) assert.equal(view.adapter, null);
+	for (const id of ids) assert.equal((await stats.get(id)).status, "unsupported");
+	assert.deepEqual(reads, [], "advertising a route must not select another account pool");
+	const optedIn = createAccountService({ ...options, config: { monitors: { gemini: { adapter: "codearts-credits" } } } });
+	assert.equal((await optedIn.get("gemini")).status, "ok");
+	assert.deepEqual(reads, ["gemini"]);
+});
+
+test("client.js 给 Providers Hub 全部 route 各自的两字母标识", () => {
+	// 默认回退取展示名前两字母，会让 CodeArts / CodeBuddy / Cline 全落成 "CO"，
+	// AutoClaw 与 AutoClaw 国际版落成 "AU"，Accio 与 AStudio 落成 "AS"。
 	const source = readFileSync(new URL("../lib/client.js", import.meta.url), "utf8");
-	for (const [id, mark] of Object.entries({
+	const marks = {
+		// 旧包 dsh-codearts-auth 时代就有的 11 条
 		codearts: "CA", buddy: "CB", workbuddy: "WB", lobsterai: "LA", qoder: "QD",
-		qodercn: "QN", trae: "TR", cline: "CL", loomy: "LM", raccoon: "RC", zcode: "ZC"
-	})) {
+		qodercn: "QN", trae: "TR", cline: "CL", loomy: "LM", raccoon: "RC", zcode: "ZC",
+		// 新包 dsh-providers-hub 0.2.x 扩出来的 8 条
+		minimaxintl: "MX", gemini: "GM", officeace: "OA", accio: "AC",
+		astudio: "AU", autoclaw: "AW", autoclawintl: "AX", modelscope: "MS"
+	};
+	for (const [id, mark] of Object.entries(marks)) {
 		assert.match(source, new RegExp(`\\b${id}: "${mark}"`), `${id} 缺少标识 ${mark}`);
 	}
+	// 两张卡片撞简称就分不清 provider，故标识必须两两不同。
+	assert.equal(new Set(Object.values(marks)).size, Object.keys(marks).length, "两字母标识出现重复");
+	// opencode 被宿主的 creditBalance 排除（balance 语义是通道可用性），不该登记。
+	assert.doesNotMatch(source, /\bopencode: "[A-Z]{2}"/, "opencode 不应出现在 creditBalance 简称表");
 });
 
 test("坏的可选服务清单不会阻止其他 provider", async () => {

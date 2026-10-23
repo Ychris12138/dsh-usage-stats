@@ -198,6 +198,8 @@ DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key �
 
 本插件经 `ctx.get('creditBalance')` 读取服务计算的 `CreditBalance`。服务清单只补充不存在的 provider，并为这些条目标记明确的宿主来源；不会覆盖已注册的同名路由。裸 `minimax` 仍按内置 MiniMax token plan 查询，缺少 `apiKeyEnv` / `baseURL` 不能证明它属于 CodeArts。
 
+新增渠道名如 `gemini`、`modelscope` 也可能属于独立 API 供应商，不能仅凭名字将其归入宿主账号池。服务新增的条目可依来源标记识别；既有同名路由需显式配置 `codearts-credits`。徽章简称不构成账户或定价归属证据。
+
 若已注册的 `minimax` 实际使用 CodeArts 账号池，需要在现有 usage-stats 配置下显式选择适配器：
 
 ```yaml

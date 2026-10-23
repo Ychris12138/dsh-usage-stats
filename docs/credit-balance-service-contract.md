@@ -2,7 +2,21 @@
 
 PR #128 depends on a Host-owned Cordis service named `creditBalance`. This is a cross-plugin service, not an HTTP route or a browser RPC. Providers Hub owns authentication, signing, refresh and account selection; Usage Stats receives only projected balance data.
 
-## Current status (2026-10-20)
+## Current status (2026-10-23)
+
+The latest public npm archive, `dsh-providers-hub@2.1.261022`, was independently downloaded and verified against registry integrity:
+
+```text
+sha512-GEqoEoMGy0dJ4eiWefoeIzOo525KRcdCSqad24zryYMH+txHicPJ24APAWdl8+icFY1eLAwIh+dkZA8VZxeuaQ==
+```
+
+None of its 461 JavaScript/TypeScript/JSON/Markdown files contains `creditBalance`, `creditsBalances` or `supportedProviders`. Installing the current official package does not satisfy this integration.
+
+Upstream [#4](https://github.com/iJetLi/dsh-providers-hub/pull/4) was superseded by [#9](https://github.com/iJetLi/dsh-providers-hub/pull/9); #9 is now closed without merging. In the [2026-10-22 maintainer response](https://github.com/iJetLi/dsh-providers-hub/pull/9#issuecomment-6339239309), the maintainer declined external data provision of login information for now. That response does not establish approval for the anonymous balance projection proposed here. A supported service design and release must not be assumed forthcoming.
+
+The source and runtime patches below are historical experiments for their named baselines, not patches for the current package. Their synthetic integration checks do not establish current official-package or real-account acceptance. Before resuming stable-support work, settle the supported public projection with upstream and identify its exact supported build; then exercise actual sibling-plugin visibility and connection removal/reload in an isolated Host.
+
+## Historical preparation (2026-10-20)
 
 The official npm archive `dsh-providers-hub@1.9.261020` was downloaded with its registry SHA-512 verified. Its published JavaScript/TypeScript/JSON/Markdown files contain no `creditBalance`, `creditsBalances` or `supportedProviders` service implementation. Installing this version alone therefore does not satisfy this integration. A green Usage Stats mock suite is not two-plugin or real-account acceptance.
 
@@ -52,8 +66,9 @@ The Host's `opencode` balance-shaped value is a local channel-availability count
 
 ## Completion gates
 
+0. Establish an accepted public projection and explicitly supported Host build. Upstream #9 was closed without merging; green consumer tests or historical companion patches do not resolve that decision.
 1. Publish or explicitly install the exact companion Host build. A local candidate exists for isolated acceptance; the ordinary npm Hub release still does not implement the service.
-2. Rerun exact-head CI on maintainer PR #144, which already preserves the original #128 contributor history. Rewriting the inaccessible contributor fork is not required to complete this integration.
+2. Require CI on the chosen consumer and companion source heads. PR #144 already merged with the original #128 contributor history; that merge does not establish stable-support or real-account acceptance. Rewriting the inaccessible contributor fork is not required.
 3. The automated real-Cordis integration covers missing service, late activation, native provider collisions, removal/replacement, multiple accounts, partial failures, stale fallback and empty accounts. Also verify both installed bundles in an isolated real DSH profile.
 4. Use a real opted-in account to reconcile displayed packages and remaining amounts with its provider dashboard. No such account acceptance is currently claimed.
 

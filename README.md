@@ -188,7 +188,7 @@ DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key �
 
 ### CodeArts 系反代供应商（dsh-codearts-auth）
 
-**实验集成**：需要包含 `creditBalance` 服务的 Providers Hub 配套构建；当前普通 npm `1.9.261020` 不提供该服务。已有可复现的源码/运行包补丁与双插件联调，见[配套构建说明](integrations/providers-hub/README.md)。请在隔离 profile 验收，真实账户余额尚未对账，暂不宣称正式支持。
+**实验集成，当前官方包不可用**：2026-10-23 校验的公开 npm `2.1.261022` 仍不提供 `creditBalance` 服务，上游服务 [PR #9](https://github.com/iJetLi/dsh-providers-hub/pull/9) 也已关闭且未合并。旧源码/运行包补丁仅适用于各自精确基线，不能直接用于新版，也不代表正式支持。见[当前阻塞与历史配套构建说明](integrations/providers-hub/README.md)。后续须先明确上游接受的脱敏服务边界与受支持构建，再完成真实隔离 profile 和账户对账。
 
 `deepseek-harness-codearts` 的账号池路线包括 `codearts` / `buddy` / `workbuddy` / `lobsterai` / `qoder` / `qodercn` / `trae` / `cline` / `loomy` / `raccoon` / `zcode`，以及与内置供应商同名的 `minimax`。这些账号池路线的凭据由宿主插件持有，因此使用进程内余额接口。
 

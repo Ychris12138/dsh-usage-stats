@@ -685,9 +685,13 @@ for (const remainingPercent of [undefined, null, "98", NaN, Infinity, -1, 101]) 
 	const malformed = { ...goAccount, windows: [{ kind: "session", remainingPercent: 90 }, { kind: "monthly", remainingPercent }] };
 	assert.equal(badgeAccountValue(malformed), null, "an absent/invalid month must not display a five-hour percentage");
 }
+for (const windows of [undefined, null, {}, "monthly"]) assert.equal(badgeAccountValue({ ...goAccount, windows }), null);
 assert.equal(badgeAccountValue({ ...goAccount, windows: [{ kind: "session", remainingPercent: 0 }] }), null);
 assert.equal(badgeWarnOf({ ...goAccount, windows: [{ kind: "session", remainingPercent: 0 }] }), true);
 assert.equal(badgeAccountValue({ ...goAccount, windows: [...goAccount.windows, goAccount.windows[2]] }), null, "ambiguous monthly windows must not invent a summary");
+for (const remainingPercent of [undefined, null, "98", NaN, Infinity, -1, 101]) {
+	assert.equal(badgeAccountValue({ ...goAccount, windows: [...goAccount.windows, { kind: "monthly", remainingPercent }] }), null, "a malformed duplicate month must not be silently discarded");
+}
 for (const status of ["not-configured", "unavailable", "rate-limited", "unauthorized"]) {
 	assert.equal(badgeAccountValue({ ...goAccount, status }), null);
 	assert.equal(badgeWarnOf({ ...goAccount, status }), false);

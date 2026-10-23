@@ -669,7 +669,7 @@ async function testV4CacheUpgradeRefoldsBilling(root) {
 	assert.equal(migratedContext.session.currency, "USD");
 	assert.equal(migratedContext.session.tokens, 1_000_000);
 	const migrated = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
-	assert.equal(migrated.version, 5, "the rewritten cache must use schema v5");
+	assert.equal(migrated.version, 7, "the rewritten cache must use schema v7");
 	assert.equal(typeof migrated.pricingFingerprint, "string");
 	assert.equal(migrated.sessions[sessionId].currentRoute.providerId, "route-a");
 	assert.equal(migrated.sessions[sessionId].billing.sampleCount, 1);
@@ -687,7 +687,7 @@ async function testPricingFingerprintInvalidatesDerivedCosts(root) {
 	}] }));
 	oldFingerprint.pricingCatalog = [];
 	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
-		version: 5,
+		version: 7,
 		pricingFingerprint: JSON.stringify(oldFingerprint),
 		sessions: {
 			[sessionId]: {
@@ -723,7 +723,7 @@ async function testPricingFingerprintInvalidationWritesWithoutLive(root) {
 		config: { monitors: {} }
 	});
 	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
-		version: 5,
+		version: 7,
 		pricingFingerprint: oldFingerprint,
 		sessions: {}
 	}), "utf8");
@@ -925,7 +925,7 @@ async function testMalformedCacheRebuild(root) {
 	const usage = await plugin.collectUsage(context);
 	assert.equal(usage.total.tokens, 17, "a malformed cache must rebuild from authoritative session events");
 	const rebuilt = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
-	assert.equal(rebuilt.version, 5);
+	assert.equal(rebuilt.version, 7);
 	assert.equal(rebuilt.sessions.recovered.consumed, 1);
 }
 
@@ -1870,9 +1870,70 @@ async function testPricingTransitionKeepsTokenFolds(root) {
 	gate = null;
 }
 
+async function testWebSearchCacheReplacement(root) {
+	const home = join(root, "web-search-cache");
+	const time = Date.UTC(2026, 7, 24, 2);
+	const event = (seq, eventId) => ({ seq, time: time + seq, type: "web/deepseek-search-usage", data: {
+		provider: "deepseek-official", model: "deepseek-v4-flash", eventId,
+		usage: { input_tokens: 10, output_tokens: 2 }
+	} });
+	const session = { id: "search-cache", events: [event(0, "A"), event(1, "B")] };
+	const context = makeContext({ sessions: { list: () => [session] }, persistence: { listSnapshots: async () => [], list: async () => [] }, settings: { get: () => void 0 } });
+	const plugin = await freshModule("web-search-cache", home);
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 24);
+	const path = join(home, "storages", "usage-stats-cache.json");
+	const saved = JSON.parse(await readFile(path, "utf8"));
+	assert.equal(saved.sessions[session.id].webSearchSamples.length, 2);
+	session.events.push(event(2, "A"));
+	const reloaded = await freshModule("web-search-cache-reload", home);
+	assert.equal((await reloaded.collectUsage(context)).total.tokens, 24, "restart must retain nonadjacent search identities");
+	// Older accounting semantics must replay unchanged authoritative logs.
+	saved.version = 6;
+	saved.sessions[session.id].consumed = session.events.length;
+	saved.sessions[session.id].days = {};
+	await writeFile(path, JSON.stringify(saved), "utf8");
+	const migrated = await freshModule("web-search-v6-refold", home);
+	assert.equal((await migrated.collectUsage(context)).total.tokens, 24);
+	assert.equal(JSON.parse(await readFile(path, "utf8")).version, 7);
+
+	// Cold statistics restart with no live Session and no usage cache. The
+	// persistence seam reads the complete synthetic event log from disk; replay
+	// and corrections must reach the same API/export used by the panel.
+	const archivePath = join(home, "search-events.jsonl");
+	let diskEvents = [routeEvent(0, "minimax-cn", "MiniMax-M3"), ...session.events.map((entry, index) => ({ ...entry, seq: index + 1 }))];
+	const saveEvents = () => writeFile(archivePath, diskEvents.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
+	await saveEvents();
+	const readEvents = async () => (await readFile(archivePath, "utf8")).trim().split("\n").map((line) => JSON.parse(line));
+	const diskPersistence = {
+		list: async () => [{ header: { id: session.id }, revision: (await readEvents()).length }],
+		open: async () => ({ read: async (offset = 0) => ({ eventState: "detached", events: (await readEvents()).filter((entry) => entry.seq >= offset) }), close: async () => {} })
+	};
+	const coldHome = join(root, "web-search-disk-cold");
+	const cold = await freshModule("web-search-disk-cold", coldHome);
+	const routes = new Map();
+	const coldContext = makeContext({ sessions: { list: () => [] }, persistence: diskPersistence, routes });
+	const accounts = { validate: async () => {}, providerViews: async () => [], get: async () => null, subscriptionAccounts: async () => [] };
+	await cold.apply(coldContext, {}, { disableBackgroundRefresh: true, accounts });
+	assert.equal((await cold.collectUsage(coldContext)).total.tokens, 24);
+	const readRoute = async (route) => {
+		const response = makeResponse();
+		await routes.get(route)({ method: "GET", url: route, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, response);
+		assert.equal(response.status, 200);
+		return JSON.parse(response.body);
+	};
+	assert.equal((await readRoute(cold.USAGE_PATH)).total.tokens, 24);
+	assert.equal((await readRoute(cold.JSON_EXPORT_PATH)).usage.total.tokens, 24);
+	diskEvents.push({ ...event(4, "A"), data: { ...event(4, "A").data, usage: { input_tokens: 15, output_tokens: 2 } } });
+	await saveEvents();
+	assert.equal((await cold.collectUsage(coldContext)).total.tokens, 29, "a corrected sample replaces its old value after a cold disk replay");
+	const finalCache = JSON.parse(await readFile(join(coldHome, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.equal(finalCache.sessions[session.id].currentRoute.providerId, "minimax-cn", "auxiliary search cannot change the conversation route");
+}
+
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
+	await testWebSearchCacheReplacement(root);
 	await testDeepSeekDesktopAccountRoute(root);
 	await testDeepSeekDesktopAccountServiceLifecycle(root);
 	await testOrcaRouterIntegrationRoute(root);
@@ -1914,3 +1975,4 @@ try {
 	delete process.env.DSH_HOME;
 	await rm(root, { recursive: true, force: true });
 }
+

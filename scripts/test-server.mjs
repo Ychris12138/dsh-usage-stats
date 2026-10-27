@@ -2029,6 +2029,77 @@ async function testLiveSeededSessionBorrowsListingCutoff(root) {
 	assert.equal(row?.tokens, 5, "the live child keeps only its own sample");
 }
 
+async function testInterleavedCompactionAccounting(root) {
+	const home = join(root, "interleaved-compaction");
+	let plugin = await freshModule("interleaved-compaction", home);
+	const time = Date.UTC(2026, 7, 13, 9);
+	const summary = (seq, id, input) => ({ seq, time, type: "compaction/summary", data: {
+		compactionId: id, provider: "route-c", model: "model-c",
+		usage: { inputTokens: input, outputTokens: 0 }
+	} });
+	const message = usageEvent(1, 7);
+	message.data.turn = "same-turn";
+	const chunk = { seq: 0, time, type: "assistant/chunk", data: {
+		turn: "same-turn", step: 0, chunk: { type: "usage", usage: { inputTokens: 5, outputTokens: 0 } }
+	} };
+	const events = [chunk, summary(1, "c1", 100), { ...message, seq: 2 }, summary(3, "c2", 20), summary(4, "c1", 110)];
+	const logs = new Map([["interleaved", events]]);
+	const revisions = new Map([["interleaved", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	const context = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 137,
+		"compactions must neither break assistant chunk/message replacement nor count an interleaved correction twice");
+	const cacheFile = join(home, "storages", "usage-stats-cache.json");
+	const cache = JSON.parse(await readFile(cacheFile, "utf8"));
+	assert.equal(cache.sessions.interleaved.billing.sampleCount, 3, "replacement must also remove the previous cost sample");
+	// Version 8 could contain inflated summaries without a replacement ledger.
+	// A readable log must rebuild those totals rather than append onto them.
+	cache.version = 8;
+	delete cache.sessions.interleaved.compactionSamples;
+	cache.sessions.interleaved.days["2026-08-13"].totals.inputTokens = 242;
+	await writeFile(cacheFile, JSON.stringify(cache));
+	plugin = await freshModule("interleaved-compaction-migration", home);
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 137, "a pre-ledger cache must refold readable source events");
+	plugin = await freshModule("interleaved-compaction-restart", home);
+	events.push(summary(5, "c1", 120));
+	revisions.set("interleaved", "r2");
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 147,
+		"the compaction ledger must survive cache reload before an incremental correction");
+	const restored = JSON.parse(await readFile(cacheFile, "utf8"));
+	assert.equal(restored.version, CACHE_SCHEMA);
+	assert.equal(restored.sessions.interleaved.billing.sampleCount, 3, "restart corrections retain exactly three cost samples");
+}
+
+async function testEmptyFullRefoldKeepsLedger(root) {
+	const home = join(root, "empty-full-refold");
+	const plugin = await freshModule("empty-full-refold", home);
+	const logs = new Map([["stored", [usageEvent(0, 10), usageEvent(1, 20)]]]);
+	const revisions = new Map([["stored", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	let emptyFullRead = false;
+	const open = api.open;
+	api.open = async (id) => {
+		const handle = await open(id);
+		const read = handle.read;
+		handle.read = async (offset) => emptyFullRead
+			? { eventState: "detached", events: offset === 0 ? [] : [usageEvent(3, 40)] }
+			: read(offset);
+		return handle;
+	};
+	const context = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 30);
+	emptyFullRead = true;
+	revisions.set("stored", "r2");
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 30,
+		"a noncontiguous tail followed by an empty full read must keep the complete cached ledger");
+	const cached = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.equal(cached.sessions.stored.revision, "r1", "failed full reads must leave the old committed revision intact");
+	emptyFullRead = false;
+	logs.set("stored", [usageEvent(0, 10), usageEvent(1, 20), usageEvent(2, 4)]);
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 34,
+		"the failed full read must not record r2, so a readable retry at the same revision recovers");
+}
+
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
@@ -2069,6 +2140,8 @@ try {
 	await testSeededSessionDoesNotRecountParent(root);
 	await testFailedReadKeepsFoldedUsage(root);
 	await testCompactionSummaryUsage(root);
+	await testInterleavedCompactionAccounting(root);
+	await testEmptyFullRefoldKeepsLedger(root);
 	await testLiveSeededSessionBorrowsListingCutoff(root);
 	await testLiveLogShrink(root);
 	await testZeroUsageRowsFiltered(root);

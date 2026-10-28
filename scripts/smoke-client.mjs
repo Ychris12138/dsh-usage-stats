@@ -381,6 +381,34 @@ if (!dayDetail.includes("ark · deepseek-v4-flash")) throw new Error("same model
 if (dayDetail.length < 500) throw new Error("day detail markup too small");
 console.log("day detail render ok (provider-prefixed models), markup length:", dayDetail.length);
 
+// Provider/model rankings must aggregate the requested period without merging
+// independent routes, truncating slash-containing model ids, or mutating wire data.
+const { buildProviderUsage, ProviderUsageBreakdown } = exports_;
+const rankingDays = [
+ {date:"2026-08-01",models:[{model:"zai-coding-cn/glm",tokens:20},{model:"zai-coding-cn-2/glm",tokens:50},{model:"zai-coding-cn/vendor/model",tokens:30}]},
+ {date:"2026-08-02",models:[{model:"zai-coding-cn/vendor/model",tokens:10},{model:"legacy-model",tokens:5},{model:"bad/negative",tokens:-1},{model:"bad/nan",tokens:NaN}]},
+ {date:"2026-07-01",models:[{model:"zai-coding-cn-2/glm",tokens:1000}]}
+];
+const rankingBefore = JSON.stringify(rankingDays);
+const rankings = buildProviderUsage(rankingDays,"2026-08");
+assert.deepEqual(rankings.map(p=>[p.key,p.tokens]),[["zai-coding-cn",60],["zai-coding-cn-2",50],["unknown",5]]);
+assert.deepEqual(rankings[0].models.map(m=>[m.key,m.tokens]),[["zai-coding-cn/vendor/model",40],["zai-coding-cn/glm",20]]);
+assert.equal(buildProviderUsage(rankingDays)[0].tokens,1050);
+assert.deepEqual(buildProviderUsage(rankingDays,"2026-09"),[]);
+assert.deepEqual(buildProviderUsage(null),[]);
+assert.deepEqual(buildProviderUsage([{models:[{model:"b/z",tokens:1},{model:"a/z",tokens:1},{model:"a/a",tokens:1}]}])[0].models.map(m=>m.key),["a/a","a/z"]);
+assert.equal(JSON.stringify(rankingDays),rankingBefore,"ranking must not reorder or rewrite cached wire rows");
+let rankingRenderer;
+act(()=>{rankingRenderer=TestRenderer.create(react.createElement(ProviderUsageBreakdown,{days:rankingDays,month:"2026-08",translate:k=>k}));});
+assert.deepEqual(rankingRenderer.root.findAllByType("details").map(n=>n.props["data-usage-provider"]),["zai-coding-cn","zai-coding-cn-2","unknown"]);
+act(()=>rankingRenderer.root.findByType("select").props.onChange({target:{value:"all"}}));
+assert.equal(rankingRenderer.root.findAllByType("details")[0].props["data-usage-provider"],"zai-coding-cn-2");
+act(()=>rankingRenderer.update(react.createElement(ProviderUsageBreakdown,{days:rankingDays,month:"2026-07",translate:k=>k})));
+act(()=>rankingRenderer.root.findByType("select").props.onChange({target:{value:"month"}}));
+assert.deepEqual(rankingRenderer.root.findAllByType("details").map(n=>n.props["data-usage-provider"]),["zai-coding-cn-2"]);
+act(()=>rankingRenderer.unmount());
+console.log("provider/model ranking totals, routes, sorting and range changes ok");
+
 // Balance and subscription providers share one account-card frame. Only the
 // selected provider is rendered; the inner payload varies by account mode.
 const { ProviderAccountCard, buildProviderChoices, buildProviderPickerChoices, providerChoiceLabel } = exports_;
@@ -827,7 +855,15 @@ assert.equal(integrationRequests.some((request) => request.path.includes("/integ
 const exportLinks = integrationRenderer.root.findAll((node) => typeof node.props?.["data-export-format"] === "string");
 assert.deepEqual(exportLinks.map((node) => node.props["data-export-format"]), ["daily-csv", "sessions-csv", "json"], "the panel must expose all three secret-free downloads without a new fetch loop");
 for (const link of exportLinks) if (link.type !== "a" || typeof link.props.download !== "string" || link.props.className !== "usg_exportLink") throw new Error("exports must be styled browser downloads");
-const selectedPicker = integrationRenderer.root.findByType("select");
+const requestCountBeforeRange = integrationRequests.length;
+const writesBeforeRange = storedWrites.length;
+await act(async () => {
+ integrationRenderer.root.findByProps({"aria-label":"usage.scope"}).props.onChange({target:{value:"all"}});
+ await flushPanelEffects();
+});
+assert.equal(integrationRequests.length,requestCountBeforeRange,"ranking scope must not query accounts or usage again");
+assert.equal(storedWrites.length,writesBeforeRange,"ranking scope must not overwrite the manual provider preference");
+const selectedPicker = integrationRenderer.root.findByProps({ "aria-label": "account.provider" });
 if (selectedPicker.props.value !== "opencode-go") throw new Error(`sidebar panel must restore its persisted provider, got ${selectedPicker.props.value}`);
 const providerOptionLabels = selectedPicker.props.children.map((option) => option.props.children);
 if (!providerOptionLabels.includes("OrcaRouter（赞助集成）")) throw new Error(`provider picker must expose the compact OrcaRouter sponsorship label, got ${JSON.stringify(providerOptionLabels)}`);
@@ -844,7 +880,7 @@ await act(async () => {
 	integrationRenderer.root.findByProps({ "data-usage-stats-badge": true }).props.onClick();
 	await flushPanelEffects();
 });
-const reopenedPicker = integrationRenderer.root.findByType("select");
+const reopenedPicker = integrationRenderer.root.findByProps({ "aria-label": "account.provider" });
 if (reopenedPicker.props.value !== "opencode-go") throw new Error(`closing and reopening must preserve the selected provider, got ${reopenedPicker.props.value}`);
 if (integrationRenderer.root.findAllByProps({ "data-budget-period": "daily" }).length !== 1
 	|| integrationRenderer.root.findByProps({ "data-budget-period": "daily" }).props["data-budget-level"] !== "warning") {
@@ -882,7 +918,7 @@ await act(async () => {
 	freshRenderer.root.findByProps({ "data-usage-stats-badge": true }).props.onClick();
 	await flushPanelEffects();
 });
-let freshPicker = freshRenderer.root.findByType("select");
+let freshPicker = freshRenderer.root.findByProps({ "aria-label": "account.provider" });
 assert.equal(freshPicker.props.children.at(-1).props.value, ORCAROUTER_ADD_SENTINEL, "fresh install must append the synthetic OrcaRouter option");
 assert.equal(freshPicker.props.children.at(-1).props.children, "OrcaRouter（赞助集成）");
 await act(async () => {
@@ -896,7 +932,7 @@ assert.equal(freshPosts.length, 1, "one synthetic selection must perform exactly
 assert.equal(freshPosts[0].headers["content-type"], "application/json");
 assert.equal(freshPosts[0].headers["x-dsh-usage-stats-action"], "add-orcarouter");
 assert.equal(freshPosts[0].body, "{}");
-freshPicker = freshRenderer.root.findByType("select");
+freshPicker = freshRenderer.root.findByProps({ "aria-label": "account.provider" });
 assert.equal(freshPicker.props.value, "orcarouter", "a successful action must select the reloaded real OrcaRouter provider");
 assert.equal(freshPicker.props.children.some((option) => option.props.value === ORCAROUTER_ADD_SENTINEL), false, "the synthetic action must disappear after installation");
 assert.equal(freshPicker.props.children.filter((option) => option.props.value === "orcarouter").length, 1);
@@ -929,14 +965,14 @@ await act(async () => {
 	failedRenderer.root.findByProps({ "data-usage-stats-badge": true }).props.onClick();
 	await flushPanelEffects();
 });
-const failedPicker = failedRenderer.root.findByType("select");
+const failedPicker = failedRenderer.root.findByProps({ "aria-label": "account.provider" });
 assert.equal(failedPicker.props.value, "opencode-go");
 await act(async () => {
 	await failedPicker.props.onChange({ target: { value: ORCAROUTER_ADD_SENTINEL } });
 	await flushPanelEffects();
 });
 assert.equal(failedRequests.filter((request) => request.path.includes("/integrations/orcarouter") && request.method === "POST").length, 1);
-assert.equal(failedRenderer.root.findByType("select").props.value, "opencode-go", "a rejected mutation must preserve the current provider");
+assert.equal(failedRenderer.root.findByProps({ "aria-label": "account.provider" }).props.value, "opencode-go", "a rejected mutation must preserve the current provider");
 assert.equal(readSelectedProvider(localStorage), "opencode-go", "a rejected mutation must preserve the persisted provider");
 assert.equal(storedWrites.slice(failedStorageStart).some(([, value]) => value === ORCAROUTER_ADD_SENTINEL), false);
 assert.equal(failedRenderer.root.findAllByProps({ "data-orcarouter-action-error": true }).length, 1, "a rejected mutation must expose one lightweight inline error");

@@ -23,7 +23,7 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 | | 能力 | 说明 |
 | --- | --- | --- |
 | 💳 | 统一账户卡片 | API 供应商显示余额，Token Plan 显示分窗口额度；面板一次只呈现当前供应商 |
-| 📊 | Token 用量分析 | 今日、本月、累计、缓存命中率、月历热图，以及按日期/供应商/模型下钻 |
+| 📊 | Token 用量分析 | 今日、本月、累计、缓存命中率、月历热图，以及供应商分组与组内模型用量排行 |
 | 💰 | 估算费用与预算 | 按事件时间匹配历史价格，提供日/月费用、session 级聚合及可选预算预警 |
 | 🔄 | 后台监测 | 账户按 active/detail/background 自适应刷新；间隔可配置或完全关闭，本地 Token 聚合保持独立运行 |
 | 🧩 | 可扩展适配器 | 支持 New API、Sub2API、通用余额模板，以及声明式 JSON Pointer 自定义查询 |
@@ -207,7 +207,7 @@ DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key �
 
 ### CodeArts 系反代供应商（dsh-codearts-auth）
 
-**实验集成**：需要包含 `creditBalance` 服务的 Providers Hub 配套构建；当前普通 npm `1.9.261020` 不提供该服务。已有可复现的源码/运行包补丁与双插件联调，见[配套构建说明](integrations/providers-hub/README.md)。请在隔离 profile 验收，真实账户余额尚未对账，暂不宣称正式支持。
+**实验集成，当前官方包不可用**：2026-10-23 校验的公开 npm `2.1.261022` 仍不提供 `creditBalance` 服务，上游服务 [PR #9](https://github.com/iJetLi/dsh-providers-hub/pull/9) 也已关闭且未合并。旧源码/运行包补丁仅适用于各自精确基线，不能直接用于新版，也不代表正式支持。见[当前阻塞与历史配套构建说明](integrations/providers-hub/README.md)。后续须先明确上游接受的脱敏服务边界与受支持构建，再完成真实隔离 profile 和账户对账。
 
 `deepseek-harness-codearts` 的账号池路线包括 `codearts` / `buddy` / `workbuddy` / `lobsterai` / `qoder` / `qodercn` / `trae` / `cline` / `loomy` / `raccoon` / `zcode`，以及与内置供应商同名的 `minimax`。这些账号池路线的凭据由宿主插件持有，因此使用进程内余额接口。
 
@@ -216,6 +216,8 @@ DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key �
 2026-10-20 已对[上游](https://gitee.com/iJetLi/deepseek-harness-codearts)当前源码与 npm `1.9.261020` 分别制作配套候选包，并在解包后通过真实 Cordis/宿主余额分派与本插件的联调。供应商取数使用合成读数；真实账户对账仍待完成。安装 Usage Stats 不会自动修改已安装的 Providers Hub。标准 MiniMax Coding Plan 不依赖这项实验集成。
 
 本插件经 `ctx.get('creditBalance')` 读取服务计算的 `CreditBalance`。服务清单只补充不存在的 provider，并为这些条目标记明确的宿主来源；不会覆盖已注册的同名路由。裸 `minimax` 仍按内置 MiniMax token plan 查询，缺少 `apiKeyEnv` / `baseURL` 不能证明它属于 CodeArts。
+
+新增渠道名如 `gemini`、`modelscope` 也可能属于独立 API 供应商，不能仅凭名字将其归入宿主账号池。服务新增的条目可依来源标记识别；既有同名路由需显式配置 `codearts-credits`。徽章简称不构成账户或定价归属证据。
 
 若已注册的 `minimax` 实际使用 CodeArts 账号池，需要在现有 usage-stats 配置下显式选择适配器：
 
@@ -524,7 +526,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 
 ## 正确性与数据口径 / Correctness
 
-Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-reported `usage`，不是本地估算。相同 turn/step 的后续样本会替换旧样本，并按 `provider/model` 归集。
+Token 统计值来自 `assistant/chunk`、`assistant/message` 或 `compaction/summary` 中 provider-reported `usage`，不是本地估算。相同 turn/step 的后续样本会替换旧样本，并按 `provider/model` 归集。
 
 费用是明确标注的估算派生值：每个 usage 样本使用自己的事件时间、原始 provider/model 与四类 token bucket 匹配 `lib/pricing.js`；替换样本会先减去旧费用，再加入新费用。绝不会用“当前价格 × 历史累计 Token”。每个 session 的派生费用继续进入 `usage.sessions`、session CSV、JSON export 与整体 billing aggregation；插件不会向 DSH composer 注入 session UI。
 
@@ -536,6 +538,8 @@ Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-rep
 - 被后端**确定性拒绝**的存储日志（`SessionFormatUnsupportedError`、`SessionPersistenceCorruptionError`）在**本进程内**按 revision 记忆，日志变化前不再重试；瞬时错误不记忆，下一次扫描照常重试。两类失败每轮各汇总一条告警，且该记忆只存在于运行时、不写入缓存文件（重启后同一日志会重新尝试，因为拒绝取决于读取方而非日志本身）。
 - 已退出 live store 的会话（例如已结束的 sub-agent 运行）在下一次聚合时按 id 补读持久化日志，其 Token 计入日/模型总量，无需等待后台全量扫描。
 - seq 缺口、日志重写或 live/persisted 切换时完整重折叠该会话。
+- **继承历史按用量证据去重**：支持新版 DSH live Session / 持久化 read handle 的精确 `inheritedEventCount`，或明确的 `session/end-seed` 标记。复制样本与原样本只汇总一次；父日志缺失或只保留部分样本时，唯一幸存副本继续计入。普通 fork 不必提供 parentSession，也不按日期猜覆盖。旧宿主若没有精确边界则保留原有计量，仍可能重复；不可读旧缓存也保留汇总回退，不能宣称已校正这部分历史。详见[计量边界与验收](docs/pr153-accounting-review.md)。
+- 空读取不等于空日志：已经折叠过的会话若读到 0 个事件，保留既有折叠且不记录 revision，下一轮继续重试；schema 升级改为**迁移**已有折叠而不是丢弃（日志压缩后，缓存是那段用量的唯一账本）。
 - 聚合采用 single-flight，并在同一临界区原子保存缓存。
 - `validate:live` 会逐会话比较 raw artifact、`session.history`、插件端点与官方 token projection；缺文件或不一致会返回非零。
 

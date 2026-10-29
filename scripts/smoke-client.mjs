@@ -381,6 +381,34 @@ if (!dayDetail.includes("ark · deepseek-v4-flash")) throw new Error("same model
 if (dayDetail.length < 500) throw new Error("day detail markup too small");
 console.log("day detail render ok (provider-prefixed models), markup length:", dayDetail.length);
 
+// Provider/model rankings must aggregate the requested period without merging
+// independent routes, truncating slash-containing model ids, or mutating wire data.
+const { buildProviderUsage, ProviderUsageBreakdown } = exports_;
+const rankingDays = [
+ {date:"2026-08-01",models:[{model:"zai-coding-cn/glm",tokens:20},{model:"zai-coding-cn-2/glm",tokens:50},{model:"zai-coding-cn/vendor/model",tokens:30}]},
+ {date:"2026-08-02",models:[{model:"zai-coding-cn/vendor/model",tokens:10},{model:"legacy-model",tokens:5},{model:"bad/negative",tokens:-1},{model:"bad/nan",tokens:NaN}]},
+ {date:"2026-07-01",models:[{model:"zai-coding-cn-2/glm",tokens:1000}]}
+];
+const rankingBefore = JSON.stringify(rankingDays);
+const rankings = buildProviderUsage(rankingDays,"2026-08");
+assert.deepEqual(rankings.map(p=>[p.key,p.tokens]),[["zai-coding-cn",60],["zai-coding-cn-2",50],["unknown",5]]);
+assert.deepEqual(rankings[0].models.map(m=>[m.key,m.tokens]),[["zai-coding-cn/vendor/model",40],["zai-coding-cn/glm",20]]);
+assert.equal(buildProviderUsage(rankingDays)[0].tokens,1050);
+assert.deepEqual(buildProviderUsage(rankingDays,"2026-09"),[]);
+assert.deepEqual(buildProviderUsage(null),[]);
+assert.deepEqual(buildProviderUsage([{models:[{model:"b/z",tokens:1},{model:"a/z",tokens:1},{model:"a/a",tokens:1}]}])[0].models.map(m=>m.key),["a/a","a/z"]);
+assert.equal(JSON.stringify(rankingDays),rankingBefore,"ranking must not reorder or rewrite cached wire rows");
+let rankingRenderer;
+act(()=>{rankingRenderer=TestRenderer.create(react.createElement(ProviderUsageBreakdown,{days:rankingDays,month:"2026-08",translate:k=>k}));});
+assert.deepEqual(rankingRenderer.root.findAllByType("details").map(n=>n.props["data-usage-provider"]),["zai-coding-cn","zai-coding-cn-2","unknown"]);
+act(()=>rankingRenderer.root.findByType("select").props.onChange({target:{value:"all"}}));
+assert.equal(rankingRenderer.root.findAllByType("details")[0].props["data-usage-provider"],"zai-coding-cn-2");
+act(()=>rankingRenderer.update(react.createElement(ProviderUsageBreakdown,{days:rankingDays,month:"2026-07",translate:k=>k})));
+act(()=>rankingRenderer.root.findByType("select").props.onChange({target:{value:"month"}}));
+assert.deepEqual(rankingRenderer.root.findAllByType("details").map(n=>n.props["data-usage-provider"]),["zai-coding-cn-2"]);
+act(()=>rankingRenderer.unmount());
+console.log("provider/model ranking totals, routes, sorting and range changes ok");
+
 // Balance and subscription providers share one account-card frame. Only the
 // selected provider is rendered; the inner payload varies by account mode.
 const { ProviderAccountCard, buildProviderChoices, buildProviderPickerChoices, providerChoiceLabel } = exports_;
@@ -661,6 +689,43 @@ const subLow = badgeAccountValue({ mode: "subscription", status: "ok", windows: 
 if (subLow === null || subLow.kind !== "percent" || subLow.value !== 4 || subLow.display !== "4%") throw new Error(`subscription must warn on the lowest window, got ${JSON.stringify(subLow)}`);
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 4 }] }) !== true) throw new Error("subscription with a 4% window must warn");
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 55 }] }) !== false) throw new Error("subscription all above 5% must NOT warn");
+// #148: the OpenCode Go summary is monthly quota, while every live window
+// still participates in the exhaustion warning. Never substitute a short cap.
+const goAccount = {
+	id: "opencode-go", adapter: "opencode-go", mode: "subscription", status: "ok",
+	windows: [
+		{ kind: "session", remainingPercent: 90 },
+		{ kind: "weekly", remainingPercent: 95 },
+		{ kind: "monthly", remainingPercent: 98 }
+	]
+};
+assert.deepEqual(badgeAccountValue(goAccount), { kind: "percent", period: "monthly", value: 98, display: "98%" });
+assert.equal(badgeAccountValue({ ...goAccount, id: "custom-go-route", windows: [...goAccount.windows].reverse() }).value, 98);
+assert.equal(badgeAccountValue({ ...goAccount, adapter: undefined }).value, 98, "legacy canonical snapshots retain monthly semantics");
+assert.equal(badgeAccountValue({ ...goAccount, adapter: "declarative" }).value, 90, "an explicit custom adapter owns its summary");
+assert.equal(badgeWarnOf(goAccount), false);
+for (const kind of ["session", "weekly", "monthly"]) {
+	const limited = { ...goAccount, windows: goAccount.windows.map((window) => window.kind === kind ? { ...window, remainingPercent: 0 } : window) };
+	assert.equal(badgeWarnOf(limited), true, `${kind} exhaustion must warn even when monthly remaining is high`);
+	assert.equal(badgeAccountValue(limited).value, kind === "monthly" ? 0 : 98);
+}
+for (const remainingPercent of [undefined, null, "98", NaN, Infinity, -1, 101]) {
+	const malformed = { ...goAccount, windows: [{ kind: "session", remainingPercent: 90 }, { kind: "monthly", remainingPercent }] };
+	assert.equal(badgeAccountValue(malformed), null, "an absent/invalid month must not display a five-hour percentage");
+}
+for (const windows of [undefined, null, {}, "monthly"]) assert.equal(badgeAccountValue({ ...goAccount, windows }), null);
+assert.equal(badgeAccountValue({ ...goAccount, windows: [{ kind: "session", remainingPercent: 0 }] }), null);
+assert.equal(badgeWarnOf({ ...goAccount, windows: [{ kind: "session", remainingPercent: 0 }] }), true);
+assert.equal(badgeAccountValue({ ...goAccount, windows: [...goAccount.windows, goAccount.windows[2]] }), null, "ambiguous monthly windows must not invent a summary");
+for (const remainingPercent of [undefined, null, "98", NaN, Infinity, -1, 101]) {
+	assert.equal(badgeAccountValue({ ...goAccount, windows: [...goAccount.windows, { kind: "monthly", remainingPercent }] }), null, "a malformed duplicate month must not be silently discarded");
+}
+for (const status of ["not-configured", "unavailable", "rate-limited", "unauthorized"]) {
+	assert.equal(badgeAccountValue({ ...goAccount, status }), null);
+	assert.equal(badgeWarnOf({ ...goAccount, status }), false);
+}
+assert.equal(badgeAccountValue({ ...goAccount, stale: true }), null);
+assert.equal(badgeWarnOf({ ...goAccount, stale: true }), false);
 assert.equal(badgeAccountValue({ mode: "subscription", status: "ok", windows: [
 	{ kind: "expired", remainingPercent: 0 }, { kind: "quota", remainingPercent: 75 }
 ] }).value, 75, "expired packages must not replace the active quota badge");
@@ -754,7 +819,7 @@ const usageFixture = {
 const accountFixtureFor = (path) => {
 	const providerId = new URL(String(path), "http://local.test").searchParams.get("provider") ?? "deepseek-official";
 	return providerId === "opencode-go"
-		? { id: providerId, displayName: "OpenCode Go", mode: "subscription", status: "ok", windows: [{ kind: "weekly", remainingPercent: 18 }], alert: { level: "warning" } }
+		? { ...goAccount, displayName: "OpenCode Go", alert: { level: "normal" } }
 		: { id: providerId, displayName: providerId === "orcarouter" ? "OrcaRouter" : "DeepSeek", mode: "balance", status: providerId === "orcarouter" ? "unsupported" : "ok", balance: providerId === "orcarouter" ? null : { remaining: 5, currency: "USD" } };
 };
 const responseFixture = (payload, { ok = true, status = 200 } = {}) => ({ ok, status, json: async () => payload });
@@ -770,7 +835,8 @@ globalThis.fetch = async (path, options = {}) => {
 	return responseFixture(usageFixture);
 };
 let integrationRenderer;
-const panelTranslate = (key) => key === "orcarouter.choiceSuffix" ? "（赞助集成）" : key;
+const panelTranslate = (key) => key === "orcarouter.choiceSuffix" ? "（赞助集成）"
+	: key === "panel.monthlyRemaining" ? "Month left {value}" : key;
 writeSelectedProvider("opencode-go", localStorage);
 await act(async () => {
 	integrationRenderer = TestRenderer.create(react.createElement(UsageStatsPanel, { wide: true, t: panelTranslate }));
@@ -781,12 +847,23 @@ await act(async () => {
 	await flushPanelEffects();
 });
 if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).length !== 1) throw new Error("sidebar badge click must open the existing account panel");
+const goBadge = integrationRenderer.root.findByProps({ "data-usage-stats-badge": true });
+assert.match(goBadge.props["aria-label"], /Month left 98%/, "the mounted sidebar must identify the monthly percentage");
+assert.ok(integrationRenderer.root.findAll((node) => typeof node.props.className === "string" && node.props.className.includes("usg_badgeAmount")).some((node) => node.props.children === "Month left 98%"), "the visible badge must match the monthly window");
 assert.equal(integrationRequests.filter((request) => request.path.includes("/integrations/orcarouter") && request.method === "GET").length, 1, "opening the panel must read the secret-free OrcaRouter integration status once");
 assert.equal(integrationRequests.some((request) => request.path.includes("/integrations/orcarouter") && request.method === "POST"), false, "opening the panel must never mutate OrcaRouter settings");
 const exportLinks = integrationRenderer.root.findAll((node) => typeof node.props?.["data-export-format"] === "string");
 assert.deepEqual(exportLinks.map((node) => node.props["data-export-format"]), ["daily-csv", "sessions-csv", "json"], "the panel must expose all three secret-free downloads without a new fetch loop");
 for (const link of exportLinks) if (link.type !== "a" || typeof link.props.download !== "string" || link.props.className !== "usg_exportLink") throw new Error("exports must be styled browser downloads");
-const selectedPicker = integrationRenderer.root.findByType("select");
+const requestCountBeforeRange = integrationRequests.length;
+const writesBeforeRange = storedWrites.length;
+await act(async () => {
+ integrationRenderer.root.findByProps({"aria-label":"usage.scope"}).props.onChange({target:{value:"all"}});
+ await flushPanelEffects();
+});
+assert.equal(integrationRequests.length,requestCountBeforeRange,"ranking scope must not query accounts or usage again");
+assert.equal(storedWrites.length,writesBeforeRange,"ranking scope must not overwrite the manual provider preference");
+const selectedPicker = integrationRenderer.root.findByProps({ "aria-label": "account.provider" });
 if (selectedPicker.props.value !== "opencode-go") throw new Error(`sidebar panel must restore its persisted provider, got ${selectedPicker.props.value}`);
 const providerOptionLabels = selectedPicker.props.children.map((option) => option.props.children);
 if (!providerOptionLabels.includes("OrcaRouter（赞助集成）")) throw new Error(`provider picker must expose the compact OrcaRouter sponsorship label, got ${JSON.stringify(providerOptionLabels)}`);
@@ -803,7 +880,7 @@ await act(async () => {
 	integrationRenderer.root.findByProps({ "data-usage-stats-badge": true }).props.onClick();
 	await flushPanelEffects();
 });
-const reopenedPicker = integrationRenderer.root.findByType("select");
+const reopenedPicker = integrationRenderer.root.findByProps({ "aria-label": "account.provider" });
 if (reopenedPicker.props.value !== "opencode-go") throw new Error(`closing and reopening must preserve the selected provider, got ${reopenedPicker.props.value}`);
 if (integrationRenderer.root.findAllByProps({ "data-budget-period": "daily" }).length !== 1
 	|| integrationRenderer.root.findByProps({ "data-budget-period": "daily" }).props["data-budget-level"] !== "warning") {
@@ -841,7 +918,7 @@ await act(async () => {
 	freshRenderer.root.findByProps({ "data-usage-stats-badge": true }).props.onClick();
 	await flushPanelEffects();
 });
-let freshPicker = freshRenderer.root.findByType("select");
+let freshPicker = freshRenderer.root.findByProps({ "aria-label": "account.provider" });
 assert.equal(freshPicker.props.children.at(-1).props.value, ORCAROUTER_ADD_SENTINEL, "fresh install must append the synthetic OrcaRouter option");
 assert.equal(freshPicker.props.children.at(-1).props.children, "OrcaRouter（赞助集成）");
 await act(async () => {
@@ -855,7 +932,7 @@ assert.equal(freshPosts.length, 1, "one synthetic selection must perform exactly
 assert.equal(freshPosts[0].headers["content-type"], "application/json");
 assert.equal(freshPosts[0].headers["x-dsh-usage-stats-action"], "add-orcarouter");
 assert.equal(freshPosts[0].body, "{}");
-freshPicker = freshRenderer.root.findByType("select");
+freshPicker = freshRenderer.root.findByProps({ "aria-label": "account.provider" });
 assert.equal(freshPicker.props.value, "orcarouter", "a successful action must select the reloaded real OrcaRouter provider");
 assert.equal(freshPicker.props.children.some((option) => option.props.value === ORCAROUTER_ADD_SENTINEL), false, "the synthetic action must disappear after installation");
 assert.equal(freshPicker.props.children.filter((option) => option.props.value === "orcarouter").length, 1);
@@ -888,14 +965,14 @@ await act(async () => {
 	failedRenderer.root.findByProps({ "data-usage-stats-badge": true }).props.onClick();
 	await flushPanelEffects();
 });
-const failedPicker = failedRenderer.root.findByType("select");
+const failedPicker = failedRenderer.root.findByProps({ "aria-label": "account.provider" });
 assert.equal(failedPicker.props.value, "opencode-go");
 await act(async () => {
 	await failedPicker.props.onChange({ target: { value: ORCAROUTER_ADD_SENTINEL } });
 	await flushPanelEffects();
 });
 assert.equal(failedRequests.filter((request) => request.path.includes("/integrations/orcarouter") && request.method === "POST").length, 1);
-assert.equal(failedRenderer.root.findByType("select").props.value, "opencode-go", "a rejected mutation must preserve the current provider");
+assert.equal(failedRenderer.root.findByProps({ "aria-label": "account.provider" }).props.value, "opencode-go", "a rejected mutation must preserve the current provider");
 assert.equal(readSelectedProvider(localStorage), "opencode-go", "a rejected mutation must preserve the persisted provider");
 assert.equal(storedWrites.slice(failedStorageStart).some(([, value]) => value === ORCAROUTER_ADD_SENTINEL), false);
 assert.equal(failedRenderer.root.findAllByProps({ "data-orcarouter-action-error": true }).length, 1, "a rejected mutation must expose one lightweight inline error");

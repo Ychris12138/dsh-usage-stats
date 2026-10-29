@@ -147,7 +147,7 @@ MiniMax 区域优先级为 `monitors.<id>.region` > `MINIMAX_API_REGION` > route
 
 后台只执行上述只读查询，不自动安装或下载 CLI，不调用登录、购买、续费、轮换 Key 或切换默认 profile。CLI 负责其已有认证态的正常维护及网络访问；这是一个明确启用的本机进程边界，**不经过插件 HTTP 适配器的 DNS/IP 固定逻辑**。使用非交互 stdin、15 秒超时和 1 MiB 输出上限，且不传递继承的 `ARK_API_KEY`、`ARK_PROFILE` 等凭据覆盖。账户快照仅包含归一化的 session/weekly/monthly 已用比例和重置时间，不包含 CLI 的 viewer、账户标识、原始错误或认证文件。缺少文件、未订阅、命令失败或未知响应都有明确的非正常状态，不填零冒充成功。
 
-已核对官方 CLI 1.0.40 的命令参数，并完成脱敏样例及失败路径回归；尚无真实个人 Coding Plan 账户验收，因此保持实验性。
+已核对官方 CLI 1.0.40 的命令参数，并于 2026-10-29 复核 [1.0.45 官方契约](https://github.com/volcengine/ark-cli/blob/b84d1c02c3e3dc024b1b927f37dd39858053ea82/skills/arkcli-usage/references/arkcli-usage-plan.md)。默认不启用，仅在用户显式配置以上 monitor 后执行；脱敏样例和失败路径通过回归，尚无真实个人套餐账户验收。可作为实验性适配器使用，#74 仍保留账户验收待办。
 
 ## 凭据与供应商配置 / Configuration
 

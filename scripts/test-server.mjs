@@ -89,6 +89,8 @@ function currentPersistenceApi(logs, revisions, counters = { opened: 0, closed: 
 				counters.opened += 1;
 				return {
 					id,
+					header: { id, ...(headers.get(id) ?? {}) },
+					inheritedEventCount: headers.get(id)?.inheritedEventCount,
 					read: async (offset = 0) => {
 						counters.reads.push([id, offset]);
 						return { eventState: "detached", events: (logs.get(id) ?? []).filter((event) => event.seq >= offset) };
@@ -1873,15 +1875,7 @@ async function testPricingTransitionKeepsTokenFolds(root) {
 	gate = null;
 }
 
-/**
- * A seeded log replays its parent's events: DSH spawns a new session id and
- * seeds it with the previous history, both for the desktop "continue" flow and
- * for sub-agent delegation. Those samples already counted for the parent, so the
- * child may only contribute what it produced itself after `createdAt`.
- *
- * The storer lists that boundary in the session header and does not replay the
- * header event, so the stored path reads it from the listing.
- */
+/** A read handle pairs the exact inherited boundary with its event body. */
 async function testSeededSessionDoesNotRecountParent(root) {
 	const home = join(root, "seeded-session");
 	const plugin = await freshModule("seeded-session", home);
@@ -1912,7 +1906,7 @@ async function testSeededSessionDoesNotRecountParent(root) {
 
 	logs.set("child", childEvents);
 	revisions.set("child", "r1");
-	headers.set("child", { isSeeded: true, createdAt: childAt, parentSession: "parent" });
+	headers.set("child", { isSeeded: true, inheritedEventCount: 2, createdAt: childAt, parentSession: "parent" });
 
 	const usage = await plugin.collectUsage(context);
 	assert.equal(usage.total.tokens, 23, "the parent counts once (12) and the seeded child only its own sample (11)");
@@ -1930,7 +1924,7 @@ async function testSeededSessionDoesNotRecountParent(root) {
 	logs.set("event-seeded", eventSeeded);
 	revisions.set("event-seeded", "r1");
 	const withEventHeader = await plugin.collectUsage(context);
-	assert.equal(withEventHeader.total.tokens, 26, "a replayed header event also bounds the fold");
+	assert.equal(withEventHeader.total.tokens, 35, "a timestamp-only header cannot discard the unique nine-token historical sample");
 
 	// A seeded header without createdAt keeps folding the whole log, so the guard
 	// never silently drops real usage on an older host.
@@ -1939,7 +1933,7 @@ async function testSeededSessionDoesNotRecountParent(root) {
 	revisions.set("unmarked", "r1");
 	headers.set("unmarked", { isSeeded: true });
 	const afterUnmarked = await plugin.collectUsage(context);
-	assert.equal(afterUnmarked.total.tokens, 30, "a seeded header without createdAt still folds its log");
+	assert.equal(afterUnmarked.total.tokens, 39, "a seeded header without createdAt still folds its log");
 }
 
 /**
@@ -2001,12 +1995,8 @@ async function testCompactionSummaryUsage(root) {
 	assert.equal(repeated.total.tokens, 164, "a re-reported summary for the same compaction replaces its sample");
 }
 
-/**
- * A live seeded continuation has no `isSeeded`/`parentSession` on its session
- * object, so it borrows the boundary the persisted listing states for the same
- * id. The first scan cannot know it yet; the next one corrects the fold.
- */
-async function testLiveSeededSessionBorrowsListingCutoff(root) {
+/** A modern live fork exposes header and inheritedEventCount directly. */
+async function testLiveSeededSessionUsesExactCut(root) {
 	const home = join(root, "live-seeded");
 	const plugin = await freshModule("live-seeded", home);
 	const parentAt = Date.UTC(2026, 7, 13, 10, 0, 0);
@@ -2014,7 +2004,7 @@ async function testLiveSeededSessionBorrowsListingCutoff(root) {
 	const parentEvents = [{ ...usageEvent(0, 40), time: parentAt }];
 	const childEvents = [{ ...usageEvent(0, 40), time: parentAt }, { ...usageEvent(1, 5), time: childAt + 1_000 }];
 	const parent = { id: "live-parent", title: "parent", events: parentEvents };
-	const child = { id: "live-child", title: "child", events: childEvents };
+	const child = { id: "live-child", title: "child", header: { isSeeded: true }, inheritedEventCount: 1, events: childEvents };
 	const revisions = new Map([["live-parent", "r1"], ["live-child", "r1"]]);
 	const headers = new Map([["live-child", { isSeeded: true, createdAt: childAt, parentSession: "live-parent" }]]);
 	const logs = new Map([["live-parent", parentEvents], ["live-child", childEvents]]);
@@ -2022,7 +2012,7 @@ async function testLiveSeededSessionBorrowsListingCutoff(root) {
 	const context = makeContext({ sessions: { list: () => [parent, child] }, persistence: { list: api.list, open: api.open } });
 
 	const first = await plugin.collectUsage(context);
-	assert.equal(first.total.tokens, 85, "the first scan folds the live child before the listing taught its boundary");
+	assert.equal(first.total.tokens, 45, "the live Session supplies its exact cut without waiting for the listing");
 	const second = await plugin.collectUsage(context);
 	assert.equal(second.total.tokens, 45, "the next scan drops the replayed parent history from the live child");
 	const row = second.sessions.find((entry) => entry.sessionId === "live-child");
@@ -2100,6 +2090,63 @@ async function testEmptyFullRefoldKeepsLedger(root) {
 		"the failed full read must not record r2, so a readable retry at the same revision recovers");
 }
 
+
+async function testExactInheritedOwnership(root) {
+	const home = join(root, "exact-inherited");
+	let plugin = await freshModule("exact-inherited", home);
+	const early = { ...usageEvent(0, 10), time: Date.UTC(2026, 7, 13, 9) };
+	const later = { ...usageEvent(1, 5), time: Date.UTC(2026, 7, 13, 11) };
+	const own = { ...usageEvent(2, 7), time: later.time }; // equal timestamps are not boundaries
+	const logs = new Map([["child", [early, later, own]], ["parent", [later]]]);
+	const revisions = new Map([["child", "r1"], ["parent", "r1"]]); // child read first
+	const headers = new Map([["child", { isSeeded: true, inheritedEventCount: 2 }]]); // no parentSession
+	const { api, counters } = currentPersistenceApi(logs, revisions, void 0, headers);
+	const ctx = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+	const verify = async (expected, message) => {
+		const result = await plugin.collectUsage(ctx);
+		assert.equal(result.total.tokens, expected, message);
+		assert.equal(result.sessions.reduce((sum, row) => sum + row.tokens, 0), expected, "session/export rows match aggregate");
+		return result;
+	};
+	await verify(22, "partial parent coverage cannot delete the child's only early history");
+	const reads = counters.reads.length;
+	await verify(22, "unchanged collection is stable");
+	assert.equal(counters.reads.length, reads, "dedup does not force unchanged body reads");
+	plugin = await freshModule("exact-inherited-restart", home);
+	await verify(22, "sample identities and ownership survive cache restart");
+	logs.set("nested", [early, later, own, usageEvent(3, 3)]);
+	revisions.set("nested", "r1"); headers.set("nested", { isSeeded: true, inheritedEventCount: 3 });
+	await verify(25, "nested forks retain their own usage and reuse copied history once");
+	logs.delete("parent"); revisions.delete("parent");
+	await verify(25, "removing the original transfers historical ownership to a surviving copy");
+	logs.set("orphan", [early, later, usageEvent(2, 4)]); revisions.set("orphan", "r1");
+	headers.set("orphan", { isSeeded: true, inheritedEventCount: 2 });
+	await verify(29, "multiple orphan copies preserve one historical ledger");
+	// A rewritten log can change its cut together with its opaque revision.
+	headers.set("orphan", { isSeeded: true, inheritedEventCount: 0 });
+	revisions.set("orphan", "r2");
+	await verify(29, "a newly identified original takes ownership without double counting");
+	const disk = await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8");
+	assert.equal(disk.includes("private-prompt-marker"), false);
+}
+
+async function testIndependentAndCorrectedSampleOwnership(root) {
+	const plugin = await freshModule("sample-ownership", join(root, "sample-ownership"));
+	const chunk = { seq: 0, time: Date.UTC(2026, 7, 13), type: "assistant/chunk", data: {
+		turn: 0, step: 0, chunk: { type: "usage", usage: { inputTokens: 5 } }, prompt: "private-prompt-marker"
+	} };
+	const final = { ...usageEvent(1, 7), data: { ...usageEvent(1, 7).data, turn: 0, step: 0 } };
+	const logs = new Map([["fork", [chunk]], ["original", [chunk, final]]]);
+	const revisions = new Map([["fork", "r1"], ["original", "r1"]]);
+	const headers = new Map([["fork", { isSeeded: true, inheritedEventCount: 1 }]]);
+	const { api } = currentPersistenceApi(logs, revisions, void 0, headers);
+	const ctx = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 7, "copied earlier chunk aliases the corrected final sample");
+	logs.set("independent", [chunk, final]); revisions.set("independent", "r1");
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 14, "independent own calls are never collapsed merely for equal time/usage");
+	const cache = JSON.stringify(await readFile(join(process.env.DSH_HOME, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.equal(cache.includes("private-prompt-marker"), false, "only normalized usage hashes enter the cache");
+}
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
@@ -2142,7 +2189,9 @@ try {
 	await testCompactionSummaryUsage(root);
 	await testInterleavedCompactionAccounting(root);
 	await testEmptyFullRefoldKeepsLedger(root);
-	await testLiveSeededSessionBorrowsListingCutoff(root);
+	await testLiveSeededSessionUsesExactCut(root);
+	await testExactInheritedOwnership(root);
+	await testIndependentAndCorrectedSampleOwnership(root);
 	await testLiveLogShrink(root);
 	await testZeroUsageRowsFiltered(root);
 	console.log("SERVER REGRESSION TESTS PASSED");

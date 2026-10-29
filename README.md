@@ -507,7 +507,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 
 ## 正确性与数据口径 / Correctness
 
-Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-reported `usage`，不是本地估算。相同 turn/step 的后续样本会替换旧样本，并按 `provider/model` 归集。
+Token 统计值来自 `assistant/chunk`、`assistant/message` 或 `compaction/summary` 中 provider-reported `usage`，不是本地估算。相同 turn/step 的后续样本会替换旧样本，并按 `provider/model` 归集。
 
 费用是明确标注的估算派生值：每个 usage 样本使用自己的事件时间、原始 provider/model 与四类 token bucket 匹配 `lib/pricing.js`；替换样本会先减去旧费用，再加入新费用。绝不会用“当前价格 × 历史累计 Token”。每个 session 的派生费用继续进入 `usage.sessions`、session CSV、JSON export 与整体 billing aggregation；插件不会向 DSH composer 注入 session UI。
 
@@ -519,7 +519,7 @@ Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-rep
 - 被后端**确定性拒绝**的存储日志（`SessionFormatUnsupportedError`、`SessionPersistenceCorruptionError`）在**本进程内**按 revision 记忆，日志变化前不再重试；瞬时错误不记忆，下一次扫描照常重试。两类失败每轮各汇总一条告警，且该记忆只存在于运行时、不写入缓存文件（重启后同一日志会重新尝试，因为拒绝取决于读取方而非日志本身）。
 - 已退出 live store 的会话（例如已结束的 sub-agent 运行）在下一次聚合时按 id 补读持久化日志，其 Token 计入日/模型总量，无需等待后台全量扫描。
 - seq 缺口、日志重写或 live/persisted 切换时完整重折叠该会话。
-- **seeded 会话只统计自身用量，但绝不因此丢历史**：DSH 的「继续会话」与 sub-agent 委派都会用父会话历史 seed 出一个新 session id，头部 `isSeeded` + `createdAt` 标出边界（从 `list()` 元数据读取，因为 `read()` 不重放头部事件）；边界之前的事件属于父会话，只有当**父会话现存的折叠仍覆盖这段范围**时才不计入。父日志被压缩后 seed 是唯一副本，此时整份计入。
+- **继承历史按用量证据去重**：支持新版 DSH live Session / 持久化 read handle 的精确 `inheritedEventCount`，或明确的 `session/end-seed` 标记。复制样本与原样本只汇总一次；父日志缺失或只保留部分样本时，唯一幸存副本继续计入。普通 fork 不必提供 parentSession，也不按日期猜覆盖。旧宿主若没有精确边界则保留原有计量，仍可能重复；不可读旧缓存也保留汇总回退，不能宣称已校正这部分历史。详见[计量边界与验收](docs/pr153-accounting-review.md)。
 - 空读取不等于空日志：已经折叠过的会话若读到 0 个事件，保留既有折叠且不记录 revision，下一轮继续重试；schema 升级改为**迁移**已有折叠而不是丢弃（日志压缩后，缓存是那段用量的唯一账本）。
 - 聚合采用 single-flight，并在同一临界区原子保存缓存。
 - `validate:live` 会逐会话比较 raw artifact、`session.history`、插件端点与官方 token projection；缺文件或不一致会返回非零。

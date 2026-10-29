@@ -603,3 +603,13 @@ node scripts/check-balance.mjs
 ## License
 
 [MIT](LICENSE)
+
+### Web-search usage (pending upstream)
+
+Search requests alone are not token usage. The draft integration accepts explicit `web/deepseek-search-usage` events containing `provider`, `model`, `usage`, and a stable per-dispatch `requestId` (or event identity). Repeated reports for that identity replace the previous sample, including across cache restarts. Independent dispatches must have different IDs even if a gateway reuses its response ID.
+
+Messages `input_tokens` excludes separately reported cache buckets. `output_tokens` is the reported output total. If a producer supplies positive `reasoning_tokens`/`reasoningTokens`, it must set `reasoningTokensMode` to `included` or `additional`; ambiguous totals and conflicting camel/snake aliases are rejected. The upstream producer should normalize Messages usage with `included`, matching its ordinary conversation adapter. Cache schema v7 rebuilds older folds to remove previously additive reasoning counts.
+
+Totals currently include both conversation and auxiliary search consumption. Search records retain their own identities and model routes, and do not change the active conversation route. Separate UI subtotals remain deferred; model totals alone cannot distinguish the two when both use the same model. Search result text included in a later conversation is a separate model invocation and must still count. Search-operation fees are not inferred from token counts. Historical request-only logs cannot recover missing usage.
+
+This support requires an upstream response-event producer. Synthetic regression tests do not establish real-account billing accuracy or release readiness.

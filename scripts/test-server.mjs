@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { CACHE_VERSION as CACHE_SCHEMA } from "../lib/index.js";
 import { pricingFingerprint } from "../lib/billing.js";
 
 function usageEvent(seq, inputTokens) {
@@ -77,15 +78,19 @@ function makeContext({ sessions, persistence, routes, settings, diagnostics, lis
  * through `open(id, "read")`. `reads` records every handle read, `opened` and
  * `closed` count handle lifetimes.
  */
-function currentPersistenceApi(logs, revisions, counters = { opened: 0, closed: 0, reads: [] }) {
+function currentPersistenceApi(logs, revisions, counters = { opened: 0, closed: 0, reads: [] }, headers = new Map()) {
 	return {
 		counters,
 		api: {
-			list: async () => [...revisions].map(([id, revision]) => ({ header: { id }, revision })),
+			// `header` is the session metadata the storer lists; a seeded session
+			// states its boundary there, not as a replayed log event.
+			list: async () => [...revisions].map(([id, revision]) => ({ header: { id, ...(headers.get(id) ?? {}) }, revision })),
 			open: async (id) => {
 				counters.opened += 1;
 				return {
 					id,
+					header: { id, ...(headers.get(id) ?? {}) },
+					inheritedEventCount: headers.get(id)?.inheritedEventCount,
 					read: async (offset = 0) => {
 						counters.reads.push([id, offset]);
 						return { eventState: "detached", events: (logs.get(id) ?? []).filter((event) => event.seq >= offset) };
@@ -669,7 +674,7 @@ async function testV4CacheUpgradeRefoldsBilling(root) {
 	assert.equal(migratedContext.session.currency, "USD");
 	assert.equal(migratedContext.session.tokens, 1_000_000);
 	const migrated = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
-	assert.equal(migrated.version, 7, "the rewritten cache must use schema v7");
+	assert.equal(migrated.version, CACHE_SCHEMA, "the rewritten cache must use the current schema");
 	assert.equal(typeof migrated.pricingFingerprint, "string");
 	assert.equal(migrated.sessions[sessionId].currentRoute.providerId, "route-a");
 	assert.equal(migrated.sessions[sessionId].billing.sampleCount, 1);
@@ -687,7 +692,7 @@ async function testPricingFingerprintInvalidatesDerivedCosts(root) {
 	}] }));
 	oldFingerprint.pricingCatalog = [];
 	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
-		version: 7,
+		version: CACHE_SCHEMA,
 		pricingFingerprint: JSON.stringify(oldFingerprint),
 		sessions: {
 			[sessionId]: {
@@ -723,7 +728,7 @@ async function testPricingFingerprintInvalidationWritesWithoutLive(root) {
 		config: { monitors: {} }
 	});
 	await writeFile(join(storage, "usage-stats-cache.json"), JSON.stringify({
-		version: 7,
+		version: CACHE_SCHEMA,
 		pricingFingerprint: oldFingerprint,
 		sessions: {}
 	}), "utf8");
@@ -925,7 +930,7 @@ async function testMalformedCacheRebuild(root) {
 	const usage = await plugin.collectUsage(context);
 	assert.equal(usage.total.tokens, 17, "a malformed cache must rebuild from authoritative session events");
 	const rebuilt = JSON.parse(await readFile(join(storage, "usage-stats-cache.json"), "utf8"));
-	assert.equal(rebuilt.version, 7);
+	assert.equal(rebuilt.version, CACHE_SCHEMA);
 	assert.equal(rebuilt.sessions.recovered.consumed, 1);
 }
 
@@ -1870,6 +1875,300 @@ async function testPricingTransitionKeepsTokenFolds(root) {
 	gate = null;
 }
 
+/** A read handle pairs the exact inherited boundary with its event body. */
+async function testSeededSessionDoesNotRecountParent(root) {
+	const home = join(root, "seeded-session");
+	const plugin = await freshModule("seeded-session", home);
+	const parentAt = Date.UTC(2026, 7, 13, 10, 0, 0);
+	const childAt = Date.UTC(2026, 7, 13, 12, 0, 0);
+	const parentEvents = [
+		{ ...usageEvent(0, 5), time: parentAt },
+		{ ...usageEvent(1, 7), time: parentAt + 60_000 }
+	];
+	// The child log replays both parent samples under new seq numbers, then adds
+	// one sample of its own.
+	const childEvents = [
+		{ ...usageEvent(0, 5), time: parentAt },
+		{ ...usageEvent(1, 7), time: parentAt + 60_000 },
+		{ ...usageEvent(2, 11), time: childAt + 1_000 }
+	];
+	const logs = new Map([["parent", parentEvents]]);
+	const revisions = new Map([["parent", "r1"]]);
+	const headers = new Map();
+	const { api } = currentPersistenceApi(logs, revisions, void 0, headers);
+	const persistence = { list: api.list, open: api.open };
+	const context = makeContext({ sessions: { list: () => [] }, persistence });
+
+	// The parent exists first, so its own history is already folded when the child
+	// appears; that coverage is what proves the seed duplicates it.
+	const solo = await plugin.collectUsage(context);
+	assert.equal(solo.total.tokens, 12, "the parent folds on its own before the child exists");
+
+	logs.set("child", childEvents);
+	revisions.set("child", "r1");
+	headers.set("child", { isSeeded: true, inheritedEventCount: 2, createdAt: childAt, parentSession: "parent" });
+
+	const usage = await plugin.collectUsage(context);
+	assert.equal(usage.total.tokens, 23, "the parent counts once (12) and the seeded child only its own sample (11)");
+	const child = usage.sessions.find((row) => row.sessionId === "child");
+	assert.equal(child?.tokens, 11, "the seeded child must not replay the parent's 12 tokens");
+	const parent = usage.sessions.find((row) => row.sessionId === "parent");
+	assert.equal(parent?.tokens, 12, "the parent keeps its own usage");
+
+	// A backend that does replay the header event still gets the same answer.
+	const eventSeeded = [
+		{ type: "session", seq: 0, time: parentAt, id: "event-seeded", isSeeded: true, createdAt: childAt },
+		{ ...usageEvent(1, 9), time: parentAt },
+		{ ...usageEvent(2, 3), time: childAt + 2_000 }
+	];
+	logs.set("event-seeded", eventSeeded);
+	revisions.set("event-seeded", "r1");
+	const withEventHeader = await plugin.collectUsage(context);
+	assert.equal(withEventHeader.total.tokens, 35, "a timestamp-only header cannot discard the unique nine-token historical sample");
+
+	// A seeded header without createdAt keeps folding the whole log, so the guard
+	// never silently drops real usage on an older host.
+	const unmarked = [{ ...usageEvent(0, 4), time: parentAt }];
+	logs.set("unmarked", unmarked);
+	revisions.set("unmarked", "r1");
+	headers.set("unmarked", { isSeeded: true });
+	const afterUnmarked = await plugin.collectUsage(context);
+	assert.equal(afterUnmarked.total.tokens, 39, "a seeded header without createdAt still folds its log");
+}
+
+/**
+ * A storer that answers empty for a session that already folded is failing, not
+ * reporting an empty log: the folded ledger has to survive and the read has to be
+ * retried, otherwise a transient failure silently deletes history.
+ */
+async function testFailedReadKeepsFoldedUsage(root) {
+	const home = join(root, "failed-read");
+	const plugin = await freshModule("failed-read", home);
+	const logs = new Map([["stored", [usageEvent(0, 10)]]]);
+	const revisions = new Map([["stored", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	const context = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 10, "the stored session folds");
+
+	logs.set("stored", []);
+	revisions.set("stored", "r2");
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 10, "an empty read must not blank folded usage");
+
+	logs.set("stored", [usageEvent(0, 10), usageEvent(1, 4)]);
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 14, "the retry picks the readable log up again");
+}
+
+/**
+ * A compaction summary is an LLM call of its own, so its usage belongs to the
+ * provider/model that ran it; the compaction id keeps a re-reported summary from
+ * counting twice.
+ */
+async function testCompactionSummaryUsage(root) {
+	const home = join(root, "compaction-usage");
+	const plugin = await freshModule("compaction-usage", home);
+	const time = Date.UTC(2026, 7, 13, 9, 0, 0);
+	const summary = (seq, id, input) => ({
+		seq,
+		time,
+		type: "compaction/summary",
+		data: {
+			compactionId: id,
+			provider: "route-c",
+			model: "model-c",
+			usage: { inputTokens: input, outputTokens: 2, cacheReadTokens: 0, cacheWriteTokens: 0 }
+		}
+	});
+	const logs = new Map([["compacted", [summary(0, "c1", 100), summary(1, "c2", 50)]]]);
+	const revisions = new Map([["compacted", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	const context = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+
+	const usage = await plugin.collectUsage(context);
+	assert.equal(usage.total.tokens, 154, "compaction summaries count once each");
+	const row = usage.sessions.find((entry) => entry.sessionId === "compacted");
+	assert.deepEqual(row?.models, ["route-c/model-c"], "a compaction is attributed to the provider and model that ran it");
+
+	logs.set("compacted", [summary(0, "c1", 100), summary(1, "c2", 50), summary(2, "c2", 60)]);
+	revisions.set("compacted", "r2");
+	const repeated = await plugin.collectUsage(context);
+	assert.equal(repeated.total.tokens, 164, "a re-reported summary for the same compaction replaces its sample");
+}
+
+/** A modern live fork exposes header and inheritedEventCount directly. */
+async function testLiveSeededSessionUsesExactCut(root) {
+	const home = join(root, "live-seeded");
+	const plugin = await freshModule("live-seeded", home);
+	const parentAt = Date.UTC(2026, 7, 13, 10, 0, 0);
+	const childAt = Date.UTC(2026, 7, 13, 12, 0, 0);
+	const parentEvents = [{ ...usageEvent(0, 40), time: parentAt }];
+	const childEvents = [{ ...usageEvent(0, 40), time: parentAt }, { ...usageEvent(1, 5), time: childAt + 1_000 }];
+	const parent = { id: "live-parent", title: "parent", events: parentEvents };
+	const child = { id: "live-child", title: "child", header: { isSeeded: true }, inheritedEventCount: 1, events: childEvents };
+	const revisions = new Map([["live-parent", "r1"], ["live-child", "r1"]]);
+	const headers = new Map([["live-child", { isSeeded: true, createdAt: childAt, parentSession: "live-parent" }]]);
+	const logs = new Map([["live-parent", parentEvents], ["live-child", childEvents]]);
+	const { api } = currentPersistenceApi(logs, revisions, void 0, headers);
+	const context = makeContext({ sessions: { list: () => [parent, child] }, persistence: { list: api.list, open: api.open } });
+
+	const first = await plugin.collectUsage(context);
+	assert.equal(first.total.tokens, 45, "the live Session supplies its exact cut without waiting for the listing");
+	const second = await plugin.collectUsage(context);
+	assert.equal(second.total.tokens, 45, "the next scan drops the replayed parent history from the live child");
+	const row = second.sessions.find((entry) => entry.sessionId === "live-child");
+	assert.equal(row?.tokens, 5, "the live child keeps only its own sample");
+}
+
+async function testInterleavedCompactionAccounting(root) {
+	const home = join(root, "interleaved-compaction");
+	let plugin = await freshModule("interleaved-compaction", home);
+	const time = Date.UTC(2026, 7, 13, 9);
+	const summary = (seq, id, input) => ({ seq, time, type: "compaction/summary", data: {
+		compactionId: id, provider: "route-c", model: "model-c",
+		usage: { inputTokens: input, outputTokens: 0 }
+	} });
+	const message = usageEvent(1, 7);
+	message.data.turn = "same-turn";
+	const chunk = { seq: 0, time, type: "assistant/chunk", data: {
+		turn: "same-turn", step: 0, chunk: { type: "usage", usage: { inputTokens: 5, outputTokens: 0 } }
+	} };
+	const events = [chunk, summary(1, "c1", 100), { ...message, seq: 2 }, summary(3, "c2", 20), summary(4, "c1", 110)];
+	const logs = new Map([["interleaved", events]]);
+	const revisions = new Map([["interleaved", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	const context = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 137,
+		"compactions must neither break assistant chunk/message replacement nor count an interleaved correction twice");
+	const cacheFile = join(home, "storages", "usage-stats-cache.json");
+	const cache = JSON.parse(await readFile(cacheFile, "utf8"));
+	assert.equal(cache.sessions.interleaved.billing.sampleCount, 3, "replacement must also remove the previous cost sample");
+	// Version 8 could contain inflated summaries without a replacement ledger.
+	// A readable log must rebuild those totals rather than append onto them.
+	cache.version = 8;
+	delete cache.sessions.interleaved.compactionSamples;
+	cache.sessions.interleaved.days["2026-08-13"].totals.inputTokens = 242;
+	await writeFile(cacheFile, JSON.stringify(cache));
+	plugin = await freshModule("interleaved-compaction-migration", home);
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 137, "a pre-ledger cache must refold readable source events");
+	plugin = await freshModule("interleaved-compaction-restart", home);
+	events.push(summary(5, "c1", 120));
+	revisions.set("interleaved", "r2");
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 147,
+		"the compaction ledger must survive cache reload before an incremental correction");
+	const restored = JSON.parse(await readFile(cacheFile, "utf8"));
+	assert.equal(restored.version, CACHE_SCHEMA);
+	assert.equal(restored.sessions.interleaved.billing.sampleCount, 3, "restart corrections retain exactly three cost samples");
+}
+
+async function testEmptyFullRefoldKeepsLedger(root) {
+	const home = join(root, "empty-full-refold");
+	const plugin = await freshModule("empty-full-refold", home);
+	const logs = new Map([["stored", [usageEvent(0, 10), usageEvent(1, 20)]]]);
+	const revisions = new Map([["stored", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	let emptyFullRead = false;
+	const open = api.open;
+	api.open = async (id) => {
+		const handle = await open(id);
+		const read = handle.read;
+		handle.read = async (offset) => emptyFullRead
+			? { eventState: "detached", events: offset === 0 ? [] : [usageEvent(3, 40)] }
+			: read(offset);
+		return handle;
+	};
+	const context = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 30);
+	emptyFullRead = true;
+	revisions.set("stored", "r2");
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 30,
+		"a noncontiguous tail followed by an empty full read must keep the complete cached ledger");
+	const cached = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.equal(cached.sessions.stored.revision, "r1", "failed full reads must leave the old committed revision intact");
+	emptyFullRead = false;
+	logs.set("stored", [usageEvent(0, 10), usageEvent(1, 20), usageEvent(2, 4)]);
+	assert.equal((await plugin.collectUsage(context)).total.tokens, 34,
+		"the failed full read must not record r2, so a readable retry at the same revision recovers");
+}
+
+
+async function testExactInheritedOwnership(root) {
+	const home = join(root, "exact-inherited");
+	let plugin = await freshModule("exact-inherited", home);
+	const early = { ...usageEvent(0, 10), time: Date.UTC(2026, 7, 13, 9) };
+	const later = { ...usageEvent(1, 5), time: Date.UTC(2026, 7, 13, 11) };
+	const own = { ...usageEvent(2, 7), time: later.time }; // equal timestamps are not boundaries
+	const logs = new Map([["child", [early, later, own]], ["parent", [later]]]);
+	const revisions = new Map([["child", "r1"], ["parent", "r1"]]); // child read first
+	const headers = new Map([["child", { isSeeded: true, inheritedEventCount: 2 }]]); // no parentSession
+	const { api, counters } = currentPersistenceApi(logs, revisions, void 0, headers);
+	const ctx = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+	const verify = async (expected, message) => {
+		const result = await plugin.collectUsage(ctx);
+		assert.equal(result.total.tokens, expected, message);
+		assert.equal(result.sessions.reduce((sum, row) => sum + row.tokens, 0), expected, "session/export rows match aggregate");
+		return result;
+	};
+	await verify(22, "partial parent coverage cannot delete the child's only early history");
+	const reads = counters.reads.length;
+	await verify(22, "unchanged collection is stable");
+	assert.equal(counters.reads.length, reads, "dedup does not force unchanged body reads");
+	plugin = await freshModule("exact-inherited-restart", home);
+	await verify(22, "sample identities and ownership survive cache restart");
+	logs.set("nested", [early, later, own, usageEvent(3, 3)]);
+	revisions.set("nested", "r1"); headers.set("nested", { isSeeded: true, inheritedEventCount: 3 });
+	await verify(25, "nested forks retain their own usage and reuse copied history once");
+	logs.delete("parent"); revisions.delete("parent");
+	await verify(25, "removing the original transfers historical ownership to a surviving copy");
+	logs.set("orphan", [early, later, usageEvent(2, 4)]); revisions.set("orphan", "r1");
+	headers.set("orphan", { isSeeded: true, inheritedEventCount: 2 });
+	await verify(29, "multiple orphan copies preserve one historical ledger");
+	// A rewritten log can change its cut together with its opaque revision.
+	headers.set("orphan", { isSeeded: true, inheritedEventCount: 0 });
+	revisions.set("orphan", "r2");
+	await verify(29, "a newly identified original takes ownership without double counting");
+	const disk = await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8");
+	assert.equal(disk.includes("private-prompt-marker"), false);
+}
+
+async function testIndependentAndCorrectedSampleOwnership(root) {
+	const plugin = await freshModule("sample-ownership", join(root, "sample-ownership"));
+	const chunk = { seq: 0, time: Date.UTC(2026, 7, 13), type: "assistant/chunk", data: {
+		turn: 0, step: 0, chunk: { type: "usage", usage: { inputTokens: 5 } }, prompt: "private-prompt-marker"
+	} };
+	const final = { ...usageEvent(1, 7), data: { ...usageEvent(1, 7).data, turn: 0, step: 0 } };
+	const logs = new Map([["fork", [chunk]], ["original", [chunk, final]]]);
+	const revisions = new Map([["fork", "r1"], ["original", "r1"]]);
+	const headers = new Map([["fork", { isSeeded: true, inheritedEventCount: 1 }]]);
+	const { api } = currentPersistenceApi(logs, revisions, void 0, headers);
+	const ctx = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 7, "copied earlier chunk aliases the corrected final sample");
+	logs.set("independent", [chunk, final]); revisions.set("independent", "r1");
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 14, "independent own calls are never collapsed merely for equal time/usage");
+	const cache = JSON.stringify(await readFile(join(process.env.DSH_HOME, "storages", "usage-stats-cache.json"), "utf8"));
+	assert.equal(cache.includes("private-prompt-marker"), false, "only normalized usage hashes enter the cache");
+}
+async function testUnreadableMigrationRetriesAfterRestart(root) {
+	const home = join(root, "migration-retry");
+	let plugin = await freshModule("migration-retry-seed", home);
+	const logs = new Map([["stored", [usageEvent(0, 10), usageEvent(1, 20)]]]);
+	const revisions = new Map([["stored", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	const ctx = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 30);
+	const path = join(home, "storages", "usage-stats-cache.json");
+	const old = JSON.parse(await readFile(path, "utf8"));
+	old.version = 5; delete old.sessions.stored.usageSamples;
+	await writeFile(path, JSON.stringify(old));
+	logs.set("stored", []);
+	plugin = await freshModule("migration-retry-unreadable", home);
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 30, "opaque old aggregate survives an unavailable source");
+	const pending = JSON.parse(await readFile(path, "utf8"));
+	assert.equal(pending.sessions.stored.needsRefold, true, "a pending refold must survive a schema-10 save");
+	plugin = await freshModule("migration-retry-restart", home);
+	logs.set("stored", [usageEvent(0, 10), usageEvent(1, 20), usageEvent(2, 4)]);
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 34, "restart recovery must rebuild all samples, not replace history with the tail");
+}
+
 async function testWebSearchCacheReplacement(root) {
 	const home = join(root, "web-search-cache");
 	const time = Date.UTC(2026, 7, 24, 2);
@@ -1894,7 +2193,7 @@ async function testWebSearchCacheReplacement(root) {
 	await writeFile(path, JSON.stringify(saved), "utf8");
 	const migrated = await freshModule("web-search-v6-refold", home);
 	assert.equal((await migrated.collectUsage(context)).total.tokens, 24);
-	assert.equal(JSON.parse(await readFile(path, "utf8")).version, 7);
+	assert.equal(JSON.parse(await readFile(path, "utf8")).version, CACHE_SCHEMA);
 
 	// Cold statistics restart with no live Session and no usage cache. The
 	// persistence seam reads the complete synthetic event log from disk; replay
@@ -1968,6 +2267,15 @@ try {
 	await testConfiguredProvidersIncludeRegisteredRoutes(root);
 	await testRegistryRoutesDoNotMovePricingFingerprint(root);
 	await testPricingTransitionKeepsTokenFolds(root);
+	await testSeededSessionDoesNotRecountParent(root);
+	await testFailedReadKeepsFoldedUsage(root);
+	await testCompactionSummaryUsage(root);
+	await testInterleavedCompactionAccounting(root);
+	await testEmptyFullRefoldKeepsLedger(root);
+	await testLiveSeededSessionUsesExactCut(root);
+	await testUnreadableMigrationRetriesAfterRestart(root);
+	await testExactInheritedOwnership(root);
+	await testIndependentAndCorrectedSampleOwnership(root);
 	await testLiveLogShrink(root);
 	await testZeroUsageRowsFiltered(root);
 	console.log("SERVER REGRESSION TESTS PASSED");
@@ -1975,4 +2283,3 @@ try {
 	delete process.env.DSH_HOME;
 	await rm(root, { recursive: true, force: true });
 }
-

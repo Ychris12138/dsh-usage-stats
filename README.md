@@ -23,7 +23,7 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 | | 能力 | 说明 |
 | --- | --- | --- |
 | 💳 | 统一账户卡片 | API 供应商显示余额，Token Plan 显示分窗口额度；面板一次只呈现当前供应商 |
-| 📊 | Token 用量分析 | 今日、本月、累计、缓存命中率、月历热图，以及按日期/供应商/模型下钻 |
+| 📊 | Token 用量分析 | 今日、本月、累计、缓存命中率、月历热图，以及供应商分组与组内模型用量排行 |
 | 💰 | 估算费用与预算 | 按事件时间匹配历史价格，提供日/月费用、session 级聚合及可选预算预警 |
 | 🔄 | 后台监测 | 账户按 active/detail/background 自适应刷新；间隔可配置或完全关闭，本地 Token 聚合保持独立运行 |
 | 🧩 | 可扩展适配器 | 支持 New API、Sub2API、通用余额模板，以及声明式 JSON Pointer 自定义查询 |
@@ -112,15 +112,17 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | OpenRouter | 余额 | `OPENROUTER_MANAGEMENT_KEY` | `/api/v1/credits` |
 | OrcaRouter | 余额 | `ORCAROUTER_API_KEY` | `/v1/balance`（旧部署回退到账单摘要接口） |
 | Moonshot / Kimi API | 余额 | provider `apiKeyEnv` | `/v1/users/me/balance` |
-| OpenCode Go | 订阅 | `OPENCODE_GO_API_KEY` 或本地 `auth.json` | `/zen/go/v1/usage` |
+| OpenCode Go | 订阅 | `OPENCODE_API_KEY`，兼容旧 `OPENCODE_GO_API_KEY` | `/inference/go/v1/usage`（兼容旧 `/zen/go/v1/usage`） |
 | Z.ai / 智谱 | 订阅 | 全球区 `ZAI_API_KEY`；中国区 `ZAI_CODING_CN_API_KEY` | Coding Plan quota/subscription |
 | Kimi For Coding | 订阅 | `KIMI_API_KEY` | `/coding/v1/usages` |
 | MiniMax Coding Plan | 订阅 | 全球区 `MINIMAX_API_KEY`；中国区 `MINIMAX_CN_API_KEY` | `/v1/token_plan/remains` |
 | Ollama 云 | 订阅 | `OLLAMA_API_KEY` | `/api/usage`（5小时 + 周窗口） |
 | Command Code（Go / GOAT / Pro / Max） | 订阅 + 余额 | `COMMANDCODE_API_KEY` | `/alpha/billing/credits` 等 `/alpha/*`（**实验性**：未公开端点） |
+| 火山方舟个人 Coding Plan（可选 CLI，实验性） | 订阅 | 明确指定的官方 Ark CLI profile，独立于模型 API Key | `arkcli usage plan --product coding-plan` |
 | New API | 余额 | provider 推理 Token | `/api/usage/token/` |
 | Sub2API / Passion | 自动判别 | provider `apiKeyEnv` | `/v1/usage` |
 | Sub2API 面板（真实） | 余额 | provider 推理 Token | `/user/balance`（复用 apiKey） |
+| CodeArts 系反代（`dsh-codearts-auth`） | 订阅 | 宿主插件账号池；本插件不读取 AK/SK | `creditBalance.creditsBalances()`（进程内） |
 | General / Declarative | 余额或订阅 | 配置中的 credential ref | 受限 GET + JSON |
 
 DSH 注册表仅返回路由 ID、未提供连接字段时，`minimax` 默认读取 `MINIMAX_API_KEY` 并请求全球区，`minimax-cn` 默认读取 `MINIMAX_CN_API_KEY` 并请求中国区。两条默认凭据不会互相回退。显式 `credentialRef` / provider `apiKeyEnv` 仍优先，引用缺失时不会借用默认 Key；自定义路由、provider endpoint 或自定义 `usageBaseURL` 不会自动继承这些凭据。这里显示的是 Coding Plan 订阅额度，不代表支持任意 MiniMax API 钱包余额或 Providers Hub 的 MiniMax Code 账号池。
@@ -128,6 +130,30 @@ DSH 注册表仅返回路由 ID、未提供连接字段时，`minimax` 默认读
 MiniMax 区域优先级为 `monitors.<id>.region` > `MINIMAX_API_REGION` > route/baseURL/credential ref 推断。中国区与全球区凭据请匹配相应区域；明确区域的请求不会因 1004/2049 拒绝而切到另一区域，显式 `usageBaseURL` 仍只访问指定地址。
 
 没有公开账户接口的供应商仍会正常统计 Token；账户卡片会明确显示“不支持”，不会猜测余额。
+
+### 火山方舟个人 Coding Plan（实验性）
+
+可选择通过[官方 Ark CLI](https://github.com/volcengine/ark-cli)读取个人套餐额度。先自行安装、登录 CLI，并用明确指定的 profile 验证 `usage plan --product coding-plan --profile <name> --format json` 能正常返回。插件只支持个人 `coding-plan`，不把后付费 Token 统计当作套餐余额，也不读取团队席位或 BytePlus 账户。
+
+```yaml
+        monitors:
+          ark-coding-plan-cn:
+            adapter: ark-coding-plan-cli
+            arkCLIExecutable: /absolute/path/to/arkcli-darwin-arm64
+            arkCLIProfile: personal-coding
+```
+
+`arkCLIExecutable` 必须是官方安装中的**原生二进制文件**绝对路径（npm 包的 `bin/arkcli-<platform>-<arch>`，Windows 为 `.exe`），不要填写 npm 的 Node 启动脚本或 `.cmd` 包装器。这样超时会终止实际查询进程，不会遗留包装器启动的子进程。`arkCLIProfile` 必须明确指定，限制为 1–64 个字母、数字或 `_ . -`，首字符为字母或数字。CLI 的控制面登录身份与 DSH 模型 Key 不等价，请选择自己的正确账户。
+
+后台只执行上述只读查询，不自动安装或下载 CLI，不调用登录、购买、续费、轮换 Key 或切换默认 profile。CLI 负责其已有认证态的正常维护及网络访问；这是一个明确启用的本机进程边界，**不经过插件 HTTP 适配器的 DNS/IP 固定逻辑**。使用非交互 stdin、15 秒超时和 1 MiB 输出上限，且不传递继承的 `ARK_API_KEY`、`ARK_PROFILE` 等凭据覆盖。账户快照仅包含归一化的 session/weekly/monthly 已用比例和重置时间，不包含 CLI 的 viewer、账户标识、原始错误或认证文件。缺少文件、未订阅、命令失败或未知响应都有明确的非正常状态，不填零冒充成功。
+
+已核对官方 CLI 1.0.40 的命令参数，并于 2026-10-29 复核 [1.0.45 官方契约](https://github.com/volcengine/ark-cli/blob/b84d1c02c3e3dc024b1b927f37dd39858053ea82/skills/arkcli-usage/references/arkcli-usage-plan.md)。默认不启用，仅在用户显式配置以上 monitor 后执行；脱敏样例和失败路径通过回归，尚无真实个人套餐账户验收。可作为实验性适配器使用，#74 仍保留账户验收待办。
+
+### 跟随当前主会话（可选）
+
+面板的“跟随当前会话”默认关闭，升级保留已有手动选择。显式开启后，只跟随主视图会话中已确认、可路由的模型供应商，按完整 route id 匹配账户卡片；同品牌的多个账号不会合并。自动选择不覆盖最后一次手动选择；手动选卡片立即退出跟随，关闭开关则恢复有效的手动选择。
+
+此功能要求客户端提供可订阅的会话列表和模型目录；缺少能力、会话未确定、模型尚在提交、目录失败或没有精确账户匹配时，显示状态说明并继续使用手动选择。不做周期性模型/额度轮询，不强制上游刷新；它跟随的是路由，不识别一个路由内部轮换的账号池。详见[使用说明](docs/follow-current-session.md)。
 
 ## 凭据与供应商配置 / Configuration
 
@@ -172,7 +198,7 @@ MiniMax 区域优先级为 `monitors.<id>.region` > `MINIMAX_API_REGION` > route
 
 预算使用本机日历日/月边界：低于 80% 为正常，达到 80% 为 warning，达到 100% 为 critical。`daily` / `monthly` 必须是正数或 `null`；当前版本不做 FX 换算，因此预算货币与可靠价格货币不兼容时状态保持 unknown。
 
-面板的当前 provider 会保存在浏览器的命名空间 localStorage 中；刷新页面或重启 DSH 后恢复。若该 provider 已被删除，插件会清除旧值；DSH 0.2 Desktop 已登录时优先选择 `deepseek-account`，否则回退到已配置的 `deepseek-official` / 其他 provider。用户已有的有效选择始终优先，不会被自动切换。该选择不会写入 DSH 设置、服务端缓存或新 API。
+面板的当前 provider 会保存在浏览器的命名空间 localStorage 中；刷新页面或重启 DSH 后恢复。若该 provider 已被删除，插件会清除旧值；DSH 0.2 Desktop 已登录时优先选择 `deepseek-account`，否则回退到已配置的 `deepseek-official` / 其他 provider。默认使用已有的有效手动选择；仅在显式开启“跟随当前会话”时允许自动切换。该选择不会写入 DSH 设置、服务端缓存或新 API。
 
 ### DSH Desktop DeepSeek Account（DSH 0.2）
 
@@ -184,6 +210,36 @@ DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key �
 - Host Account 不参加后台账户轮询。只有带真实 UI 版本/语言/时区 metadata 的面板读取才会查询余额；退出或切换账号后，下一次 UI 读取不会继续复用旧余额；
 - Host 账户服务动态获取，服务晚加载或重载后可自动恢复；服务替换、移除或退出登录后不复用此前余额。Desktop 更新插件后若服务端尚未重新加载，需要重启 Desktop Host，单独刷新窗口不能替代服务端重载；
 - 未登录显示“未登录 DeepSeek Account”，不会误提示用户配置 `DEEPSEEK_API_KEY`。
+
+### CodeArts 系反代供应商（dsh-codearts-auth）
+
+**实验集成，当前官方包不可用**：2026-10-23 校验的公开 npm `2.1.261022` 仍不提供 `creditBalance` 服务，上游服务 [PR #9](https://github.com/iJetLi/dsh-providers-hub/pull/9) 也已关闭且未合并。旧源码/运行包补丁仅适用于各自精确基线，不能直接用于新版，也不代表正式支持。见[当前阻塞与历史配套构建说明](integrations/providers-hub/README.md)。后续须先明确上游接受的脱敏服务边界与受支持构建，再完成真实隔离 profile 和账户对账。
+
+`deepseek-harness-codearts` 的账号池路线包括 `codearts` / `buddy` / `workbuddy` / `lobsterai` / `qoder` / `qodercn` / `trae` / `cline` / `loomy` / `raccoon` / `zcode`，以及与内置供应商同名的 `minimax`。这些账号池路线的凭据由宿主插件持有，因此使用进程内余额接口。
+
+宿主配套通过 `ctx.provide('creditBalance', service)` 提供以下接口：同步的 `supportedProviders()` 返回 `{ id, displayName? }[]`，异步的 `creditsBalances(providerId)` 返回 `{ accounts: [{ accountId, nickname?, balance, error? }] }`。仅有 `accountPool` 或内部 `credits.balances` RPC 不满足此契约。
+
+2026-10-20 已对[上游](https://gitee.com/iJetLi/deepseek-harness-codearts)当前源码与 npm `1.9.261020` 分别制作配套候选包，并在解包后通过真实 Cordis/宿主余额分派与本插件的联调。供应商取数使用合成读数；真实账户对账仍待完成。安装 Usage Stats 不会自动修改已安装的 Providers Hub。标准 MiniMax Coding Plan 不依赖这项实验集成。
+
+本插件经 `ctx.get('creditBalance')` 读取服务计算的 `CreditBalance`。服务清单只补充不存在的 provider，并为这些条目标记明确的宿主来源；不会覆盖已注册的同名路由。裸 `minimax` 仍按内置 MiniMax token plan 查询，缺少 `apiKeyEnv` / `baseURL` 不能证明它属于 CodeArts。
+
+新增渠道名如 `gemini`、`modelscope` 也可能属于独立 API 供应商，不能仅凭名字将其归入宿主账号池。服务新增的条目可依来源标记识别；既有同名路由需显式配置 `codearts-credits`。徽章简称不构成账户或定价归属证据。
+
+若已注册的 `minimax` 实际使用 CodeArts 账号池，需要在现有 usage-stats 配置下显式选择适配器：
+
+```yaml
+monitors:
+  minimax:
+    adapter: codearts-credits
+```
+
+- 数据所有权完全在宿主插件：本插件不读取、不复制、不转发 AK/SK、token、Cookie；只读余额结果与积分包元数据；
+- 积分按**包**展示（每个包的已用比例与到期日），不压成单一余额数字——用户要看的正是「哪个包快过期」；
+- 活跃包可由 `total - used` 补出缺失的剩余额度；只有 `remaining` 时显示绝对值，不猜百分比。所有分包都不可读而有有效汇总余额时使用汇总，不叠加重复统计；
+- 过期包可保留已知的历史消耗比例，但不参与当前剩余额度告警或侧栏最低额度。缺失金额显示 `—`；
+- 宿主响应缺少 `accounts` 列表时报响应异常；标记 `stale` 的旧余额不作为新鲜额度展示；
+- 宿主插件缺席时这些卡片显示“不支持”，不影响其余 provider，也不会让插件启动失败；
+- 查询失败不会显示成 0；`reason` / `partial` 只包含固定安全原因码，不包含上游原始错误、失败账号的昵称或 ID。
 
 ### 余额型供应商
 
@@ -209,7 +265,7 @@ OrcaRouter 优先读取其余额接口 `/v1/balance`，将 paid、free 和 promo
 
 ```yaml
 # ~/.dsh/.credentials.yaml
-OPENCODE_GO_API_KEY: sk-opencode-your-key
+OPENCODE_API_KEY: sk-opencode-your-key
 ZAI_API_KEY: your-zai-key
 # 中国区 Z.ai 用户可选；默认 global
 ZAI_API_REGION: bigmodel-cn
@@ -223,7 +279,13 @@ OLLAMA_API_KEY: sk-ollama-your-key
 COMMANDCODE_API_KEY: user-your-command-code-key
 ```
 
-OpenCode Go 依次尝试 Harness credential、`~/.local/share/opencode/auth.json`，最后才使用显式 `OPENCODE_GO_AUTH_COOKIE + OPENCODE_GO_WORKSPACE_ID` 兼容回退。Bearer usage endpoint 目前不是公开 API，可能随上游变化；Cookie 等同登录凭据，不应进入日志或 issue。
+OpenCode Go 原生路由先读取当前 DSH 使用的 `OPENCODE_API_KEY`，缺少时才兼容旧 `OPENCODE_GO_API_KEY`，然后尝试旧版 OpenCode 的 `~/.local/share/opencode/auth.json`，最后才使用显式 `OPENCODE_GO_AUTH_COOKIE + OPENCODE_GO_WORKSPACE_ID` 兼容回退。显式 monitor/provider credential ref 始终优先，缺失时不借用本地文件或其他账户的凭据。先访问官方迁移后的 `/inference/go/v1/usage`，仅在 404/405 时用同一密钥尝试旧路径；401/403/429 不重试或更换密钥。Bearer usage endpoint 仍不是稳定的公开 API。
+
+若账户卡片显示「未配置」，说明未找到凭据，还未发起额度查询。OpenCode V2 的凭据存储不再等同于旧 `auth.json`；已登录 OpenCode 不代表 DSH 已配置密钥。请在 DSH 的 OpenCode Go 模型设置中配置自己的 Console API Key，或在 DSH credentials 中配置上述引用。不要导出 OpenCode 的凭据数据库或把密钥、Cookie 贴到 issue；本插件不会扫描或解密 V2 凭据数据库。
+
+也可以使用官方 Console 查看账户额度，或用 OpenCode 的 `stats` 查看该客户端的本地 token/费用；数据范围与限制见 [OpenCode 用量来源](docs/opencode-usage-sources.md)。Providers Hub 的 OpenCode 通道可用数不作为 Go 额度显示。
+
+Cookie 路径仅在没有选中任何 API Key 时使用；已选中的 Key 查询失败，不会再切换到 Cookie 所属的另一账户。
 
 Ollama 云读取 `OLLAMA_API_KEY`，调用 `/api/usage` 展示两个订阅窗口（5 小时会话 + 每周），无余额；`usage` 按 0..1 比例换算为进度条。
 
@@ -356,9 +418,33 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
               currency: /currency
 ```
 
+若余额接口只接受查询参数认证，可用 `auth.type: query`，让 Host 在发请求时从凭据引用注入密钥：
+
+```yaml
+        monitors:
+          aiflashapi:
+            adapter: declarative
+            usageBaseURL: https://api.aiflashapi.com
+            mode: balance
+            request:
+              path: /stats/balance
+              auth:
+                type: query
+                param: key
+                credentialRef: AIFLASHAPI_API_KEY
+            extract:
+              root: /data
+              remaining: /balance_cny
+              currencyValue: CNY
+```
+
+`param` 为 1–64 个字符，以字母或 `_` 开头，后续允许字母、数字、`_ . -`；query auth 只接受 `type`、`param`、`credentialRef`。密钥保存在 DSH credentials 中，不得写入 `request.path`、base URL 或 headers。配置中的同名认证查询参数（包括编码后的同名项）、path fragment，以及 base URL 的查询串或 fragment 均拒绝；其他非敏感 path 查询参数会保留。缺少凭据时不发请求，且沿用 HTTPS、同源、DNS/IP 校验、禁跟随重定向和响应大小限制。上游在套餐名、币种或额度标签等快照字段中回显凭据原值或 URL 编码值时，查询返回固定的 `invalid-response`，回显内容不会写入账户缓存。既有 `bearer`、`raw`、`x-api-key` 配置继续有效。
+
+查询参数认证会让目标服务及其 TLS 终止代理看到含密钥的请求 URL；插件无法保证第三方访问日志不记录它。若接口支持请求头认证，优先选择请求头。
+
 </details>
 
-支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`orcarouter-balance`、`opencode-go`、`commandcode-goat`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`ollama`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`declarative`。
+支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`orcarouter-balance`、`opencode-go`、`commandcode-goat`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`ollama`、`ark-coding-plan-cli`、`codearts-credits`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`declarative`。
 
 `warning.warnBelow` 与 `warning.criticalBelow` 是余额绝对值阈值。具有总额度的余额和 Token Plan 会自动产生 `normal / warning / critical` 剩余比例状态（默认 30% / 10%）。
 
@@ -409,7 +495,7 @@ Procedure:
 
 Optional account setup (never handle secret values yourself):
 - OpenRouter account balance requires OPENROUTER_MANAGEMENT_KEY, not the inference key.
-- OpenCode Go may reuse local auth.json or use OPENCODE_GO_API_KEY.
+- OpenCode Go uses DSH's OPENCODE_API_KEY, retains the legacy OPENCODE_GO_API_KEY fallback, and can reuse a legacy local auth.json when no explicit reference was selected.
 - Z.ai uses ZAI_API_KEY; China accounts may set ZAI_API_REGION=bigmodel-cn.
 - Kimi and MiniMax use KIMI_API_KEY and MINIMAX_API_KEY.
 - Never ask me to paste a key or browser cookie into chat.
@@ -446,7 +532,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 
 ## 正确性与数据口径 / Correctness
 
-Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-reported `usage`，不是本地估算。相同 turn/step 的后续样本会替换旧样本，并按 `provider/model` 归集。
+Token 统计值来自 `assistant/chunk`、`assistant/message` 或 `compaction/summary` 中 provider-reported `usage`，不是本地估算。相同 turn/step 的后续样本会替换旧样本，并按 `provider/model` 归集。
 
 费用是明确标注的估算派生值：每个 usage 样本使用自己的事件时间、原始 provider/model 与四类 token bucket 匹配 `lib/pricing.js`；替换样本会先减去旧费用，再加入新费用。绝不会用“当前价格 × 历史累计 Token”。每个 session 的派生费用继续进入 `usage.sessions`、session CSV、JSON export 与整体 billing aggregation；插件不会向 DSH composer 注入 session UI。
 
@@ -458,6 +544,8 @@ Token 统计值来自 `assistant/chunk` 或 `assistant/message` 中 provider-rep
 - 被后端**确定性拒绝**的存储日志（`SessionFormatUnsupportedError`、`SessionPersistenceCorruptionError`）在**本进程内**按 revision 记忆，日志变化前不再重试；瞬时错误不记忆，下一次扫描照常重试。两类失败每轮各汇总一条告警，且该记忆只存在于运行时、不写入缓存文件（重启后同一日志会重新尝试，因为拒绝取决于读取方而非日志本身）。
 - 已退出 live store 的会话（例如已结束的 sub-agent 运行）在下一次聚合时按 id 补读持久化日志，其 Token 计入日/模型总量，无需等待后台全量扫描。
 - seq 缺口、日志重写或 live/persisted 切换时完整重折叠该会话。
+- **继承历史按用量证据去重**：支持新版 DSH live Session / 持久化 read handle 的精确 `inheritedEventCount`，或明确的 `session/end-seed` 标记。复制样本与原样本只汇总一次；父日志缺失或只保留部分样本时，唯一幸存副本继续计入。普通 fork 不必提供 parentSession，也不按日期猜覆盖。旧宿主若没有精确边界则保留原有计量，仍可能重复；不可读旧缓存也保留汇总回退，不能宣称已校正这部分历史。详见[计量边界与验收](docs/pr153-accounting-review.md)。
+- 空读取不等于空日志：已经折叠过的会话若读到 0 个事件，保留既有折叠且不记录 revision，下一轮继续重试；schema 升级改为**迁移**已有折叠而不是丢弃（日志压缩后，缓存是那段用量的唯一账本）。
 - 聚合采用 single-flight，并在同一临界区原子保存缓存。
 - `validate:live` 会逐会话比较 raw artifact、`session.history`、插件端点与官方 token projection；缺文件或不一致会返回非零。
 

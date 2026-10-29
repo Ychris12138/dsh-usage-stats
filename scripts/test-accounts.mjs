@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { jsonExport } from "../lib/export.js";
 import {
 	accountProvenance,
 	createAccountService,
@@ -39,6 +40,50 @@ function statusErrorFromTest(status, message) {
 }
 
 const now = Date.parse("2026-08-15T00:00:00Z");
+
+{
+	const secret = "opencode-go-native-test-key";
+	const service = createAccountService({
+		credentials: credentials({ OPENCODE_API_KEY: secret, OPENCODE_GO_API_KEY: "other-legacy-account" }),
+		getProviders: async () => [{ id: "opencode-go" }],
+		deps: { includeLegacyProviders: false, now: () => now, fetch: async (url, init) => {
+			assert.equal(String(url), "https://opencode.ai/inference/go/v1/usage");
+			assert.equal(init.headers.authorization, `Bearer ${secret}`);
+			return jsonResponse({ usage: { rolling: { percent: 1 }, weekly: { percent: 4 }, monthly: { percent: 9 } } });
+		} }
+	});
+	assert.equal((await service.providerViews())[0].configured, true, "native id-only routes must discover the same key used by the collector");
+	assert.equal((await service.get("opencode-go")).status, "ok");
+	const overridden = resolveAccountSpec({ id: "opencode-go" }, validateAccountConfig({ monitors: {
+		"opencode-go": { adapter: "opencode-go", credentialRef: "CUSTOM_GO_KEY" }
+	} }));
+	assert.equal(overridden.apiKeyRef, "CUSTOM_GO_KEY");
+	assert.equal(resolveAccountSpec({ id: "custom-go" }, validateAccountConfig({ monitors: {
+		"custom-go": { adapter: "opencode-go" }
+	} })).apiKeyRef, void 0, "custom routes must not inherit the native reference");
+	assert.equal(JSON.stringify(await service.providerViews()).includes(secret), false);
+	const native = resolveAccountSpec({ id: "opencode-go" }, validateAccountConfig());
+	const legacy = await queryAccount(native, credentials({ OPENCODE_GO_API_KEY: "legacy-go-key" }), {
+		fetch: async (_url, init) => {
+			assert.equal(init.headers.authorization, "Bearer legacy-go-key");
+			return jsonResponse({ usage: { rolling: { percent: 2 } } });
+		}
+	});
+	assert.equal(legacy.status, "ok");
+	const absent = await queryAccount(overridden, credentials({ OPENCODE_API_KEY: secret }), {
+		readFile: async () => { throw new Error("explicit missing references must not read another local account"); },
+		fetch: async () => { throw new Error("explicit missing references must not fetch"); }
+	});
+	assert.equal(absent.status, "not-configured");
+	assert.deepEqual(absent.missingCredentials, ["CUSTOM_GO_KEY"]);
+	const custom = resolveAccountSpec({ id: "custom-go" }, validateAccountConfig({ monitors: {
+		"custom-go": { adapter: "opencode-go" }
+	} }));
+	assert.equal((await queryAccount(custom, credentials({ OPENCODE_API_KEY: secret }), {
+		fetch: async () => { throw new Error("a custom route cannot borrow a native key"); }
+	})).status, "not-configured");
+	console.log("OpenCode Go canonical route discovery and explicit reference precedence ok");
+}
 
 // BEGIN MiniMax id-only regression matrix
 {
@@ -744,6 +789,205 @@ console.log("IPv4/IPv6 private-address classification ok");
 	assert.deepEqual(account.balance, { remaining: 4.5, used: 5.5, total: 10, currency: "USD", unlimited: false, expiresAt: null });
 	assert.deepEqual(account.alert, { level: "warning", metric: "balance", value: 4.5, threshold: 5 });
 	console.log("declarative balance mapping and warning threshold ok");
+}
+
+{
+	const monitor = {
+		adapter: "declarative",
+		mode: "balance",
+		usageBaseURL: "https://relay.example.com",
+		request: {
+			path: "/stats/balance?view=summary",
+			auth: { type: "query", param: "key", credentialRef: "QUERY_KEY" }
+		},
+		extract: { root: "/data", valid: "/success", invalidMessage: "/message", remaining: "/balance_cny", currencyValue: "CNY" }
+	};
+	const config = validateAccountConfig({ monitors: { "relay-a": monitor } });
+	const spec = resolveAccountSpec(relay, config);
+	const secret = "query-key +/?&=#%中文";
+	let calls = 0;
+	const service = createAccountService({
+		getProviders: async () => [relay],
+		credentials: credentials({ QUERY_KEY: secret, RELAY_A_KEY: "wrong-provider-key" }),
+		config,
+		deps: { includeLegacyProviders: false, now: () => now, fetch: async (url, init) => {
+			calls += 1;
+			const target = new URL(url);
+			assert.equal(target.origin, "https://relay.example.com");
+			assert.equal(target.pathname, "/stats/balance");
+			assert.equal(target.searchParams.get("view"), "summary");
+			assert.deepEqual(target.searchParams.getAll("key"), [secret], "encode the key exactly once");
+			assert.equal(init.headers.authorization, void 0);
+			assert.equal(init.headers["x-api-key"], void 0);
+			assert.equal(init.redirect, "manual");
+			return jsonResponse({ data: { success: true, balance_cny: 50 } });
+		} }
+	});
+	const views = await service.providerViews();
+	assert.equal(views[0].configured, true, "discovery uses the same nested credential reference as the request");
+	assert.equal(calls, 0, "discovery does not send the query key");
+	const account = await service.get("relay-a");
+	assert.equal(account.status, "ok");
+	assert.equal(account.balance.remaining, 50);
+	assert.equal(account.balance.currency, "CNY");
+	await service.refreshDue({ force: true });
+	assert.equal(calls, 2);
+	for (const value of [config, spec, views, account, service.cached("relay-a")]) {
+		assert.equal(JSON.stringify(value).includes(secret), false);
+		assert.equal(JSON.stringify(value).includes(encodeURIComponent(secret)), false);
+	}
+	const missing = await queryAccount(spec, credentials({ RELAY_A_KEY: "must-not-fall-back" }), {
+		now: () => now, fetch: async () => { throw new Error("must not send a request without QUERY_KEY"); }
+	});
+	assert.equal(missing.status, "not-configured");
+	assert.deepEqual(missing.missingCredentials, ["QUERY_KEY"]);
+	for (const response of [
+		() => { throw new Error(`network failure at https://relay.example.com/?key=${secret}`); },
+		() => jsonResponse({ data: { success: false, message: secret } }),
+		() => new Response(null, { status: 302, headers: { location: `https://elsewhere.example/?key=${secret}` } }),
+		() => jsonResponse({ message: secret }, 401)
+	]) {
+		const failed = await queryAccount(spec, credentials({ QUERY_KEY: secret }), { now: () => now, fetch: response });
+		assert.notEqual(failed.status, "ok");
+		assert.equal(JSON.stringify(failed).includes(secret), false, "URL, redirect and upstream errors cannot leak query credentials");
+	}
+	for (const param of [void 0, null, "", " key", "key=other", "key&extra", "key\n", "key?", "1key", "~key", "a".repeat(65), 1, {}]) {
+		assert.throws(() => validateAccountConfig({ monitors: { "relay-a": {
+			...monitor, request: { ...monitor.request, auth: { type: "query", param, credentialRef: "QUERY_KEY" } }
+		} } }), /request.auth.param/);
+	}
+	// A self-contained monitor may appear before its settings-backed provider.
+	const standalone = createAccountService({
+		getProviders: async () => [], credentials: credentials({ QUERY_KEY: secret }), config,
+		deps: { includeLegacyProviders: false }
+	});
+	await standalone.validate();
+	assert.equal((await standalone.providerViews())[0].configured, true);
+	const blocked = resolveAccountSpec(relay, validateAccountConfig({ monitors: { "relay-a": {
+		...monitor, usageBaseURL: "https://another.example.com"
+	} } }));
+	assert.equal((await queryAccount(blocked, credentials({ QUERY_KEY: secret }), {
+		fetch: async () => { throw new Error("cross-origin query credentials must not be sent"); }
+	})).status, "blocked");
+	console.log("declarative query authentication encoding, discovery, missing keys, secrecy, validation and origin policy ok");
+}
+
+{
+	const secret = "synthetic-query +/?&=#%中文";
+	const monitor = {
+		adapter: "declarative", mode: "balance", usageBaseURL: "https://relay.example.com",
+		request: { path: "/balance?view=summary", auth: { type: "query", param: "key", credentialRef: "QUERY_KEY" } },
+		extract: { remaining: "/remaining", plan: "/plan", currency: "/currency" }
+	};
+	const configFor = (value) => validateAccountConfig({ monitors: { "relay-a": value } });
+	const specFor = (value) => resolveAccountSpec(relay, configFor(value));
+	const encoded = encodeURIComponent(secret);
+	const formEncoded = new URLSearchParams({ key: secret }).toString().slice(4);
+	const echoes = [secret, encoded, formEncoded, formEncoded.replace(/%[0-9A-F]{2}/g, (value) => value.toLowerCase()),
+		`https://relay.example.com/balance?key=${formEncoded}`];
+	const assertSecretFree = (value) => {
+		const rendered = JSON.stringify(value);
+		for (const echo of echoes) assert.equal(rendered.includes(echo), false, "reflected credentials must not reach read models");
+	};
+	// Exercise the policy and pinned transport seam, not the deps.fetch bypass.
+	let calls = 0;
+	const deps = {
+		now: () => now,
+		lookup: async () => [{ address: "93.184.216.34", family: 4 }],
+		requestPinned: async (url, address, init) => {
+			calls += 1;
+			assert.equal(address.address, "93.184.216.34");
+			assert.deepEqual(url.searchParams.getAll("key"), [secret]);
+			assert.equal(url.searchParams.get("view"), "summary");
+			assert.equal(init.headers.authorization, void 0);
+			assert.equal(init.headers["x-api-key"], void 0);
+			return jsonResponse({ remaining: 50, plan: "Standard", currency: "CNY" });
+		}
+	};
+	const spec = specFor(monitor);
+	const configBefore = JSON.stringify(spec);
+	assert.equal((await queryAccount(spec, credentials({ QUERY_KEY: secret }), deps)).status, "ok");
+	assert.equal(calls, 1);
+	assert.equal(JSON.stringify(spec), configBefore, "request construction must not mutate configuration");
+	for (const echo of echoes) {
+		for (const field of ["plan", "currency", "kind"]) {
+			const subscription = field === "kind";
+			const configured = subscription ? { ...monitor, mode: "subscription", extract: { items: "/items", kind: "/kind", usedPercent: "/used" } } : monitor;
+			const body = subscription ? { items: [{ kind: echo, used: 10 }] } : { remaining: 50, [field]: echo };
+			const account = await queryAccount(specFor(configured), credentials({ QUERY_KEY: secret }), {
+				...deps, requestPinned: async () => jsonResponse(body)
+			});
+			assert.equal(account.status, "invalid-response", `${field} reflection must fail before caching`);
+			assertSecretFree(account);
+		}
+	}
+	let reflected = false;
+	const captured = [];
+	const originals = { log: console.log, warn: console.warn, error: console.error };
+	try {
+		for (const method of Object.keys(originals)) console[method] = (...args) => captured.push(args);
+		const service = createAccountService({
+			config: configFor(monitor), getProviders: async () => [relay], credentials: credentials({ QUERY_KEY: secret }),
+			deps: { ...deps, includeLegacyProviders: false, requestPinned: async () => jsonResponse({ remaining: reflected ? 999 : 50, plan: reflected ? secret : "Standard" }) }
+		});
+		const first = await service.get("relay-a");
+		assert.equal(first.status, "ok");
+		reflected = true;
+		const stale = await service.get("relay-a", { force: true });
+		assert.equal(stale.stale, true);
+		assert.equal(stale.status, "invalid-response");
+		assert.equal(stale.balance.remaining, 50, "only previously safe values may be retained on failure");
+		assert.equal(stale.plan, "Standard");
+		const views = await service.providerViews();
+		for (const value of [first, stale, await service.get("relay-a"), service.cached("relay-a"), views, jsonExport({}, views, now), captured]) assertSecretFree(value);
+	} finally {
+		Object.assign(console, originals);
+	}
+	for (const path of ["/balance?key=embedded", "/balance?key=one&key=two", "/balance?%6bey=embedded", "/balance#fragment", "/balance#"]) {
+		assert.throws(() => configFor({ ...monitor, request: { ...monitor.request, path } }), /request.path/);
+	}
+	for (const usageBaseURL of ["https://relay.example.com/?key=embedded", "https://relay.example.com/#fragment", "https://relay.example.com/#"]) {
+		assert.throws(() => configFor({ ...monitor, usageBaseURL }), /usageBaseURL/);
+	}
+	for (const auth of [null, [], "query", 1, { ...monitor.request.auth, value: secret }, { ...monitor.request.auth, credentialRef: 42 }, { ...monitor.request.auth, credentialRef: " " }]) {
+		assert.throws(() => configFor({ ...monitor, request: { ...monitor.request, auth } }), /request.auth/);
+	}
+	for (const target of [
+		{ ...monitor, usageBaseURL: "https://elsewhere.example.com" },
+		{ ...monitor, usageBaseURL: "http://relay.example.com", allowInsecure: true },
+		{ ...monitor, usageBaseURL: "https://127.0.0.1", allowCrossOrigin: true }
+	]) {
+		let sent = 0;
+		const account = await queryAccount(specFor(target), credentials({ QUERY_KEY: secret }), { ...deps, requestPinned: async () => { sent += 1; throw new Error("must not send"); } });
+		assert.equal(account.status, "blocked");
+		assert.equal(sent, 0);
+	}
+	let sent = 0;
+	const privateDns = await queryAccount(spec, credentials({ QUERY_KEY: secret }), { ...deps, lookup: async () => [{ address: "10.0.0.2", family: 4 }], requestPinned: async () => { sent += 1; } });
+	assert.equal(privateDns.status, "blocked");
+	assert.equal(sent, 0);
+	for (const status of [301, 302, 303, 307, 308, 401, 403, 429, 500]) {
+		let requests = 0;
+		const account = await queryAccount(spec, credentials({ QUERY_KEY: secret }), { ...deps, requestPinned: async () => {
+			requests += 1;
+			return jsonResponse({ message: secret }, status, { location: `https://relay.example.com/?key=${formEncoded}` });
+		} });
+		assert.notEqual(account.status, "ok");
+		assert.equal(requests, 1, "redirects and authentication failures must not retry or follow Location");
+		assertSecretFree(account);
+	}
+	for (const respond of [
+		() => { throw new Error(`TLS failure ${secret}`, { cause: new Error(`https://relay.example.com/?key=${formEncoded}`) }); },
+		() => { const error = new Error(encoded); error.name = "TimeoutError"; throw error; },
+		() => new Response(secret, { headers: { "content-type": "text/plain" } }),
+		() => new Response(`{"broken":"${formEncoded}`, { headers: { "content-type": "application/json" } }),
+		() => jsonResponse({ plan: secret }, 200, { "content-length": "999999999" })
+	]) {
+		const account = await queryAccount(spec, credentials({ QUERY_KEY: secret }), { ...deps, requestPinned: respond });
+		assert.notEqual(account.status, "ok");
+		assertSecretFree(account);
+	}
+	console.log("query-auth reflected response rejection, safe cache/stale/export/logs, strict config and pinned policy ok");
 }
 
 {

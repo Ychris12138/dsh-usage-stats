@@ -3,8 +3,8 @@
 ## Preparation
 
 - [x] Review scope and preserve #153/#147 contributor history.
-- [x] Keep #133/#143 out of stable scope; record #152 and official Hub limitations.
-- [x] Validate integrated code with static checks and all 14 test suites.
+- [x] Keep #133 out; label #143 experimental and #74 unaccepted; include #152 with manual fallback.
+- [x] Validate integrated code with static checks and all 16 test suites.
 - [x] Exercise real React ranking component at 440px/300px with synthetic data.
 - [ ] Synchronize 0.3.7 metadata and require exact-source CI.
 - [ ] Freeze a clean source commit and compare every packed file with it.

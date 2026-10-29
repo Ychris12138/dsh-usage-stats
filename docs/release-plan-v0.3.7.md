@@ -3,12 +3,12 @@
 ## Scope
 
 Includes post-0.3.6 mainline #141/#142/#144/#145/#146/#147/#149/#150/#151 and
-#153/#154/#156. Contributor histories are preserved through the maintainer
-follow-ups. #133 and #143 remain Draft; #152 awaits its contributor implementation.
+#153/#154/#156, experimental #143 and opt-in session follow #158 (#152). Contributor histories are preserved through the maintainer
+follow-ups. #133 remains Draft because its Host producer is absent. #74 remains open for real personal Ark subscription acceptance.
 
 ## Validation
 
-- Static/release metadata checks and all 14 automated suites on the integrated tree.
+- Static/release metadata checks and all 16 automated suites on the integrated tree.
 - Exact-head GitHub checks for merged changes and the release source.
 - Actual React ranking component checked with synthetic data at 440px and 300px:
   group expansion, full model identity, range changes and no horizontal overflow.
@@ -34,3 +34,11 @@ latest tag, integrity and downloaded bytes; fast-forward main to the exact froze
 source only if still safe, verify Pages/catalog, then create v0.3.7 at that source
 and publish the GitHub draft. A concurrent main change requires review, never a
 force update. Installed Desktop/real-account acceptance must be reported separately.
+
+## Refreeze requested on 2026-10-30
+
+The earlier source 7396694 and ready-directory tarball are superseded. Preserve
+the old archive unchanged, but mark its instructions obsolete. Generate a new
+final directory and verify the new source, files and CI. Update #157 and the same
+unpublished GitHub draft with final assets. No npm publication, tag or catalog
+promotion occurs before the official registry gate.

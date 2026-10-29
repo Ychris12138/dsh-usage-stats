@@ -149,6 +149,12 @@ MiniMax 区域优先级为 `monitors.<id>.region` > `MINIMAX_API_REGION` > route
 
 已核对官方 CLI 1.0.40 的命令参数，并于 2026-10-29 复核 [1.0.45 官方契约](https://github.com/volcengine/ark-cli/blob/b84d1c02c3e3dc024b1b927f37dd39858053ea82/skills/arkcli-usage/references/arkcli-usage-plan.md)。默认不启用，仅在用户显式配置以上 monitor 后执行；脱敏样例和失败路径通过回归，尚无真实个人套餐账户验收。可作为实验性适配器使用，#74 仍保留账户验收待办。
 
+### 跟随当前主会话（可选）
+
+面板的“跟随当前会话”默认关闭，升级保留已有手动选择。显式开启后，只跟随主视图会话中已确认、可路由的模型供应商，按完整 route id 匹配账户卡片；同品牌的多个账号不会合并。自动选择不覆盖最后一次手动选择；手动选卡片立即退出跟随，关闭开关则恢复有效的手动选择。
+
+此功能要求客户端提供可订阅的会话列表和模型目录；缺少能力、会话未确定、模型尚在提交、目录失败或没有精确账户匹配时，显示状态说明并继续使用手动选择。不做周期性模型/额度轮询，不强制上游刷新；它跟随的是路由，不识别一个路由内部轮换的账号池。详见[使用说明](docs/follow-current-session.md)。
+
 ## 凭据与供应商配置 / Configuration
 
 凭据由 Harness 从 `~/.dsh/.credentials.yaml` 解析。安装器不会读取、创建或修改该文件。不要把真实 Key、Cookie 或管理令牌提交到 Git、公开 issue，或粘贴给编码 Agent。
@@ -192,7 +198,7 @@ MiniMax 区域优先级为 `monitors.<id>.region` > `MINIMAX_API_REGION` > route
 
 预算使用本机日历日/月边界：低于 80% 为正常，达到 80% 为 warning，达到 100% 为 critical。`daily` / `monthly` 必须是正数或 `null`；当前版本不做 FX 换算，因此预算货币与可靠价格货币不兼容时状态保持 unknown。
 
-面板的当前 provider 会保存在浏览器的命名空间 localStorage 中；刷新页面或重启 DSH 后恢复。若该 provider 已被删除，插件会清除旧值；DSH 0.2 Desktop 已登录时优先选择 `deepseek-account`，否则回退到已配置的 `deepseek-official` / 其他 provider。用户已有的有效选择始终优先，不会被自动切换。该选择不会写入 DSH 设置、服务端缓存或新 API。
+面板的当前 provider 会保存在浏览器的命名空间 localStorage 中；刷新页面或重启 DSH 后恢复。若该 provider 已被删除，插件会清除旧值；DSH 0.2 Desktop 已登录时优先选择 `deepseek-account`，否则回退到已配置的 `deepseek-official` / 其他 provider。默认使用已有的有效手动选择；仅在显式开启“跟随当前会话”时允许自动切换。该选择不会写入 DSH 设置、服务端缓存或新 API。
 
 ### DSH Desktop DeepSeek Account（DSH 0.2）
 

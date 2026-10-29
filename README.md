@@ -118,6 +118,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | MiniMax Coding Plan | 订阅 | 全球区 `MINIMAX_API_KEY`；中国区 `MINIMAX_CN_API_KEY` | `/v1/token_plan/remains` |
 | Ollama 云 | 订阅 | `OLLAMA_API_KEY` | `/api/usage`（5小时 + 周窗口） |
 | Command Code（Go / GOAT / Pro / Max） | 订阅 + 余额 | `COMMANDCODE_API_KEY` | `/alpha/billing/credits` 等 `/alpha/*`（**实验性**：未公开端点） |
+| 火山方舟个人 Coding Plan（可选 CLI，实验性） | 订阅 | 明确指定的官方 Ark CLI profile，独立于模型 API Key | `arkcli usage plan --product coding-plan` |
 | New API | 余额 | provider 推理 Token | `/api/usage/token/` |
 | Sub2API / Passion | 自动判别 | provider `apiKeyEnv` | `/v1/usage` |
 | Sub2API 面板（真实） | 余额 | provider 推理 Token | `/user/balance`（复用 apiKey） |
@@ -129,6 +130,24 @@ DSH 注册表仅返回路由 ID、未提供连接字段时，`minimax` 默认读
 MiniMax 区域优先级为 `monitors.<id>.region` > `MINIMAX_API_REGION` > route/baseURL/credential ref 推断。中国区与全球区凭据请匹配相应区域；明确区域的请求不会因 1004/2049 拒绝而切到另一区域，显式 `usageBaseURL` 仍只访问指定地址。
 
 没有公开账户接口的供应商仍会正常统计 Token；账户卡片会明确显示“不支持”，不会猜测余额。
+
+### 火山方舟个人 Coding Plan（实验性）
+
+可选择通过[官方 Ark CLI](https://github.com/volcengine/ark-cli)读取个人套餐额度。先自行安装、登录 CLI，并用明确指定的 profile 验证 `usage plan --product coding-plan --profile <name> --format json` 能正常返回。插件只支持个人 `coding-plan`，不把后付费 Token 统计当作套餐余额，也不读取团队席位或 BytePlus 账户。
+
+```yaml
+        monitors:
+          ark-coding-plan-cn:
+            adapter: ark-coding-plan-cli
+            arkCLIExecutable: /absolute/path/to/arkcli-darwin-arm64
+            arkCLIProfile: personal-coding
+```
+
+`arkCLIExecutable` 必须是官方安装中的**原生二进制文件**绝对路径（npm 包的 `bin/arkcli-<platform>-<arch>`，Windows 为 `.exe`），不要填写 npm 的 Node 启动脚本或 `.cmd` 包装器。这样超时会终止实际查询进程，不会遗留包装器启动的子进程。`arkCLIProfile` 必须明确指定，限制为 1–64 个字母、数字或 `_ . -`，首字符为字母或数字。CLI 的控制面登录身份与 DSH 模型 Key 不等价，请选择自己的正确账户。
+
+后台只执行上述只读查询，不自动安装或下载 CLI，不调用登录、购买、续费、轮换 Key 或切换默认 profile。CLI 负责其已有认证态的正常维护及网络访问；这是一个明确启用的本机进程边界，**不经过插件 HTTP 适配器的 DNS/IP 固定逻辑**。使用非交互 stdin、15 秒超时和 1 MiB 输出上限，且不传递继承的 `ARK_API_KEY`、`ARK_PROFILE` 等凭据覆盖。账户快照仅包含归一化的 session/weekly/monthly 已用比例和重置时间，不包含 CLI 的 viewer、账户标识、原始错误或认证文件。缺少文件、未订阅、命令失败或未知响应都有明确的非正常状态，不填零冒充成功。
+
+已核对官方 CLI 1.0.40 的命令参数，并于 2026-10-29 复核 [1.0.45 官方契约](https://github.com/volcengine/ark-cli/blob/b84d1c02c3e3dc024b1b927f37dd39858053ea82/skills/arkcli-usage/references/arkcli-usage-plan.md)。默认不启用，仅在用户显式配置以上 monitor 后执行；脱敏样例和失败路径通过回归，尚无真实个人套餐账户验收。可作为实验性适配器使用，#74 仍保留账户验收待办。
 
 ## 凭据与供应商配置 / Configuration
 
@@ -419,7 +438,7 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
 
 </details>
 
-支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`orcarouter-balance`、`opencode-go`、`commandcode-goat`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`ollama`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`declarative`。
+支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`orcarouter-balance`、`opencode-go`、`commandcode-goat`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`ollama`、`ark-coding-plan-cli`、`codearts-credits`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`declarative`。
 
 `warning.warnBelow` 与 `warning.criticalBelow` 是余额绝对值阈值。具有总额度的余额和 Token Plan 会自动产生 `normal / warning / critical` 剩余比例状态（默认 30% / 10%）。
 

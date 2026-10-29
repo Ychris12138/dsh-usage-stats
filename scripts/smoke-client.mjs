@@ -89,7 +89,6 @@ for (const forbidden of [
 	"usageStatsPanelOpeners",
 	"subscribeUsageStatsPanel",
 	"requestUsageStatsPanel",
-	"modelDirectories",
 	"loadSessionPillSnapshot",
 	"sessionPillViewOf"
 ]) {
@@ -282,16 +281,18 @@ console.log("icon surface compatibility ok (legacy, 0.1.7, none)");
 // Apply against a stub client context.
 const registrations = [];
 const registeredEntries = [];
+const optionalFollowDependencies = [];
 const ctx = {
 	effect: () => {},
 	locale: { register: (ns, dict) => { if (ns !== "usageStats") throw new Error(`unexpected ns ${ns}`); if (!dict.zh || !dict.en) throw new Error("missing dictionaries"); } },
-	inject: () => { throw new Error("sidebar-only client must not request session-specific services"); },
+	inject: (services) => { optionalFollowDependencies.push(services); },
 	slots: {
 		inject: (slot, fn) => { registrations.push([slot, fn]); return () => {}; },
 		register: (options, component) => { registeredEntries.push({ options, component }); return () => {}; }
 	}
 };
 exports_.apply(ctx);
+assert.deepEqual(optionalFollowDependencies, [["sessions", "modelDirectories"]], "only optional follow dependencies may be requested");
 if (registrations.length !== 1) throw new Error(`expected only the sidebar slot injection, got ${registrations.length}`);
 const registrationBySlot = new Map(registrations);
 if (!registrationBySlot.has("sidebar.footer.action")) throw new Error("sidebar footer slot registration missing");

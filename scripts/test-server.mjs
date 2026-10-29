@@ -2147,6 +2147,28 @@ async function testIndependentAndCorrectedSampleOwnership(root) {
 	const cache = JSON.stringify(await readFile(join(process.env.DSH_HOME, "storages", "usage-stats-cache.json"), "utf8"));
 	assert.equal(cache.includes("private-prompt-marker"), false, "only normalized usage hashes enter the cache");
 }
+async function testUnreadableMigrationRetriesAfterRestart(root) {
+	const home = join(root, "migration-retry");
+	let plugin = await freshModule("migration-retry-seed", home);
+	const logs = new Map([["stored", [usageEvent(0, 10), usageEvent(1, 20)]]]);
+	const revisions = new Map([["stored", "r1"]]);
+	const { api } = currentPersistenceApi(logs, revisions);
+	const ctx = makeContext({ sessions: { list: () => [] }, persistence: { list: api.list, open: api.open } });
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 30);
+	const path = join(home, "storages", "usage-stats-cache.json");
+	const old = JSON.parse(await readFile(path, "utf8"));
+	old.version = 5; delete old.sessions.stored.usageSamples;
+	await writeFile(path, JSON.stringify(old));
+	logs.set("stored", []);
+	plugin = await freshModule("migration-retry-unreadable", home);
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 30, "opaque old aggregate survives an unavailable source");
+	const pending = JSON.parse(await readFile(path, "utf8"));
+	assert.equal(pending.sessions.stored.needsRefold, true, "a pending refold must survive a schema-10 save");
+	plugin = await freshModule("migration-retry-restart", home);
+	logs.set("stored", [usageEvent(0, 10), usageEvent(1, 20), usageEvent(2, 4)]);
+	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 34, "restart recovery must rebuild all samples, not replace history with the tail");
+}
+
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
@@ -2190,6 +2212,7 @@ try {
 	await testInterleavedCompactionAccounting(root);
 	await testEmptyFullRefoldKeepsLedger(root);
 	await testLiveSeededSessionUsesExactCut(root);
+	await testUnreadableMigrationRetriesAfterRestart(root);
 	await testExactInheritedOwnership(root);
 	await testIndependentAndCorrectedSampleOwnership(root);
 	await testLiveLogShrink(root);

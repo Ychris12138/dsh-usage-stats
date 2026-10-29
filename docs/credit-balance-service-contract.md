@@ -2,15 +2,15 @@
 
 PR #128 depends on a Host-owned Cordis service named `creditBalance`. This is a cross-plugin service, not an HTTP route or a browser RPC. Providers Hub owns authentication, signing, refresh and account selection; Usage Stats receives only projected balance data.
 
-## Current status (2026-10-23)
+## Current status (2026-10-29)
 
-The latest public npm archive, `dsh-providers-hub@2.1.261022`, was independently downloaded and verified against registry integrity:
+The latest public npm archive, `dsh-providers-hub@2.9.261029`, was independently downloaded and verified against registry integrity:
 
 ```text
-sha512-GEqoEoMGy0dJ4eiWefoeIzOo525KRcdCSqad24zryYMH+txHicPJ24APAWdl8+icFY1eLAwIh+dkZA8VZxeuaQ==
+sha512-nNd76YIBHQx9YICfV3L2tEIUzHKFbv4YNV/uPFkDJdxJB1IpZ6b2p00wCGTTr1PDlkQV8y8yivx8rv+aKyh4TQ==
 ```
 
-None of its 461 JavaScript/TypeScript/JSON/Markdown files contains `creditBalance`, `creditsBalances` or `supportedProviders`. Installing the current official package does not satisfy this integration.
+None of its 491 JavaScript/TypeScript/JSON/Markdown files contains `creditBalance`, `creditsBalances` or `supportedProviders`. Installing the current official package does not satisfy this integration.
 
 Upstream [#4](https://github.com/iJetLi/dsh-providers-hub/pull/4) was superseded by [#9](https://github.com/iJetLi/dsh-providers-hub/pull/9); #9 is now closed without merging. In the [2026-10-22 maintainer response](https://github.com/iJetLi/dsh-providers-hub/pull/9#issuecomment-6339239309), the maintainer declined external data provision of login information for now. That response does not establish approval for the anonymous balance projection proposed here. A supported service design and release must not be assumed forthcoming.
 

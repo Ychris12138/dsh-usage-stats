@@ -1,12 +1,12 @@
 # Providers Hub 配套余额服务
 
-## 状态更新（2026-10-23）
+## 状态更新（2026-10-29）
 
-已核验公开 npm `dsh-providers-hub@2.1.261022`：下载包的 SHA-512 与 registry integrity 一致，461 个 JS/TS/JSON/Markdown 文件均未包含 `creditBalance`、`creditsBalances` 或 `supportedProviders`。安装当前官方包仍不能启用这项集成。
+已核验公开 npm `dsh-providers-hub@2.9.261029`：下载包的 SHA-512 与 registry integrity 一致，491 个 JS/TS/JSON/Markdown 文件均未包含 `creditBalance`、`creditsBalances` 或 `supportedProviders`。安装当前官方包仍不能启用这项集成。
 
 上游 [#4](https://github.com/iJetLi/dsh-providers-hub/pull/4) 被新版 [#9](https://github.com/iJetLi/dsh-providers-hub/pull/9) 替代，#9 也已关闭且未合并。维护者在 [2026-10-22 的回复](https://github.com/iJetLi/dsh-providers-hub/pull/9#issuecomment-6339239309) 中说明暂不对外以数据方式提供相关登录信息；这并不构成对脱敏余额服务方案的接受。因此不能继续把该服务描述成已确定会发布的上游接口。
 
-以下旧补丁及候选包仅保留为对应精确基线的历史实验材料，不适用于当前 `2.1.261022`，也不能用历史模拟联调证明当前官方包或真实账户可用。后续先明确上游可接受的脱敏余额边界与受支持构建，再验证服务作用域、移除/重载和真实账户对账。
+以下旧补丁及候选包仅保留为对应精确基线的历史实验材料，不适用于当前 `2.9.261029`，也不能用历史模拟联调证明当前官方包或真实账户可用。后续先明确上游可接受的脱敏余额边界与受支持构建，再验证服务作用域、移除/重载和真实账户对账。
 
 这里提供 PR #144 所需的宿主侧实现，不通过浏览器 RPC，也不读取另一个插件的凭据文件。
 

@@ -1,6 +1,6 @@
 # dsh-usage-stats
 
-<!-- stable-version: 0.3.6 -->
+<!-- stable-version: 0.3.7 -->
 
 [![GitHub Release](https://img.shields.io/github/v/release/Ychris12138/dsh-usage-stats?display_name=tag&sort=semver&color=1f6feb)](https://github.com/Ychris12138/dsh-usage-stats/releases/latest)
 [![CI](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml)
@@ -34,14 +34,14 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 
 ## 快速安装 / Quick start
 
-本版本为 `@ychris12138/dsh-usage-stats@0.3.6`。npm 与市场安装要求该精确版本已经发布；发布前验收使用从冻结提交构建并核对哈希的本地 `.tgz`。
+本版本为 `@ychris12138/dsh-usage-stats@0.3.7`。npm 与市场安装要求该精确版本已经发布；发布前验收使用从冻结提交构建并核对哈希的本地 `.tgz`。
 
 基础功能支持 `@deepseek-ai/dsh >= 0.1.0-rc.6`。安装时选择实际使用的 profile：命令行网页通常是 `web`，Desktop 使用 `desktop`；不要把插件装到另一个 profile 后只刷新当前窗口。DSH Desktop 的 **DeepSeek Account 登录余额**接入依赖 DSH `0.2.0-rc.2+` 提供的 Host account service；旧版 Harness 仍继续使用 API Key 余额路径。
 
 确认 npm 上存在本版本后，优先安装精确版本；DSH Desktop Market 使用同一个包：
 
 ```bash
-dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.6"
+dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.7"
 ```
 
 Desktop 安装时将上面的 `--profile web` 改为 `--profile desktop`，并使用 Desktop 对应的 DSH CLI。只有明确测试未发布 source/RC 时才使用 GitHub 来源；验收指定候选版本时优先安装从该提交打出的本地 `.tgz`，以免跟随分支变化。GitHub `main` 可能领先 npm stable。
@@ -188,7 +188,7 @@ DSH 0.2 将浏览器登录的 DeepSeek Account 与 `deepseek-official` API Key �
 
 ### CodeArts 系反代供应商（dsh-codearts-auth）
 
-**实验集成，当前官方包不可用**：2026-10-23 校验的公开 npm `2.1.261022` 仍不提供 `creditBalance` 服务，上游服务 [PR #9](https://github.com/iJetLi/dsh-providers-hub/pull/9) 也已关闭且未合并。旧源码/运行包补丁仅适用于各自精确基线，不能直接用于新版，也不代表正式支持。见[当前阻塞与历史配套构建说明](integrations/providers-hub/README.md)。后续须先明确上游接受的脱敏服务边界与受支持构建，再完成真实隔离 profile 和账户对账。
+**实验集成，当前官方包不可用**：2026-10-29 校验的公开 npm `2.9.261029` 仍不提供 `creditBalance` 服务，上游服务 [PR #9](https://github.com/iJetLi/dsh-providers-hub/pull/9) 也已关闭且未合并。旧源码/运行包补丁仅适用于各自精确基线，不能直接用于新版，也不代表正式支持。见[当前阻塞与历史配套构建说明](integrations/providers-hub/README.md)。后续须先明确上游接受的脱敏服务边界与受支持构建，再完成真实隔离 profile 和账户对账。
 
 `deepseek-harness-codearts` 的账号池路线包括 `codearts` / `buddy` / `workbuddy` / `lobsterai` / `qoder` / `qodercn` / `trae` / `cline` / `loomy` / `raccoon` / `zcode`，以及与内置供应商同名的 `minimax`。这些账号池路线的凭据由宿主插件持有，因此使用进程内余额接口。
 
@@ -460,7 +460,7 @@ Constraints:
 
 Procedure:
 1. Confirm node, npx, and dsh are available.
-2. Resolve the actual profile first (Desktop: desktop; CLI web: web). Verify the exact version exists in npm, then install the version used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.6"` (or update the existing scoped package).
+2. Resolve the actual profile first (Desktop: desktop; CLI web: web). Verify the exact version exists in npm, then install the version used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.7"` (or update the existing scoped package).
 3. Use a local tarball built from the specified candidate commit when I ask to test an RC; use `github:Ychris12138/dsh-usage-stats` only for an explicitly requested source test.
 4. If dsh plugin is unavailable, use the compatible source installer only with my approval: `npx --yes github:Ychris12138/dsh-usage-stats`.
 5. Do not combine bundle installation with an existing manual dsh-usage-stats Cordis entry.

@@ -1,6 +1,6 @@
 # Provider and model usage ranking
 
-Preparation for [Issue #155](https://github.com/Ychris12138/dsh-usage-stats/issues/155).
+Implements [Issue #155](https://github.com/Ychris12138/dsh-usage-stats/issues/155).
 
 The usage panel adds a **Usage by provider and model** section below the calendar.
 The default range is the calendar's selected month; **All records** includes every
@@ -22,8 +22,7 @@ Invalid token values are excluded. Empty periods explicitly show no model data.
 The range selector does not switch the balance account, change the persisted
 manual provider choice, or create new network requests. It only renders the
 existing API's daily model rows. It cannot recover usage absent from those rows
-or correct upstream seeded-session double counting. PR #153/#154's accounting
-acceptance remains separate; this feature is based on main, not either branch.
+or correct upstream seeded-session double counting. The separate #153/#154 accounting changes determine the underlying source totals.
 
 ## Review and verification
 
@@ -33,8 +32,8 @@ model IDs, legacy keys, invalid values, empty periods, immutable input, range
 changes, calendar-month changes, and preservation of account selection/network
 behavior. Existing daily detail and account-picker checks remain active.
 
-Before acceptance, inspect the expanded section on a narrow and wide layout in
-the real host, switch the calendar month and range, and compare group totals to
-the corresponding daily model rows. This is display preparation; synthetic
-tests do not establish real-account correctness. No package version, tag, npm
-publication, or stable catalog entry is changed.
+The real React component was also exercised through the supported in-app browser
+with synthetic data in 440px and 300px containers: expanded groups, a long model
+ID and monthly/all-record changes rendered without horizontal overflow. This is
+component layout/interaction evidence, not an installed DSH or real-account
+reconciliation. Selected month is the accepted default scope for this release.

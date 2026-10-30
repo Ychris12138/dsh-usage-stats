@@ -2169,6 +2169,46 @@ async function testUnreadableMigrationRetriesAfterRestart(root) {
 	assert.equal((await plugin.collectUsage(ctx)).total.tokens, 34, "restart recovery must rebuild all samples, not replace history with the tail");
 }
 
+async function testNestedTaggedSeedBoundaries(root) {
+	const at = Date.UTC(2026, 7, 13);
+	const sample = (seq, tokens) => ({ ...usageEvent(seq, tokens), time: at + seq });
+	const marker = (seq) => ({ seq, time: at + seq, type: "session/end-seed", data: { inherited: true } });
+	const a = sample(0, 5), b = sample(2, 7), c = sample(4, 11);
+	const logs = new Map([
+		["parent", [a]],
+		["child", [a, marker(1), b]],
+		["grandchild", [a, marker(1), b, marker(3), c]]
+	]);
+	// Ordinary forks do not need parentSession. A descendant retains ancestor
+	// tagged markers in its copied prefix; only the final marker is its own cut.
+	for (const mode of ["live", "persisted", "marker-only"]) {
+		const home = join(root, `nested-tagged-${mode}`);
+		let plugin = await freshModule(`nested-tagged-${mode}`, home);
+		const headers = new Map([...logs.keys()].map((id) => [id, {
+			isSeeded: id !== "parent", createdAt: at,
+			...(mode === "marker-only" ? {} : { inheritedEventCount: id === "grandchild" ? 3 : id === "child" ? 1 : 0 })
+		}]));
+		const { api } = currentPersistenceApi(logs, new Map([...logs.keys()].map(id => [id, "r1"])), void 0, headers);
+		const live = mode === "live" ? [...logs].map(([id, events]) => ({
+			id, events, header: headers.get(id), inheritedEventCount: headers.get(id).inheritedEventCount
+		})) : [];
+		const context = makeContext({ sessions: { list: () => live }, persistence: { list: api.list, open: api.open } });
+		assert.equal((await plugin.collectUsage(context)).total.tokens, 23, `${mode}: nested copied markers must not turn inherited usage into an own call`);
+		assert.equal((await plugin.collectUsage(context)).total.tokens, 23, `${mode}: unchanged collection stays stable`);
+		plugin = await freshModule(`nested-tagged-${mode}-restart`, home);
+		assert.equal((await plugin.collectUsage(context)).total.tokens, 23, `${mode}: cache restart preserves the descendant's final cut`);
+		const cache = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+		assert.equal(cache.sessions.grandchild.inheritedEventCount, 3, `${mode}: keep the current fork boundary, not the ancestor marker`);
+		// A published v0.3.7 cache may already have the wrong cut and an unchanged
+		// revision. Repair must not require the underlying session log to change.
+		cache.version = 10;
+		cache.sessions.grandchild.inheritedEventCount = 1;
+		await writeFile(join(home, "storages", "usage-stats-cache.json"), JSON.stringify(cache));
+		plugin = await freshModule(`nested-tagged-${mode}-upgrade`, home);
+		assert.equal((await plugin.collectUsage(context)).total.tokens, 23, `${mode}: upgrade repairs a cached ancestor cut at the same revision`);
+	}
+}
+
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
@@ -2214,6 +2254,7 @@ try {
 	await testLiveSeededSessionUsesExactCut(root);
 	await testUnreadableMigrationRetriesAfterRestart(root);
 	await testExactInheritedOwnership(root);
+	await testNestedTaggedSeedBoundaries(root);
 	await testIndependentAndCorrectedSampleOwnership(root);
 	await testLiveLogShrink(root);
 	await testZeroUsageRowsFiltered(root);

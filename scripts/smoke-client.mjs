@@ -76,7 +76,7 @@ if (!source.includes("ref: panelRef")) throw new Error("portaled panel must expo
 if (!source.includes('translate("panel.badge")')) throw new Error("badge must keep the label text");
 if (!source.includes("badgeAmountText !== null &&")) throw new Error("badge amount must be a separate middle element");
 if (!source.includes("S.badgeAmount")) throw new Error("badge amount element is missing its class");
-if (!source.includes("badgeCount !== null && react_jsx_runtime.jsx(\"span\", { className: S.badgeCount")) throw new Error("badge must keep the today token count on the right");
+if (!source.includes("badgeCount !== null && react_jsx_runtime.jsx(TokenCount, { className: S.badgeCount")) throw new Error("badge must keep the today token count on the right");
 if (source.includes("data-orcarouter-integration") || source.includes("OrcaRouterIntegrationCard")) throw new Error("OrcaRouter must stay a compact provider choice, not a standalone panel card");
 for (const forbidden of [
 	"conversation.input",
@@ -409,6 +409,42 @@ act(()=>rankingRenderer.root.findByType("select").props.onChange({target:{value:
 assert.deepEqual(rankingRenderer.root.findAllByType("details").map(n=>n.props["data-usage-provider"]),["zai-coding-cn-2"]);
 act(()=>rankingRenderer.unmount());
 console.log("provider/model ranking totals, routes, sorting and range changes ok");
+
+// Compact labels are display-only; hover/focus and accessible names retain
+// the original numeric value. Changing UI locale must change units in-place.
+const { fmtTokens, fullTokenCount, TokenCount } = exports_;
+const numberZh = key => key === "usage.numberLocale" ? "zh-CN" : key;
+const numberEn = key => key === "usage.numberLocale" ? "en-US" : key;
+for (const [value, zhValue, enValue] of [
+ [0,"0","0"], [9999,"9,999","9,999"], [10000,"1万","10K"],
+ [123456,"12.35万","123.46K"], [999999,"1百万","1M"],
+ [1000000,"1百万","1M"], [10000000,"1千万","10M"],
+ [99999999,"1亿","100M"], [123456789,"1.23亿","123.46M"],
+ [999999999,"10亿","1B"], [1000000000000,"1万亿","1T"]
+]) {
+ assert.equal(fmtTokens(value,numberZh),zhValue);
+ assert.equal(fmtTokens(value,numberEn),enValue);
+}
+for (const value of [NaN,Infinity,-1,undefined,null,"1000000"]) {
+ assert.equal(fmtTokens(value,numberZh),"—");
+ assert.equal(fullTokenCount(value),"—");
+}
+assert.equal(fullTokenCount(Number.MAX_SAFE_INTEGER),"9,007,199,254,740,991");
+const compactMarkup = renderToStaticMarkup(react.createElement(TokenCount,{value:123456789,translate:numberZh}));
+assert.match(compactMarkup,/>1.23亿</);
+assert.match(compactMarkup,/title="123,456,789 Token"/);
+assert.match(compactMarkup,/aria-label="123,456,789 Token"/);
+assert.match(compactMarkup,/tabindex="0"/);
+const badgeMarkup = renderToStaticMarkup(react.createElement(TokenCount,{value:123456789,translate:numberEn,focusable:false}));
+assert.doesNotMatch(badgeMarkup,/tabindex/,"a count inside the badge button must not add a nested tab stop");
+let numberRenderer;
+act(()=>{numberRenderer=TestRenderer.create(react.createElement(TokenCount,{value:123456789,translate:numberZh}));});
+act(()=>numberRenderer.update(react.createElement(TokenCount,{value:123456789,translate:numberEn})));
+assert.equal(numberRenderer.root.findByType("span").props.children,"123.46M");
+assert.equal(numberRenderer.root.findByType("span").props.title,"123,456,789 Token");
+act(()=>numberRenderer.unmount());
+assert.match(dayDetail,/title="[^"]*34,333,358/,"day totals must retain full hover values");
+console.log("localized token units, rounding promotion, full tooltips and locale switching ok");
 
 // Balance and subscription providers share one account-card frame. Only the
 // selected provider is rendered; the inner payload varies by account mode.

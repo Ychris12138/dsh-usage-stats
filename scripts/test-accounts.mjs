@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { jsonExport } from "../lib/export.js";
+import { configuredProviders } from "../lib/index.js";
 import {
 	accountProvenance,
 	createAccountService,
@@ -40,6 +41,79 @@ function statusErrorFromTest(status, message) {
 }
 
 const now = Date.parse("2026-08-15T00:00:00Z");
+
+// #162: exercise registry discovery, binding, refresh health and cache together.
+// Synthetic fetch/credentials prove the local contract, not a live Harness run.
+for (const mode of ["balance", "subscription"]) {
+	let profile;
+	const ctx = { get: (name) => name === "settings"
+		? { get: (key) => key === "llm-pi-ai" && profile !== undefined ? { providers: { "custom-quota": profile } } : undefined }
+		: name === "llm" ? { listProviders: () => [{ id: "custom-quota", name: "Custom quota" }] } : undefined };
+	const discovered = (await configuredProviders(ctx)).find((provider) => provider.id === "custom-quota");
+	assert.equal(discovered.baseURL, undefined);
+	const config = validateAccountConfig({ monitors: { "custom-quota": {
+		adapter: "declarative", mode,
+		request: { path: "/quota/windows", auth: { type: "bearer", credentialRef: "SYNTHETIC_QUOTA_KEY" } },
+		extract: mode === "subscription"
+			? { root: "", items: "/windows", kind: "/kind", remainingPercent: "/remainingPercent" }
+			: { root: "", remaining: "/remaining", currency: "/currency" }
+	} } });
+	const secret = "synthetic-only-quota-key";
+	let requests = 0;
+	const service = createAccountService({
+		credentials: credentials({ SYNTHETIC_QUOTA_KEY: secret }),
+		getProviders: () => configuredProviders(ctx), config,
+		deps: { includeLegacyProviders: false, now: () => now, fetch: async (url, init) => {
+			requests += 1;
+			assert.equal(String(url), "https://quota.example.com/quota/windows");
+			assert.equal(init.headers.authorization, `Bearer ${secret}`);
+			return jsonResponse(mode === "subscription"
+				? { windows: [{ kind: "5h", remainingPercent: 80 }] }
+				: { remaining: 12, currency: "USD" });
+		} }
+	});
+	await service.validate();
+	const missing = await service.get("custom-quota", { force: true });
+	assert.equal(missing.status, "unavailable");
+	assert.equal(missing.reason, "monitor-base-url-missing", `${mode}: a registry-only route needs an actionable reason`);
+	assert.equal(missing.lastAttemptAt, null);
+	assert.equal(missing.lastSuccessAt, null);
+	assert.equal(requests, 0);
+	assert.equal((await service.providerViews()).find((provider) => provider.id === "custom-quota").reason, missing.reason);
+	assert.equal((await service.get("custom-quota")).reason, missing.reason, "cached reads retain the diagnosis");
+	for (const baseURL of ["", "  ", "not a URL: PRIVATE_CONFIG_MARKER"]) {
+		profile = { baseURL };
+		const invalid = await service.get("custom-quota");
+		assert.equal(invalid.reason, baseURL.trim() === "" ? "monitor-base-url-missing" : "monitor-base-url-invalid");
+		assert.equal(invalid.status, "unavailable");
+		assert.equal(invalid.lastAttemptAt, null);
+		assert.equal(requests, 0);
+		assert.ok(!JSON.stringify(invalid).includes("PRIVATE_CONFIG_MARKER"));
+	}
+	config.monitors["custom-quota"].usageBaseURL = "https://quota.example.com";
+	assert.equal((await service.get("custom-quota")).reason, "monitor-base-url-invalid", "an invalid provider origin must not bypass isolation");
+	profile = undefined;
+	const repaired = await service.get("custom-quota");
+	assert.equal(repaired.status, "ok", `${mode}: explicit usageBaseURL repairs the synthetic registry-only case`);
+	assert.equal(repaired.lastAttemptAt, now);
+	assert.equal(repaired.lastSuccessAt, now);
+	assert.equal(requests, 1);
+	assert.ok(!JSON.stringify(repaired).includes(secret));
+	await service.get("custom-quota");
+	assert.equal(requests, 1, "healthy cache must remain usable");
+	profile = { baseURL: "https://different.example.com" };
+	const blocked = await service.get("custom-quota");
+	assert.equal(blocked.status, "blocked", "explicit usageBaseURL does not opt into cross-origin access");
+	assert.equal(blocked.reason, "blocked-network");
+	assert.equal(blocked.lastAttemptAt, null);
+	assert.equal(requests, 1);
+	const noCredential = createAccountService({ credentials: credentials({}), getProviders: () => configuredProviders(ctx), config,
+		deps: { includeLegacyProviders: false, now: () => now, fetch: async () => { throw new Error("must not fetch without credentials"); } } });
+	const absent = await noCredential.get("custom-quota");
+	assert.equal(absent.status, "not-configured");
+	assert.deepEqual(absent.missingCredentials, ["SYNTHETIC_QUOTA_KEY"]);
+	assert.equal(absent.lastAttemptAt, null);
+}
 
 {
 	const secret = "opencode-go-native-test-key";

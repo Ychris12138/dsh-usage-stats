@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CACHE_VERSION as CACHE_SCHEMA } from "../lib/index.js";
 import { pricingFingerprint } from "../lib/billing.js";
+import { createAccountService } from "../lib/accounts.js";
 
 function usageEvent(seq, inputTokens) {
 	return {
@@ -141,6 +142,43 @@ async function testRouteFence(root) {
 	assert.equal(account.status, 200);
 	assert.equal(JSON.parse(account.body).account.status, "not-configured");
 	assert.equal(typeof routes.get(plugin.SESSION_CONTEXT_PATH), "function");
+}
+
+async function testDeclarativeEndpointDiagnostics(root) {
+	const plugin = await freshModule("declarative-endpoint", join(root, "declarative-endpoint"));
+	const routes = new Map();
+	const warnings = [];
+	const context = makeContext({ sessions: { list: () => [] }, persistence: { list: async () => [] }, routes, warnings,
+		llm: { listProviders: () => [{ id: "custom-quota" }] } });
+	context.credentials = { resolve: async () => ({ value: "synthetic-server-quota-key" }) };
+	const config = plugin.validateConfig({ refresh: { enabled: false }, monitors: { "custom-quota": {
+		adapter: "declarative", mode: "subscription",
+		request: { path: "/quota/windows", auth: { type: "bearer", credentialRef: "SYNTHETIC_QUOTA_KEY" } },
+		extract: { root: "", items: "/windows", kind: "/kind", remainingPercent: "/remainingPercent" }
+	} } });
+	let requests = 0;
+	// Use the real account service, discovery and registered HTTP handlers;
+	// replace only the credential service and upstream transport with fixtures.
+	const accounts = createAccountService({ credentials: context.credentials, getProviders: () => plugin.configuredProviders(context), config,
+		deps: { includeLegacyProviders: false, fetch: async () => { requests += 1; return new Response(JSON.stringify({ windows: [{ kind: "5h", remainingPercent: 80 }] }), { headers: { "content-type": "application/json" } }); } } });
+	await plugin.apply(context, config, { disableBackgroundRefresh: true, accounts });
+	async function read(path, query = "") {
+		const response = makeResponse();
+		await routes.get(path)({ method: "GET", url: `${path}${query}`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, response);
+		assert.equal(response.status, 200);
+		assert.ok(!response.body.includes("synthetic-server-quota-key"));
+		return JSON.parse(response.body);
+	}
+	const missing = (await read(plugin.ACCOUNT_PATH, "?provider=custom-quota&refresh=1")).account;
+	assert.equal(missing.reason, "monitor-base-url-missing");
+	assert.equal(missing.status, "unavailable");
+	assert.equal(missing.lastAttemptAt, null);
+	assert.equal(requests, 0);
+	assert.equal((await read(plugin.PROVIDERS_PATH)).providers.find((provider) => provider.id === "custom-quota").reason, missing.reason);
+	config.monitors["custom-quota"].usageBaseURL = "https://quota.example.com";
+	assert.equal((await read(plugin.ACCOUNT_PATH, "?provider=custom-quota")).account.status, "ok");
+	assert.equal(requests, 1);
+	assert.deepEqual(warnings, [], "handled preflight diagnostics must not log raw exceptions");
 }
 
 async function testDeepSeekDesktopAccountRoute(root) {
@@ -2212,6 +2250,7 @@ async function testNestedTaggedSeedBoundaries(root) {
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
+	await testDeclarativeEndpointDiagnostics(root);
 	await testDeepSeekDesktopAccountRoute(root);
 	await testDeepSeekDesktopAccountServiceLifecycle(root);
 	await testOrcaRouterIntegrationRoute(root);

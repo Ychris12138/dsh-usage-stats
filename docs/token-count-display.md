@@ -1,3 +1,5 @@
+> Validation candidate: #159 is merged; this display change remains pending actual DSH visual acceptance.
+
 # Compact token counts (preparation for #160)
 
 Token counts in the sidebar, today/month/all-time summary, recent days,

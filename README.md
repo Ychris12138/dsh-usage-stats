@@ -1,6 +1,6 @@
 # dsh-usage-stats
 
-<!-- stable-version: 0.3.7 -->
+<!-- stable-version: 0.3.8-rc.1 -->
 
 [![GitHub Release](https://img.shields.io/github/v/release/Ychris12138/dsh-usage-stats?display_name=tag&sort=semver&color=1f6feb)](https://github.com/Ychris12138/dsh-usage-stats/releases/latest)
 [![CI](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml)
@@ -34,14 +34,14 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 
 ## 快速安装 / Quick start
 
-本版本为 `@ychris12138/dsh-usage-stats@0.3.7`。npm 与市场安装要求该精确版本已经发布；发布前验收使用从冻结提交构建并核对哈希的本地 `.tgz`。
+本包为未发布的 `@ychris12138/dsh-usage-stats@0.3.8-rc.1` 验证候选。正式 npm stable 仍为 0.3.7；请仅通过本地 `.tgz` 验收，勿将本包当作已发布版本。
 
 基础功能支持 `@deepseek-ai/dsh >= 0.1.0-rc.6`。安装时选择实际使用的 profile：命令行网页通常是 `web`，Desktop 使用 `desktop`；不要把插件装到另一个 profile 后只刷新当前窗口。DSH Desktop 的 **DeepSeek Account 登录余额**接入依赖 DSH `0.2.0-rc.2+` 提供的 Host account service；旧版 Harness 仍继续使用 API Key 余额路径。
 
-确认 npm 上存在本版本后，优先安装精确版本；DSH Desktop Market 使用同一个包：
+使用候选 tarball 的实际绝对路径安装到测试 profile：
 
 ```bash
-dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.7"
+dsh plugin --profile web add "/path/to/ychris12138-dsh-usage-stats-0.3.8-rc.1.tgz"
 ```
 
 Desktop 安装时将上面的 `--profile web` 改为 `--profile desktop`，并使用 Desktop 对应的 DSH CLI。只有明确测试未发布 source/RC 时才使用 GitHub 来源；验收指定候选版本时优先安装从该提交打出的本地 `.tgz`，以免跟随分支变化。GitHub `main` 可能领先 npm stable。
@@ -490,7 +490,7 @@ Constraints:
 
 Procedure:
 1. Confirm node, npx, and dsh are available.
-2. Resolve the actual profile first (Desktop: desktop; CLI web: web). Verify the exact version exists in npm, then install the version used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.7"` (or update the existing scoped package).
+2. Resolve the actual profile first (Desktop: desktop; CLI web: web). This RC is not published; use the local tarball: `dsh plugin --profile web add "/path/to/ychris12138-dsh-usage-stats-0.3.8-rc.1.tgz"` (or update the existing scoped package).
 3. Use a local tarball built from the specified candidate commit when I ask to test an RC; use `github:Ychris12138/dsh-usage-stats` only for an explicitly requested source test.
 4. If dsh plugin is unavailable, use the compatible source installer only with my approval: `npx --yes github:Ychris12138/dsh-usage-stats`.
 5. Do not combine bundle installation with an existing manual dsh-usage-stats Cordis entry.

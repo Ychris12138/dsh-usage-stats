@@ -534,6 +534,12 @@ if (!deepseekMarkup.includes("usg_accountCard") || !goMarkup.includes("usg_accou
 if (!deepseekMarkup.includes("data-account-mode=\"balance\"") || !deepseekMarkup.includes("DeepSeek") || deepseekMarkup.includes("progressbar")) throw new Error("DeepSeek must render only monetary balance data");
 if (!goMarkup.includes("data-account-mode=\"subscription\"") || !goMarkup.includes("OpenCode Go")) throw new Error("OpenCode Go must render the subscription account mode");
 if ((goMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !goMarkup.includes("width:12%")) throw new Error("OpenCode Go must render three quota meters");
+const limitedMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "opencode-go", displayName: "OpenCode Go", accountMode: "subscription" },
+	account: { ...goSubscription, mode: "subscription", windows: [{ kind: "session", usedPercent: 20, remainingPercent: 80, limited: true }] },
+	accountLoading: false, accountError: null, translate: translateAccount, onRetry: () => {}
+}));
+assert.match(limitedMarkup, /subscription\.windowLimited/, "a limited allowance must be visible in the card");
 for (const [window, expected] of [
 	[{ kind: "quota", label: "ZCode credit", amount: 75 }, "75"],
 	[{ kind: "quota", label: "Zero credit", amount: 0 }, "0"],
@@ -748,6 +754,7 @@ const subLow = badgeAccountValue({ mode: "subscription", status: "ok", windows: 
 if (subLow === null || subLow.kind !== "percent" || subLow.value !== 4 || subLow.display !== "4%") throw new Error(`subscription must warn on the lowest window, got ${JSON.stringify(subLow)}`);
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 4 }] }) !== true) throw new Error("subscription with a 4% window must warn");
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 55 }] }) !== false) throw new Error("subscription all above 5% must NOT warn");
+assert.equal(badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 80, limited: true }] }), true, "explicit limit status warns independently of percentage");
 // #148: the OpenCode Go summary is monthly quota, while every live window
 // still participates in the exhaustion warning. Never substitute a short cap.
 const goAccount = {

@@ -14,6 +14,20 @@ const noLocalAuth = {
 };
 
 {
+	const account = await collectSubscription("opencode-go", credentials({ OPENCODE_API_KEY: "synthetic-key" }), {}, {
+		...noLocalAuth, now: () => now,
+		fetch: async () => ({ ok: true, json: async () => ({ usage: {
+			rolling: { status: "rate-limited", percent: 20, resetsAt: "2026-08-14T01:00:00Z" },
+			weekly: { status: "ok", percent: 30 }, monthly: { status: "ok", percent: 40 }
+		} }) })
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.windows[0].limited, true);
+	assert.equal(account.windows[0].usedPercent, 20, "a limited status must not fabricate 100% usage");
+	assert.equal(account.windows[1].limited, undefined);
+}
+
+{
 	const providers = await collectSubscriptions(credentials({}), {}, { ...noLocalAuth, now: () => now });
 	assert.deepEqual(providers.map((provider) => [provider.id, provider.status]), [
 		["opencode-go", "not-configured"],

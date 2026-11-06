@@ -7,10 +7,9 @@ provider/model rankings, day detail and session metadata use readable labels.
 The account balance, percentages, costs, sorting, API responses, cache and
 CSV/JSON downloads retain their existing semantics and values.
 
-Counts below 10,000 retain full grouped numbers. Larger counts use up to two
-decimal places, trimming trailing zeros:
+International units are the default from 1,000. The panel offers a separately persisted Chinese-unit option, starting at 10,000. Both use up to two decimal places, trimming trailing zeros:
 
-| Source count | Chinese UI | English UI |
+| Source count | Chinese units | Default K/M units |
 | ---: | --- | --- |
 | 12,345 | 1.23万 | 12.35K |
 | 1,000,000 | 1百万 | 1M |
@@ -19,8 +18,7 @@ decimal places, trimming trailing zeros:
 | 1,000,000,000,000 | 1万亿 | 1T |
 
 These are rounded display labels. A value that rounds over a unit boundary is
-promoted, e.g. 999,999 becomes 1M, rather than 1000K. The UI's translated locale
-chooses the units; the browser's system language does not override that choice.
+promoted, e.g. 999,999 becomes 1M, rather than 1000K. The unit choice is independent of UI language and persists across panel reloads; inaccessible storage falls back to K/M.
 Missing, nonnumeric, negative or nonfinite values display an em dash.
 
 Standalone count labels carry the unshortened value in both the tooltip and

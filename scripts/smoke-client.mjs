@@ -416,26 +416,26 @@ const { fmtTokens, fullTokenCount, TokenCount } = exports_;
 const numberZh = key => key === "usage.numberLocale" ? "zh-CN" : key;
 const numberEn = key => key === "usage.numberLocale" ? "en-US" : key;
 for (const [value, zhValue, enValue] of [
- [0,"0","0"], [9999,"9,999","9,999"], [10000,"1万","10K"],
+ [0,"0","0"], [999,"999","999"], [1000,"1,000","1K"], [9999,"9,999","10K"], [10000,"1万","10K"],
  [123456,"12.35万","123.46K"], [999999,"1百万","1M"],
  [1000000,"1百万","1M"], [10000000,"1千万","10M"],
  [99999999,"1亿","100M"], [123456789,"1.23亿","123.46M"],
  [999999999,"10亿","1B"], [1000000000000,"1万亿","1T"]
 ]) {
- assert.equal(fmtTokens(value,numberZh),zhValue);
- assert.equal(fmtTokens(value,numberEn),enValue);
+ assert.equal(fmtTokens(value,"chinese"),zhValue);
+ assert.equal(fmtTokens(value,"international"),enValue);
 }
 for (const value of [NaN,Infinity,-1,undefined,null,"1000000"]) {
- assert.equal(fmtTokens(value,numberZh),"—");
+ assert.equal(fmtTokens(value,"chinese"),"—");
  assert.equal(fullTokenCount(value),"—");
 }
 assert.equal(fullTokenCount(Number.MAX_SAFE_INTEGER),"9,007,199,254,740,991");
-const compactMarkup = renderToStaticMarkup(react.createElement(TokenCount,{value:123456789,translate:numberZh}));
+const compactMarkup = renderToStaticMarkup(react.createElement(TokenCount,{value:123456789,unit:"chinese"}));
 assert.match(compactMarkup,/>1.23亿</);
 assert.match(compactMarkup,/title="123,456,789 Token"/);
 assert.match(compactMarkup,/aria-label="123,456,789 Token"/);
 assert.match(compactMarkup,/tabindex="0"/);
-const badgeMarkup = renderToStaticMarkup(react.createElement(TokenCount,{value:123456789,translate:numberEn,focusable:false}));
+const badgeMarkup = renderToStaticMarkup(react.createElement(TokenCount,{value:123456789,unit:"international",focusable:false}));
 assert.doesNotMatch(badgeMarkup,/tabindex/,"a count inside the badge button must not add a nested tab stop");
 const largeRanking = renderToStaticMarkup(react.createElement(ProviderUsageBreakdown, {
  days: [{ date: "2026-08-01", models: [{ model: "provider/model", tokens: 123456789 }] }],
@@ -446,8 +446,8 @@ assert.ok(summaryMarkup, "large provider counts remain visible in the summary");
 assert.match(summaryMarkup, /123,456,789 Token/, "summary retains the full accessible value");
 assert.doesNotMatch(summaryMarkup, /tabindex=/i, "a summary must not contain an extra keyboard stop");
 let numberRenderer;
-act(()=>{numberRenderer=TestRenderer.create(react.createElement(TokenCount,{value:123456789,translate:numberZh}));});
-act(()=>numberRenderer.update(react.createElement(TokenCount,{value:123456789,translate:numberEn})));
+act(()=>{numberRenderer=TestRenderer.create(react.createElement(TokenCount,{value:123456789,unit:"chinese"}));});
+act(()=>numberRenderer.update(react.createElement(TokenCount,{value:123456789,unit:"international"})));
 assert.equal(numberRenderer.root.findByType("span").props.children,"123.46M");
 assert.equal(numberRenderer.root.findByType("span").props.title,"123,456,789 Token");
 act(()=>numberRenderer.unmount());
@@ -725,7 +725,7 @@ const sessionTranslate = (key, params) => {
 	return key;
 };
 const meta = sessionCostMeta(sessionRows[0], sessionTranslate);
-if (!meta.includes("3,000") || !meta.includes("deepseek-v4-pro")) throw new Error(`unexpected session cost metadata: ${meta}`);
+if (!meta.includes("3K") || !meta.includes("deepseek-v4-pro")) throw new Error(`unexpected session cost metadata: ${meta}`);
 console.log("session cost filtering, ordering, zero-cost handling, and metadata ok");
 const budgetTranslate = (key, params) => {
 	if (key === "budget.period.daily") return "Today";

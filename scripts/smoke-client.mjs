@@ -655,6 +655,20 @@ for (const expected of ["account.status.stale", "account.health.lastAttempt", "a
 }
 if (!healthMarkup.includes('data-account-stale="true"') || healthMarkup.includes("SECRET_API_KEY")) throw new Error("stale health metadata must be explicit and secret-free");
 
+for (const [reason, key] of [["monitor-base-url-missing", "monitorBaseUrlMissing"], ["monitor-base-url-invalid", "monitorBaseUrlInvalid"]]) {
+	assert.equal(safeDiagnosticReason(reason), reason);
+	for (const mode of ["balance", "subscription"]) {
+		const markup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+			provider: { id: "custom-quota", displayName: "Custom quota", accountMode: mode },
+			account: { id: "custom-quota", mode, status: "unavailable", reason, lastAttemptAt: null, lastSuccessAt: null, balance: null, windows: [], rawError: "PRIVATE_CONFIG_MARKER" },
+			accountLoading: false, accountError: null, translate: translateAccount, onRetry: () => {}
+		}));
+		assert.ok(markup.includes(`account.reason.${key}`), `${mode}: render an actionable endpoint diagnosis`);
+		assert.ok(!markup.includes("PRIVATE_CONFIG_MARKER"));
+		assert.ok(!markup.includes("account.reason.unknown"));
+	}
+}
+
 const choices = buildProviderChoices([
 	{ id: "deepseek-official", displayName: "DeepSeek", adapter: "deepseek-balance", accountMode: "balance", configured: true },
 	{ id: "zai-coding-cn", displayName: "Z.ai CN", adapter: "zai-token-plan", accountMode: "subscription", configured: true },

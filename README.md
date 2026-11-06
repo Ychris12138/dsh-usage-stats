@@ -404,6 +404,7 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
         monitors:
           private-model:
             adapter: declarative
+            usageBaseURL: https://quota.example.com
             mode: balance
             request:
               path: /account/balance
@@ -417,6 +418,10 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
               total: /total_balance
               currency: /currency
 ```
+
+声明式 monitor 的地址优先使用 `usageBaseURL`，其次使用 settings 中可读取的 provider `baseURL`。DSH 注册表可能仅提供 route id；即使模型请求可用，也不保证账户查询能取得该地址。建议显式配置无凭据的 `usageBaseURL`。`request.path` 以 `/` 开头，因此 `/quota/windows` 会从该地址的 origin 根路径解析，不会拼接 provider URL 中的 `/v1`。
+
+缺少地址时账户返回 `unavailable` / `monitor-base-url-missing`；额度地址或可读取的 provider 地址无法解析时返回 `monitor-base-url-invalid`。这两种检查失败均不发请求，首次查询的 `lastAttemptAt` / `lastSuccessAt` 为 `null`。固定原因码不会包含地址、原始异常或凭据。无论使用余额还是订阅模式，显式地址仍受 HTTPS、同源和 DNS/IP 安全检查约束；不要通过关闭隔离来排查。若仍失败，可提供安装版本或提交 SHA、是否配置上述地址的布尔值，以及脱敏的 `status`、`reason`、`missingCredentials`、`lastAttemptAt` / `lastSuccessAt`；无需提供凭据、完整配置或网络抓包。
 
 若余额接口只接受查询参数认证，可用 `auth.type: query`，让 Host 在发请求时从凭据引用注入密钥：
 

@@ -10,9 +10,11 @@ Usage Stats 优先使用当前 DSH 配置的 `OPENCODE_API_KEY`，读取 `https:
 
 如果显示“未配置”，应先在 DSH 配置自己的 Console API Key。仅在 OpenCode 客户端登录并不等于 DSH 有这把 Key；不要导出凭据数据库或在 issue 贴出 Key/Cookie。
 
-官方[Go 文档](https://docs.opencode.ai/docs/go/)说明可在 Console 查看当前使用情况。它适合作为真实账户验收的参照，也覆盖其他客户端产生的账户用量。
+官方[Go 文档](https://opencode.ai/v2/docs/console/go/)说明可在 Console 查看当前使用情况。它适合作为真实账户验收的参照，也覆盖其他客户端产生的账户用量。
 
 侧栏以“月剩余”标注月窗口的剩余百分比，不用五小时或周窗口替代。例如五小时已用 10%、月窗口已用 2% 时，侧栏显示“月剩余 98%”。月窗口缺失或无效时省略该数值；套餐卡片仍展示各窗口。任一有效窗口剩余不超过 5% 时仍提示额度不足，展开卡片可确认具体窗口。过期、查询失败或 stale 数据不显示为当前余量。
+
+官方客户端的当前实现还会随用量请求传递明确的 workspace 标识，并独立处理每个窗口的 `rate-limited` 状态。[官方源码](https://github.com/anomalyco/opencode/blob/32ece823b820702961a7538ff02891f3791615c2/packages/core/src/usage-limits.ts)；本插件会保留明确的窗口受限状态，并保持服务返回的百分比，不把受限等同于 100%。workspace 请求头和 OAuth 路径尚未取得真实账户验收，本版本不自动引入或切换账户身份。
 
 ## OpenCode 客户端本地统计
 

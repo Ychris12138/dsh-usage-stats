@@ -76,7 +76,7 @@ if (!source.includes("ref: panelRef")) throw new Error("portaled panel must expo
 if (!source.includes('translate("panel.badge")')) throw new Error("badge must keep the label text");
 if (!source.includes("badgeAmountText !== null &&")) throw new Error("badge amount must be a separate middle element");
 if (!source.includes("S.badgeAmount")) throw new Error("badge amount element is missing its class");
-if (!source.includes("badgeCount !== null && react_jsx_runtime.jsx(\"span\", { className: S.badgeCount")) throw new Error("badge must keep the today token count on the right");
+if (!source.includes("badgeCount !== null && react_jsx_runtime.jsx(TokenCount, { className: S.badgeCount")) throw new Error("badge must keep the today token count on the right");
 if (source.includes("data-orcarouter-integration") || source.includes("OrcaRouterIntegrationCard")) throw new Error("OrcaRouter must stay a compact provider choice, not a standalone panel card");
 for (const forbidden of [
 	"conversation.input",
@@ -410,6 +410,50 @@ assert.deepEqual(rankingRenderer.root.findAllByType("details").map(n=>n.props["d
 act(()=>rankingRenderer.unmount());
 console.log("provider/model ranking totals, routes, sorting and range changes ok");
 
+// Compact labels are display-only; hover/focus and accessible names retain
+// the original numeric value. Changing UI locale must change units in-place.
+const { fmtTokens, fullTokenCount, TokenCount } = exports_;
+const numberZh = key => key === "usage.numberLocale" ? "zh-CN" : key;
+const numberEn = key => key === "usage.numberLocale" ? "en-US" : key;
+for (const [value, zhValue, enValue] of [
+ [0,"0","0"], [999,"999","999"], [1000,"1,000","1K"], [9999,"9,999","10K"], [10000,"1万","10K"],
+ [123456,"12.35万","123.46K"], [999999,"1百万","1M"],
+ [1000000,"1百万","1M"], [10000000,"1千万","10M"],
+ [99999999,"1亿","100M"], [123456789,"1.23亿","123.46M"],
+ [999999999,"10亿","1B"], [1000000000000,"1万亿","1T"]
+]) {
+ assert.equal(fmtTokens(value,"chinese"),zhValue);
+ assert.equal(fmtTokens(value,"international"),enValue);
+}
+for (const value of [NaN,Infinity,-1,undefined,null,"1000000"]) {
+ assert.equal(fmtTokens(value,"chinese"),"—");
+ assert.equal(fullTokenCount(value),"—");
+}
+assert.equal(fullTokenCount(Number.MAX_SAFE_INTEGER),"9,007,199,254,740,991");
+const compactMarkup = renderToStaticMarkup(react.createElement(TokenCount,{value:123456789,unit:"chinese"}));
+assert.match(compactMarkup,/>1.23亿</);
+assert.match(compactMarkup,/title="123,456,789 Token"/);
+assert.match(compactMarkup,/aria-label="123,456,789 Token"/);
+assert.match(compactMarkup,/tabindex="0"/);
+const badgeMarkup = renderToStaticMarkup(react.createElement(TokenCount,{value:123456789,unit:"international",focusable:false}));
+assert.doesNotMatch(badgeMarkup,/tabindex/,"a count inside the badge button must not add a nested tab stop");
+const largeRanking = renderToStaticMarkup(react.createElement(ProviderUsageBreakdown, {
+ days: [{ date: "2026-08-01", models: [{ model: "provider/model", tokens: 123456789 }] }],
+ month: "2026-08", translate: numberEn
+}));
+const summaryMarkup = largeRanking.match(/<summary\b[^>]*>[\s\S]*?<\/summary>/)?.[0];
+assert.ok(summaryMarkup, "large provider counts remain visible in the summary");
+assert.match(summaryMarkup, /123,456,789 Token/, "summary retains the full accessible value");
+assert.doesNotMatch(summaryMarkup, /tabindex=/i, "a summary must not contain an extra keyboard stop");
+let numberRenderer;
+act(()=>{numberRenderer=TestRenderer.create(react.createElement(TokenCount,{value:123456789,unit:"chinese"}));});
+act(()=>numberRenderer.update(react.createElement(TokenCount,{value:123456789,unit:"international"})));
+assert.equal(numberRenderer.root.findByType("span").props.children,"123.46M");
+assert.equal(numberRenderer.root.findByType("span").props.title,"123,456,789 Token");
+act(()=>numberRenderer.unmount());
+assert.match(dayDetail,/title="[^"]*34,333,358/,"day totals must retain full hover values");
+console.log("localized token units, rounding promotion, full tooltips and locale switching ok");
+
 // Balance and subscription providers share one account-card frame. Only the
 // selected provider is rendered; the inner payload varies by account mode.
 const { ProviderAccountCard, buildProviderChoices, buildProviderPickerChoices, providerChoiceLabel } = exports_;
@@ -490,6 +534,12 @@ if (!deepseekMarkup.includes("usg_accountCard") || !goMarkup.includes("usg_accou
 if (!deepseekMarkup.includes("data-account-mode=\"balance\"") || !deepseekMarkup.includes("DeepSeek") || deepseekMarkup.includes("progressbar")) throw new Error("DeepSeek must render only monetary balance data");
 if (!goMarkup.includes("data-account-mode=\"subscription\"") || !goMarkup.includes("OpenCode Go")) throw new Error("OpenCode Go must render the subscription account mode");
 if ((goMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !goMarkup.includes("width:12%")) throw new Error("OpenCode Go must render three quota meters");
+const limitedMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "opencode-go", displayName: "OpenCode Go", accountMode: "subscription" },
+	account: { ...goSubscription, mode: "subscription", windows: [{ kind: "session", usedPercent: 20, remainingPercent: 80, limited: true }] },
+	accountLoading: false, accountError: null, translate: translateAccount, onRetry: () => {}
+}));
+assert.match(limitedMarkup, /subscription\.windowLimited/, "a limited allowance must be visible in the card");
 for (const [window, expected] of [
 	[{ kind: "quota", label: "ZCode credit", amount: 75 }, "75"],
 	[{ kind: "quota", label: "Zero credit", amount: 0 }, "0"],
@@ -675,7 +725,7 @@ const sessionTranslate = (key, params) => {
 	return key;
 };
 const meta = sessionCostMeta(sessionRows[0], sessionTranslate);
-if (!meta.includes("3,000") || !meta.includes("deepseek-v4-pro")) throw new Error(`unexpected session cost metadata: ${meta}`);
+if (!meta.includes("3K") || !meta.includes("deepseek-v4-pro")) throw new Error(`unexpected session cost metadata: ${meta}`);
 console.log("session cost filtering, ordering, zero-cost handling, and metadata ok");
 const budgetTranslate = (key, params) => {
 	if (key === "budget.period.daily") return "Today";
@@ -704,6 +754,7 @@ const subLow = badgeAccountValue({ mode: "subscription", status: "ok", windows: 
 if (subLow === null || subLow.kind !== "percent" || subLow.value !== 4 || subLow.display !== "4%") throw new Error(`subscription must warn on the lowest window, got ${JSON.stringify(subLow)}`);
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 4 }] }) !== true) throw new Error("subscription with a 4% window must warn");
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 55 }] }) !== false) throw new Error("subscription all above 5% must NOT warn");
+assert.equal(badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 80, limited: true }] }), true, "explicit limit status warns independently of percentage");
 // #148: the OpenCode Go summary is monthly quota, while every live window
 // still participates in the exhaustion warning. Never substitute a short cap.
 const goAccount = {

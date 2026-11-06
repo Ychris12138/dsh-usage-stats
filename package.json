@@ -1,7 +1,7 @@
 {
   "name": "@ychris12138/dsh-usage-stats",
   "description": "Token usage, provider accounts, session cost estimates, budgets, and exports for the dsh web GUI",
-  "version": "0.3.7",
+  "version": "0.3.8-rc.2",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Ychris12138/dsh-usage-stats.git"
@@ -40,7 +40,11 @@
     "docs/provider-model-usage.md",
     "docs/opencode-usage-sources.md",
     "docs/credit-balance-service-contract.md",
-    "docs/follow-current-session.md"
+    "docs/follow-current-session.md",
+    "docs/release-notes-v0.3.8.md",
+    "docs/nested-seed-marker-fix.md",
+    "docs/declarative-endpoint-diagnostics.md",
+    "docs/token-count-display.md"
   ],
   "type": "module",
   "main": "lib/index.js",

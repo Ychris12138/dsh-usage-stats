@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { CACHE_VERSION as CACHE_SCHEMA } from "../lib/index.js";
 import { pricingFingerprint } from "../lib/billing.js";
+import { createAccountService } from "../lib/accounts.js";
 
 function usageEvent(seq, inputTokens) {
 	return {
@@ -141,6 +142,43 @@ async function testRouteFence(root) {
 	assert.equal(account.status, 200);
 	assert.equal(JSON.parse(account.body).account.status, "not-configured");
 	assert.equal(typeof routes.get(plugin.SESSION_CONTEXT_PATH), "function");
+}
+
+async function testDeclarativeEndpointDiagnostics(root) {
+	const plugin = await freshModule("declarative-endpoint", join(root, "declarative-endpoint"));
+	const routes = new Map();
+	const warnings = [];
+	const context = makeContext({ sessions: { list: () => [] }, persistence: { list: async () => [] }, routes, warnings,
+		llm: { listProviders: () => [{ id: "custom-quota" }] } });
+	context.credentials = { resolve: async () => ({ value: "synthetic-server-quota-key" }) };
+	const config = plugin.validateConfig({ refresh: { enabled: false }, monitors: { "custom-quota": {
+		adapter: "declarative", mode: "subscription",
+		request: { path: "/quota/windows", auth: { type: "bearer", credentialRef: "SYNTHETIC_QUOTA_KEY" } },
+		extract: { root: "", items: "/windows", kind: "/kind", remainingPercent: "/remainingPercent" }
+	} } });
+	let requests = 0;
+	// Use the real account service, discovery and registered HTTP handlers;
+	// replace only the credential service and upstream transport with fixtures.
+	const accounts = createAccountService({ credentials: context.credentials, getProviders: () => plugin.configuredProviders(context), config,
+		deps: { includeLegacyProviders: false, fetch: async () => { requests += 1; return new Response(JSON.stringify({ windows: [{ kind: "5h", remainingPercent: 80 }] }), { headers: { "content-type": "application/json" } }); } } });
+	await plugin.apply(context, config, { disableBackgroundRefresh: true, accounts });
+	async function read(path, query = "") {
+		const response = makeResponse();
+		await routes.get(path)({ method: "GET", url: `${path}${query}`, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } }, response);
+		assert.equal(response.status, 200);
+		assert.ok(!response.body.includes("synthetic-server-quota-key"));
+		return JSON.parse(response.body);
+	}
+	const missing = (await read(plugin.ACCOUNT_PATH, "?provider=custom-quota&refresh=1")).account;
+	assert.equal(missing.reason, "monitor-base-url-missing");
+	assert.equal(missing.status, "unavailable");
+	assert.equal(missing.lastAttemptAt, null);
+	assert.equal(requests, 0);
+	assert.equal((await read(plugin.PROVIDERS_PATH)).providers.find((provider) => provider.id === "custom-quota").reason, missing.reason);
+	config.monitors["custom-quota"].usageBaseURL = "https://quota.example.com";
+	assert.equal((await read(plugin.ACCOUNT_PATH, "?provider=custom-quota")).account.status, "ok");
+	assert.equal(requests, 1);
+	assert.deepEqual(warnings, [], "handled preflight diagnostics must not log raw exceptions");
 }
 
 async function testDeepSeekDesktopAccountRoute(root) {
@@ -2187,13 +2225,15 @@ async function testWebSearchCacheReplacement(root) {
 	const reloaded = await freshModule("web-search-cache-reload", home);
 	assert.equal((await reloaded.collectUsage(context)).total.tokens, 24, "restart must retain nonadjacent search identities");
 	// Older accounting semantics must replay unchanged authoritative logs.
-	saved.version = 6;
-	saved.sessions[session.id].consumed = session.events.length;
-	saved.sessions[session.id].days = {};
-	await writeFile(path, JSON.stringify(saved), "utf8");
-	const migrated = await freshModule("web-search-v6-refold", home);
-	assert.equal((await migrated.collectUsage(context)).total.tokens, 24);
-	assert.equal(JSON.parse(await readFile(path, "utf8")).version, CACHE_SCHEMA);
+	for (const version of [6, 12]) {
+		saved.version = version;
+		saved.sessions[session.id].consumed = session.events.length;
+		saved.sessions[session.id].days = {};
+		await writeFile(path, JSON.stringify(saved), "utf8");
+		const migrated = await freshModule(`web-search-v${version}-refold`, home);
+		assert.equal((await migrated.collectUsage(context)).total.tokens, 24);
+		assert.equal(JSON.parse(await readFile(path, "utf8")).version, CACHE_SCHEMA);
+	}
 
 	// Cold statistics restart with no live Session and no usage cache. The
 	// persistence seam reads the complete synthetic event log from disk; replay
@@ -2229,10 +2269,51 @@ async function testWebSearchCacheReplacement(root) {
 	assert.equal(finalCache.sessions[session.id].currentRoute.providerId, "minimax-cn", "auxiliary search cannot change the conversation route");
 }
 
+async function testNestedTaggedSeedBoundaries(root) {
+	const at = Date.UTC(2026, 7, 13);
+	const sample = (seq, tokens) => ({ ...usageEvent(seq, tokens), time: at + seq });
+	const marker = (seq) => ({ seq, time: at + seq, type: "session/end-seed", data: { inherited: true } });
+	const a = sample(0, 5), b = sample(2, 7), c = sample(4, 11);
+	const logs = new Map([
+		["parent", [a]],
+		["child", [a, marker(1), b]],
+		["grandchild", [a, marker(1), b, marker(3), c]]
+	]);
+	// Ordinary forks do not need parentSession. A descendant retains ancestor
+	// tagged markers in its copied prefix; only the final marker is its own cut.
+	for (const mode of ["live", "persisted", "marker-only"]) {
+		const home = join(root, `nested-tagged-${mode}`);
+		let plugin = await freshModule(`nested-tagged-${mode}`, home);
+		const headers = new Map([...logs.keys()].map((id) => [id, {
+			isSeeded: id !== "parent", createdAt: at,
+			...(mode === "marker-only" ? {} : { inheritedEventCount: id === "grandchild" ? 3 : id === "child" ? 1 : 0 })
+		}]));
+		const { api } = currentPersistenceApi(logs, new Map([...logs.keys()].map(id => [id, "r1"])), void 0, headers);
+		const live = mode === "live" ? [...logs].map(([id, events]) => ({
+			id, events, header: headers.get(id), inheritedEventCount: headers.get(id).inheritedEventCount
+		})) : [];
+		const context = makeContext({ sessions: { list: () => live }, persistence: { list: api.list, open: api.open } });
+		assert.equal((await plugin.collectUsage(context)).total.tokens, 23, `${mode}: nested copied markers must not turn inherited usage into an own call`);
+		assert.equal((await plugin.collectUsage(context)).total.tokens, 23, `${mode}: unchanged collection stays stable`);
+		plugin = await freshModule(`nested-tagged-${mode}-restart`, home);
+		assert.equal((await plugin.collectUsage(context)).total.tokens, 23, `${mode}: cache restart preserves the descendant's final cut`);
+		const cache = JSON.parse(await readFile(join(home, "storages", "usage-stats-cache.json"), "utf8"));
+		assert.equal(cache.sessions.grandchild.inheritedEventCount, 3, `${mode}: keep the current fork boundary, not the ancestor marker`);
+		// A published v0.3.7 cache may already have the wrong cut and an unchanged
+		// revision. Repair must not require the underlying session log to change.
+		cache.version = 10;
+		cache.sessions.grandchild.inheritedEventCount = 1;
+		await writeFile(join(home, "storages", "usage-stats-cache.json"), JSON.stringify(cache));
+		plugin = await freshModule(`nested-tagged-${mode}-upgrade`, home);
+		assert.equal((await plugin.collectUsage(context)).total.tokens, 23, `${mode}: upgrade repairs a cached ancestor cut at the same revision`);
+	}
+}
+
 const root = await mkdtemp(join(tmpdir(), "dsh-usage-stats-"));
 try {
 	await testRouteFence(root);
 	await testWebSearchCacheReplacement(root);
+	await testDeclarativeEndpointDiagnostics(root);
 	await testDeepSeekDesktopAccountRoute(root);
 	await testDeepSeekDesktopAccountServiceLifecycle(root);
 	await testOrcaRouterIntegrationRoute(root);
@@ -2275,6 +2356,7 @@ try {
 	await testLiveSeededSessionUsesExactCut(root);
 	await testUnreadableMigrationRetriesAfterRestart(root);
 	await testExactInheritedOwnership(root);
+	await testNestedTaggedSeedBoundaries(root);
 	await testIndependentAndCorrectedSampleOwnership(root);
 	await testLiveLogShrink(root);
 	await testZeroUsageRowsFiltered(root);

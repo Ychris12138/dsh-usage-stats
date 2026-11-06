@@ -437,6 +437,14 @@ assert.match(compactMarkup,/aria-label="123,456,789 Token"/);
 assert.match(compactMarkup,/tabindex="0"/);
 const badgeMarkup = renderToStaticMarkup(react.createElement(TokenCount,{value:123456789,translate:numberEn,focusable:false}));
 assert.doesNotMatch(badgeMarkup,/tabindex/,"a count inside the badge button must not add a nested tab stop");
+const largeRanking = renderToStaticMarkup(react.createElement(ProviderUsageBreakdown, {
+ days: [{ date: "2026-08-01", models: [{ model: "provider/model", tokens: 123456789 }] }],
+ month: "2026-08", translate: numberEn
+}));
+const summaryMarkup = largeRanking.match(/<summary\b[^>]*>[\s\S]*?<\/summary>/)?.[0];
+assert.ok(summaryMarkup, "large provider counts remain visible in the summary");
+assert.match(summaryMarkup, /123,456,789 Token/, "summary retains the full accessible value");
+assert.doesNotMatch(summaryMarkup, /tabindex=/i, "a summary must not contain an extra keyboard stop");
 let numberRenderer;
 act(()=>{numberRenderer=TestRenderer.create(react.createElement(TokenCount,{value:123456789,translate:numberZh}));});
 act(()=>numberRenderer.update(react.createElement(TokenCount,{value:123456789,translate:numberEn})));

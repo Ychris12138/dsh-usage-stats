@@ -18,6 +18,7 @@ import {
 import {
 	applyUsageDelta,
 	createUsageState,
+	dayKey,
 	mergeBillingInto,
 	mergeInto,
 	renderSessionUsage,
@@ -90,9 +91,76 @@ function usage(seq, time, turn, step, providerId, model, value, type = "assistan
 	};
 }
 
+function webSearchUsage(seq, time, providerId, model, value, eventId) {
+	return {
+		seq,
+		time,
+		type: "web/deepseek-search-usage",
+		data: {
+			...(eventId === void 0 ? {} : { eventId }),
+			provider: providerId,
+			model,
+			usage: value,
+			reasoningTokensMode: "additional"
+		}
+	};
+}
+
 const ruleA = Date.parse("2026-08-15T02:00:00Z");
 const ruleB = Date.parse("2026-08-20T02:00:00Z");
 const ruleC = Date.parse("2026-08-24T02:00:00Z");
+
+{
+	const state = createUsageState();
+	const a = webSearchUsage(1, ruleC, "deepseek-official", "deepseek-v4-flash", { input_tokens: 10, output_tokens: 2 }, "A");
+	const b = { ...a, seq: 2, data: { ...a.data, eventId: "B" } };
+	applyUsageDelta(state, [a, b], { estimateCost: estimator });
+	applyUsageDelta(state, [{ ...a, seq: 3, time: ruleC + 86400000 }], { estimateCost: estimator });
+	const rendered = renderSessionUsage("interleaved", state);
+	assert.equal(rendered.tokens, 24, "A/B/A across incremental folds must replace A");
+	assert.equal(state.billing.sampleCount, 2);
+	assert.equal(rendered.estimatedCost, 2 * estimator({ providerId: "deepseek-official", model: "deepseek-v4-flash", timestamp: ruleC, buckets: buckets(10, 2) }).amount);
+	assert.equal(state.days.get(dayKey(ruleC)).totals.inputTokens, 10);
+	assert.equal(state.days.get(dayKey(ruleC + 86400000)).totals.inputTokens, 10);
+	console.log("interleaved web-search replacement preserves token, day, and cost totals");
+}
+
+{
+	const state = createUsageState();
+	const assistant = usage(1, ruleC, "turn", 0, "deepseek-official", "deepseek-v4-flash", buckets(5, 0));
+	applyUsageDelta(state, [assistant,
+		webSearchUsage(2, ruleC + 1, "deepseek-official", "deepseek-v4-flash", { input_tokens: 12 }, "search"),
+		usage(3, ruleC + 2, "turn", 0, "deepseek-official", "deepseek-v4-flash", buckets(7, 0))
+	], { estimateCost: estimator });
+	assert.equal(renderSessionUsage("mixed", state).tokens, 19, "search events must not break assistant sample replacement");
+}
+
+{
+	const valid = webSearchUsage(1, ruleC, "deepseek-official", "deepseek-v4-flash", { input_tokens: 10 }, "valid");
+	const malformed = [
+		...['', ' ', NaN, Infinity, -1, {}, []].map((eventId) => ({ ...valid, data: { ...valid.data, eventId } })),
+		...["2", -1, NaN, Infinity, 1.5, null].map((output_tokens) => ({ ...valid, data: { ...valid.data, usage: { output_tokens } } })),
+		{ ...valid, data: { ...valid.data, usage: {} } },
+		{ ...valid, data: { ...valid.data, usage: [] } },
+		{ ...valid, data: { ...valid.data, provider: " " } },
+		{ ...valid, time: NaN },
+		{ ...valid, time: 1e30 },
+		{ ...valid, data: { ...valid.data, usage: { output_tokens: Number.MAX_SAFE_INTEGER, reasoning_tokens: 1 } } }
+	];
+	for (const event of malformed) {
+		const state = createUsageState();
+		applyUsageDelta(state, [event]);
+		assert.equal(renderSessionUsage("malformed", state).tokens, 0, "malformed search event must be ignored");
+		assert.equal(state.webSearchSamples.size, 0);
+	}
+	const state = createUsageState();
+	applyUsageDelta(state, [
+		{ ...valid, data: { ...valid.data, eventId: "1" } },
+		{ ...valid, data: { ...valid.data, eventId: 1 } }
+	]);
+	assert.equal(renderSessionUsage("typed-identity", state).tokens, 20, "string IDs and sequence numbers must not collide");
+	console.log("web-search identities, numeric buckets, timestamps, and overflow fail closed");
+}
 
 {
 	assert.notEqual(estimator({ providerId: "deepseek-official", model: "deepseek-v4-pro", timestamp: ruleC, buckets: buckets(1_000_000) }), null);
@@ -102,6 +170,43 @@ const ruleC = Date.parse("2026-08-24T02:00:00Z");
 	assert.equal(estimator({ providerId: "deepseek-official", model: "unknown-model", timestamp: ruleC, buckets: buckets(1_000_000) }), null);
 	assert.equal(estimator({ providerId: "deepseek-official", model: "deepseek-v4-pro", timestamp: ruleC, buckets: buckets(0, 0, 0, 1) }), null);
 	console.log("official DeepSeek pricing and unpriced route/cache-write safety ok");
+}
+
+{
+	const state = createUsageState();
+	const first = webSearchUsage(ruleC, ruleC, "deepseek-official", "deepseek-v4-flash", {
+		input_tokens: 10,
+		output_tokens: 2,
+		cache_read_input_tokens: 3,
+		cache_creation_input_tokens: 4
+	}, "search-1");
+	const replacement = webSearchUsage(ruleC + 1, ruleC + 1, "deepseek-official", "deepseek-v4-flash", {
+		input_tokens: 20,
+		output_tokens: 1
+	}, "search-1");
+	const second = webSearchUsage(ruleC + 2, ruleC + 2, "deepseek-official", "deepseek-v4-flash", {
+		inputTokens: 5,
+		outputTokens: 5,
+		reasoningTokens: 2
+	}, "search-2");
+	applyUsageDelta(state, [
+		request(0, ruleC, "deepseek-official", "deepseek-v4-flash"),
+		first,
+		replacement,
+		second,
+		{ seq: ruleC + 3, time: ruleC + 3, type: "web/deepseek-search-llm-request", data: { provider: "deepseek-official", model: "deepseek-v4-flash", usage: { input_tokens: 999 } } },
+		{ seq: ruleC + 4, time: ruleC + 4, type: "web/deepseek-search-usage", data: { provider: "deepseek-official", usage: { input_tokens: 999 } } },
+		{ time: ruleC + 5, type: "web/deepseek-search-usage", data: { provider: "deepseek-official", model: "deepseek-v4-flash", usage: { input_tokens: 999 } } }
+	], { estimateCost: estimator });
+	const rendered = renderSessionUsage("web-search", state);
+	const expectedReplacement = estimator({ providerId: "deepseek-official", model: "deepseek-v4-flash", timestamp: ruleC + 1, buckets: buckets(20, 1) });
+	const expectedSecond = estimator({ providerId: "deepseek-official", model: "deepseek-v4-flash", timestamp: ruleC + 2, buckets: buckets(5, 7) });
+	assert.equal(rendered.tokens, 33, "web-search response usage must fold camelCase, snake_case, and reasoning token fields");
+	assert.deepEqual(rendered.providers, ["deepseek-official"]);
+	assert.deepEqual(rendered.models, ["deepseek-official/deepseek-v4-flash"]);
+	assert.equal(rendered.estimatedCost, expectedReplacement.amount + expectedSecond.amount, "web-search usage must use event-time pricing");
+	assert.equal(rendered.costComplete, true);
+	console.log("explicit web-search usage folds, replaces, prices, and ignores request-only events");
 }
 
 {
@@ -291,6 +396,21 @@ const ruleC = Date.parse("2026-08-24T02:00:00Z");
 	const restored = parseCostAccumulator(serializeCostAccumulator(states[0].billing.total));
 	assert.deepEqual(renderCost(restored), renderCost(states[0].billing.total));
 	console.log("session/global reconciliation, unchanged token aggregation, O(new), and cache round-trip ok");
+}
+
+{
+	for (const [mode, expected] of [["included", 12], ["additional", 15], [undefined, 0], ["guess", 0]]) {
+		const event = webSearchUsage(1, ruleC, "deepseek-official", "deepseek-v4-flash", { input_tokens: 2, output_tokens: 10, reasoning_tokens: 3 }, "reasoning");
+		event.data.reasoningTokensMode = mode;
+		const state = createUsageState();
+		applyUsageDelta(state, [event]);
+		assert.equal(renderSessionUsage("reasoning", state).tokens, expected);
+	}
+	const event = webSearchUsage(1, ruleC, "deepseek-official", "deepseek-v4-flash", { inputTokens: 2, input_tokens: 3 }, "aliases");
+	const state = createUsageState();
+	applyUsageDelta(state, [event]);
+	assert.equal(renderSessionUsage("aliases", state).tokens, 0);
+	console.log("search reasoning requires explicit semantics; contradictory aliases are rejected");
 }
 
 console.log("BILLING + BUDGET TESTS PASSED");

@@ -1,25 +1,20 @@
-# v0.3.7 release checklist
+# v0.3.8 release checklist
 
 ## Preparation
 
-- [x] Review scope and preserve #153/#147 contributor history.
-- [x] Keep #133 out; label #143 experimental and #74 unaccepted; include #152 with manual fallback.
-- [x] Validate integrated code with static checks and all 16 test suites.
-- [x] Exercise real React ranking component at 440px/300px with synthetic data.
-- [ ] Synchronize 0.3.7 metadata and require exact-source CI.
-- [ ] Freeze a clean source commit and compare every packed file with it.
-- [ ] Save tarball hashes, checks and acceptance limits in the external manifest.
-- [ ] Prepare GitHub draft/assets without creating a public tag.
+- [x] Include #159, #163 and the #161 display work with independent unit preference.
+- [x] Preserve #133 as a separate draft, and describe #74 / #140 / #162 acceptance limits.
+- [ ] Validate final source with static checks and all 16 test suites.
+- [ ] Freeze clean source and compare every packed file to the commit.
+- [ ] Verify installation in an isolated DSH profile and save the results.
+- [ ] Prepare draft GitHub Release and assets without a public tag.
 
 ## npm and closeout
 
-- [ ] User publishes the exact frozen tarball; never repack the current checkout.
-- [ ] Verify official registry identity, latest, integrity and downloaded bytes.
-- [ ] Fast-forward main to the frozen release source and verify Pages/catalog.
-- [ ] Create v0.3.7 at that exact commit and publish the prepared GitHub draft.
-- [ ] Verify exact npm installation in the intended DSH profile and report real
-      acceptance separately from synthetic checks. Back up the usage cache first.
+- [ ] Maintainer publishes the exact frozen tarball.
+- [ ] Verify official npm identity, latest, integrity and downloaded bytes.
+- [ ] Fast-forward main to the frozen source and verify the public market catalog.
+- [ ] Tag the exact source and publish the prepared GitHub Release.
+- [ ] Verify real provider accounts separately; retain open issues until their acceptance criteria are met.
 
-The package checklist remains frozen after packing; completed gates and hashes
-belong in the external release manifest. See release-plan-v0.3.7.md and
-release-notes-v0.3.7.md for scope, compatibility and publication order.
+The package checklist is frozen with the source. Record subsequent results in the external release manifest.

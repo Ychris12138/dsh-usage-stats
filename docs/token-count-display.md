@@ -1,4 +1,4 @@
-> Validation candidate: #159 is merged; this display change remains pending actual DSH visual acceptance.
+> #159 is merged. Desktop validation covered default K/M, switching to Chinese units, preference persistence and a keyboard-accessible full value.
 
 # Compact token counts (preparation for #160)
 
@@ -34,8 +34,4 @@ rounding promotion, invalid values, the maximum safe integer's full value,
 tooltip/accessible labels, badge tab behavior and locale changes. Existing
 rankings, exports, account selection and daily-detail behavior remain covered.
 
-Before accepting this Draft, check the tooltip and long-count layout in an
-installed DSH on wide and narrow panels, including Chinese/English switching.
-This is display preparation, not real-account reconciliation. The separate
-pending nested-fork fix #159 remains a higher-priority accounting change.
-No version, published artifact, tag or stable catalog entry is changed here.
+Desktop validation covered the default K/M display, Chinese unit selection, persistence across panel reopen and a keyboard-accessible full value. English UI and narrow-panel visual checks remain separate; automated unit and component tests cover both unit formats. This is not real-account reconciliation.

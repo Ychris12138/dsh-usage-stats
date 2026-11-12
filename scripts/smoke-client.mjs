@@ -496,6 +496,40 @@ const translateAccount = (key, params) => {
 	if (params?.ref !== void 0) return `${key}:${params.ref}`;
 	return key;
 };
+const qianwenMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "qwen-token-plan-cn", displayName: "Qwen", adapter: "qianwen-token-plan", qianwenAuthManaged: true, accountMode: "subscription" },
+	account: { status: "ok", mode: "subscription", plan: "Qianwen Token Plan essential", quota: { total: 45000, unit: "credits" }, windows: [{ kind: "monthly", usedPercent: 1, remainingPercent: 99 }] },
+	accountLoading: false, accountError: null, translate: translateAccount, onRetry: () => {}
+}));
+assert.match(qianwenMarkup, /qianwen\.quotaTotal:45,000/);
+assert.match(qianwenMarkup, /qianwen\.reconnect/);
+assert.match(qianwenMarkup, /subscription\.used:1/);
+{
+	const previousFetch = globalThis.fetch;
+	let refreshes = 0;
+	const actions = [];
+	globalThis.fetch = async (path, init) => {
+		const action = new URL(String(path), "http://localhost").searchParams.get("action");
+		actions.push(action);
+		assert.equal(init.headers["x-dsh-usage-stats-action"], `qianwen-${action}`);
+		return { ok: true, json: async () => action === "start" ? { ok: true, status: "pending", verificationUrl: "https://account.qianwenai.com/verify?code=example" } : { ok: true, status: "connected" } };
+	};
+	let card;
+	await act(async () => { card = TestRenderer.create(react.createElement(ProviderAccountCard, {
+		provider: { id: "qianwen-token-plan", displayName: "Qianwen", adapter: "qianwen-token-plan", qianwenAuthManaged: true, accountMode: "subscription" },
+		account: { status: "not-configured", mode: "subscription", windows: [] }, accountLoading: false, accountError: null,
+		translate: translateAccount, onRetry: () => { refreshes++; }
+	})); });
+	const button = (text) => card.root.findAllByType("button").find((entry) => entry.props.children === text);
+	await act(async () => { await button("qianwen.connect").props.onClick(); });
+	assert.equal(card.root.findByType("a").props.href, "https://account.qianwenai.com/verify?code=example");
+	await act(async () => { await button("qianwen.check").props.onClick(); });
+	assert.deepEqual(actions, ["start", "poll"]);
+	assert.equal(refreshes, 1);
+	assert.equal(card.root.findAllByType("a").length, 0);
+	await act(async () => { card.unmount(); });
+	globalThis.fetch = previousFetch;
+}
 const deepseekAccount = {
 	id: "deepseek-official",
 	displayName: "DeepSeek",

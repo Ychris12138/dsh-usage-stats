@@ -502,8 +502,18 @@ const qianwenMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCa
 	accountLoading: false, accountError: null, translate: translateAccount, onRetry: () => {}
 }));
 assert.match(qianwenMarkup, /qianwen\.quotaTotal:45,000/);
-assert.match(qianwenMarkup, /qianwen\.reconnect/);
+assert.match(qianwenMarkup, /qianwen\.disconnect/);
+assert.doesNotMatch(qianwenMarkup, /qianwen\.reconnect|qianwen\.connect<\/button>/);
+assert.match(qianwenMarkup, /title="qianwen\.privacy"/);
+assert.doesNotMatch(qianwenMarkup, />qianwen\.privacy</);
 assert.match(qianwenMarkup, /subscription\.used:1/);
+const qianwenExpiredMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "qwen-token-plan-cn", displayName: "Qwen", adapter: "qianwen-token-plan", qianwenAuthManaged: true, accountMode: "subscription" },
+	account: { status: "unauthorized", mode: "subscription", windows: [] },
+	accountLoading: false, accountError: null, translate: translateAccount, onRetry: () => {}
+}));
+assert.match(qianwenExpiredMarkup, /qianwen\.connect/);
+assert.doesNotMatch(qianwenExpiredMarkup, /qianwen\.disconnect/);
 {
 	const previousFetch = globalThis.fetch;
 	let refreshes = 0;
@@ -512,7 +522,7 @@ assert.match(qianwenMarkup, /subscription\.used:1/);
 		const action = new URL(String(path), "http://localhost").searchParams.get("action");
 		actions.push(action);
 		assert.equal(init.headers["x-dsh-usage-stats-action"], `qianwen-${action}`);
-		return { ok: true, json: async () => action === "start" ? { ok: true, status: "pending", verificationUrl: "https://account.qianwenai.com/verify?code=example" } : { ok: true, status: "connected" } };
+		return { ok: true, json: async () => action === "start" ? { ok: true, status: "pending", verificationUrl: "https://account.qianwenai.com/verify?code=example" } : { ok: true, status: action === "disconnect" ? "disconnected" : "connected" } };
 	};
 	let card;
 	await act(async () => { card = TestRenderer.create(react.createElement(ProviderAccountCard, {
@@ -527,6 +537,18 @@ assert.match(qianwenMarkup, /subscription\.used:1/);
 	assert.deepEqual(actions, ["start", "poll"]);
 	assert.equal(refreshes, 1);
 	assert.equal(card.root.findAllByType("a").length, 0);
+	assert.equal(card.root.findAllByProps({ role: "status" }).some((node) => node.props.children === "qianwen.status.connected"), false);
+	await act(async () => { card.update(react.createElement(ProviderAccountCard, {
+		provider: { id: "qianwen-token-plan", displayName: "Qianwen", adapter: "qianwen-token-plan", qianwenAuthManaged: true, accountMode: "subscription" },
+		account: { status: "ok", mode: "subscription", windows: [{ kind: "monthly", usedPercent: 1, remainingPercent: 99 }] }, accountLoading: false, accountError: null,
+		translate: translateAccount, onRetry: () => { refreshes++; }
+	})); });
+	assert.equal(button("qianwen.connect"), undefined);
+	assert.equal(button("qianwen.disconnect").props.title, "qianwen.privacy");
+	await act(async () => { await button("qianwen.disconnect").props.onClick(); });
+	assert.deepEqual(actions, ["start", "poll", "disconnect"]);
+	assert.equal(refreshes, 2);
+	assert.equal(card.root.findAllByProps({ role: "status" }).some((node) => node.props.children === "qianwen.status.disconnected"), false);
 	await act(async () => { card.unmount(); });
 	globalThis.fetch = previousFetch;
 }

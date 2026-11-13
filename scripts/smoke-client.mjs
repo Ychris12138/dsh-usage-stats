@@ -513,7 +513,7 @@ const qianwenExpiredMarkup = renderToStaticMarkup(react.createElement(ProviderAc
 	accountLoading: false, accountError: null, translate: translateAccount, onRetry: () => {}
 }));
 assert.match(qianwenExpiredMarkup, /qianwen\.connect/);
-assert.doesNotMatch(qianwenExpiredMarkup, /qianwen\.disconnect/);
+assert.match(qianwenExpiredMarkup, /qianwen\.disconnect/, "an expired local grant must remain removable without reconnecting");
 {
 	const previousFetch = globalThis.fetch;
 	let refreshes = 0;
@@ -549,6 +549,15 @@ assert.doesNotMatch(qianwenExpiredMarkup, /qianwen\.disconnect/);
 	assert.deepEqual(actions, ["start", "poll", "disconnect"]);
 	assert.equal(refreshes, 2);
 	assert.equal(card.root.findAllByProps({ role: "status" }).some((node) => node.props.children === "qianwen.status.disconnected"), false);
+	await act(async () => { card.update(react.createElement(ProviderAccountCard, {
+		provider: { id: "qianwen-token-plan", displayName: "Qianwen", adapter: "qianwen-token-plan", qianwenAuthManaged: true, accountMode: "subscription" },
+		account: { status: "unauthorized", mode: "subscription", windows: [] }, accountLoading: false, accountError: null,
+		translate: translateAccount, onRetry: () => { refreshes++; }
+	})); });
+	assert.ok(button("qianwen.connect"), "expired grants can still be replaced");
+	await act(async () => { await button("qianwen.disconnect").props.onClick(); });
+	assert.deepEqual(actions, ["start", "poll", "disconnect", "disconnect"]);
+	assert.equal(refreshes, 3);
 	await act(async () => { card.unmount(); });
 	globalThis.fetch = previousFetch;
 }

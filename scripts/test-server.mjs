@@ -132,7 +132,7 @@ async function testRouteFence(root) {
 	// when the harness has no credential of its own, so its status belongs to the
 	// machine, not to this assertion; the credential-free providers are pinned.
 	const subscriptionAccounts = JSON.parse(subscriptions.body).subscriptions;
-	assert.deepEqual(subscriptionAccounts.map((provider) => provider.id).sort(), ["commandcode", "opencode-go", "zai"]);
+	assert.deepEqual(subscriptionAccounts.map((provider) => provider.id).sort(), ["commandcode", "opencode-go", "qianwen-token-plan", "zai"]);
 	assert.equal(subscriptionAccounts.find((provider) => provider.id === "zai")?.status, "not-configured");
 	assert.equal(subscriptionAccounts.find((provider) => provider.id === "commandcode")?.status, "not-configured");
 	assert.equal(subscriptionAccounts.find((provider) => provider.id === "commandcode")?.adapter, "commandcode-goat");
@@ -901,7 +901,7 @@ async function testExportRoutes(root) {
 		}
 	});
 	await plugin.apply(context, {}, { disableBackgroundRefresh: true });
-	assert.equal(routes.size, 10, "the plugin must register six data views, three exports, and the explicit OrcaRouter settings action");
+	assert.equal(routes.size, 11, "the plugin must register data, export, and explicit integration actions");
 
 	const request = (path) => ({ method: "GET", url: path, headers: { host: "localhost:3080" }, socket: { remoteAddress: "127.0.0.1" } });
 	const daily = makeResponse();

@@ -1,3 +1,5 @@
+> Historical investigation: #163 was merged on 2026-11-06. The original 0.3.5/0.3.7 observations below describe the pre-fix state; real-host acceptance remains open.
+
 # Declarative monitor endpoint diagnostics — #162
 
 Prepared on 2026-11-05 against main `fb2bf64a3e619b6a3bfe11088e968901ca23f787`.

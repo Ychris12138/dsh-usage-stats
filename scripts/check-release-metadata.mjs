@@ -54,5 +54,7 @@ assert.match(client, new RegExp(`__ModuleLoader__\\.load\\(\\{\\s*id:\\s*"${esca
 assert.match(client, new RegExp(`tag\\.dataset\\.plugin\\s*=\\s*"${escapedName}"`), "client style ownership identity must match package name");
 assert.match(readme, new RegExp(`<!--\\s*stable-version:\\s*${pkg.version.replaceAll(".", "\\.")}\\s*-->`), "README stable-version marker must match package version");
 assert.match(readme, new RegExp(`${escapedName}@${pkg.version.replaceAll(".", "\\.")}`), "README must include an exact npm install for the package version");
+assert.ok(readme.includes(`本版本 package 与 catalog 元数据均为 \`${pkg.version}\``), "README market version must match package version");
+assert.ok(readme.includes(`npm publish /absolute/path/to/ychris12138-dsh-usage-stats-${pkg.version}.tgz`), "README tarball example must match package version");
 
 console.log(`release metadata ok: ${pkg.name}@${pkg.version}`);

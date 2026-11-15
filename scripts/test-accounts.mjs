@@ -42,6 +42,17 @@ function statusErrorFromTest(status, message) {
 
 const now = Date.parse("2026-08-15T00:00:00Z");
 
+{
+	const spec = resolveAccountSpec({ id: "opencode-go" }, validateAccountConfig());
+	const account = await queryAccount(spec, credentials({ OPENCODE_API_KEY: "synthetic-key" }), {
+		fetch: async () => jsonResponse({ usage: { rolling: { status: "rate-limited", percent: 20 } } })
+	});
+	assert.equal(account.status, "ok");
+	assert.equal(account.windows[0].limited, true);
+	assert.equal(account.windows[0].remainingPercent, 80);
+	assert.equal(account.alert.level, "critical");
+}
+
 // #162: exercise registry discovery, binding, refresh health and cache together.
 // Synthetic fetch/credentials prove the local contract, not a live Harness run.
 for (const mode of ["balance", "subscription"]) {

@@ -1,3 +1,5 @@
+> Historical investigation: #159 was merged on 2026-11-06; the search draft now uses schema 13.
+
 # Nested inherited-marker correction (preparation, 2026-10-30)
 
 Published 0.3.7 at `fb2bf64a3e619b6a3bfe11088e968901ca23f787` uses the

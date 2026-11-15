@@ -52,7 +52,7 @@ globalThis.fetch=async path=>{
  if(url.pathname.endsWith('/providers'))data={ok:true,providers:[a,b].map(id=>({id,displayName:'Z.ai',configured:true,accountMode:'subscription',adapter:'zai-token-plan'}))};
  else if(url.pathname.endsWith('/account')){const id=url.searchParams.get('provider');data={ok:true,account:{id,mode:'subscription',adapter:'zai-token-plan',status:'ok',windows:[{kind:'weekly',remainingPercent:id===a?20:80}]}};}
  else if(url.pathname.includes('/integrations/'))data={ok:true,integration:{available:false}};
- else data={ok:true,days:[],total:{tokens:0},sessions:[]};
+ else data={ok:true,days:[],total:{tokens:123456789},sessions:[]};
  return {ok:true,status:200,json:async()=>data};
 };
 values.set(SELECTED_PROVIDER_STORAGE_KEY,a);
@@ -63,6 +63,14 @@ const follow=()=>renderer.root.findByProps({'aria-label':'follow.label'});
 await flush(()=>{renderer=Renderer.create(React.createElement(ex.UsageStatsPanel,{wide:true,t:k=>k}));});
 await flush(()=>renderer.root.findByProps({'data-usage-stats-badge':true}).props.onClick());
 assert.equal(follow().props.checked,false,'upgrade defaults to manual mode');
+const units=()=>renderer.root.findByProps({'aria-label':'usage.numberUnit'});
+const totalDisplay=()=>renderer.root.findAllByProps({title:'123,456,789 Token'})[0].props.children;
+assert.equal(units().props.value,'international','international units are the default, independent of UI language');
+assert.equal(totalDisplay(),'123.46M');
+await flush(()=>units().props.onChange({target:{value:'chinese'}}));
+assert.equal(totalDisplay(),'1.23亿');
+assert.equal(values.get(ex.TOKEN_UNIT_STORAGE_KEY),'chinese');
+
 await flush(()=>setFollowServices(live));assert.equal(picker().props.value,a);
 const before=writes.length;
 await flush(()=>follow().props.onChange({target:{checked:true}}));
@@ -91,10 +99,11 @@ await flush(()=>follow().props.onChange({target:{checked:false}}));assert.equal(
 await flush(()=>renderer.unmount());assert.equal(dir.store.size(),0);assert.equal(sessionList.size(),0);
 await flush(()=>{renderer=Renderer.create(React.createElement(ex.UsageStatsPanel,{wide:true,t:k=>k}));});
 await flush(()=>renderer.root.findByProps({'data-usage-stats-badge':true}).props.onClick());assert.equal(follow().props.checked,false,'manual mode stays off after reload');
+assert.equal(units().props.value,'chinese','unit preference survives remount');assert.equal(totalDisplay(),'1.23亿');
 await flush(()=>renderer.unmount());setFollowServices(null);
 window.localStorage={getItem:()=>{throw Error('denied');},setItem:()=>{throw Error('denied');}};
 await flush(()=>{renderer=Renderer.create(React.createElement(ex.UsageStatsPanel,{wide:true,t:k=>k}));});
 await flush(()=>renderer.root.findByProps({'data-usage-stats-badge':true}).props.onClick());
-assert.equal(follow().props.checked,false);await flush(()=>picker().props.onChange({target:{value:b}}));assert.equal(picker().props.value,b,'storage failure does not break current-page selection');
+assert.equal(follow().props.checked,false);assert.equal(units().props.value,'international','blocked storage defaults to K/M');await flush(()=>units().props.onChange({target:{value:'chinese'}}));assert.equal(totalDisplay(),'1.23亿','blocked storage still allows in-memory unit selection');await flush(()=>picker().props.onChange({target:{value:b}}));assert.equal(picker().props.value,b,'storage failure does not break current-page selection');
 await flush(()=>renderer.unmount());
 console.log('SESSION FOLLOW CONTROLLER + REACT INTEGRATION TESTS PASSED');

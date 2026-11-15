@@ -27,6 +27,8 @@ if (typeof version !== "string" || !SEMVER.test(version)) {
 	const nextReadme = readme
 		.replace(marker, `<!-- stable-version: ${version} -->`)
 		.replaceAll(`${pkg.name}@${previousVersion}`, `${pkg.name}@${version}`)
+		.replace(/本版本 package 与 catalog 元数据均为 `[^`]+`/g, `本版本 package 与 catalog 元数据均为 \`${version}\``)
+		.replace(/npm publish \/absolute\/path\/to\/ychris12138-dsh-usage-stats-[^\s`]+\.tgz/g, `npm publish /absolute/path/to/ychris12138-dsh-usage-stats-${version}.tgz`)
 		.replaceAll(`stable/catalog 版本是 \`${previousVersion}\``, `stable/catalog 版本是 \`${version}\``)
 		.replaceAll(`当前 npm stable 为 \`${previousVersion}\``, `当前 npm stable 为 \`${version}\``);
 	await Promise.all([

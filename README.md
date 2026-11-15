@@ -1,6 +1,6 @@
 # dsh-usage-stats
 
-<!-- stable-version: 0.3.7 -->
+<!-- stable-version: 0.3.8 -->
 
 [![GitHub Release](https://img.shields.io/github/v/release/Ychris12138/dsh-usage-stats?display_name=tag&sort=semver&color=1f6feb)](https://github.com/Ychris12138/dsh-usage-stats/releases/latest)
 [![CI](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml)
@@ -28,20 +28,20 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 | 🔄 | 后台监测 | 账户按 active/detail/background 自适应刷新；间隔可配置或完全关闭，本地 Token 聚合保持独立运行 |
 | 🧩 | 可扩展适配器 | 支持 New API、Sub2API、通用余额模板，以及声明式 JSON Pointer 自定义查询 |
 | 📦 | 安全导出 | 提供 daily/session CSV 与版本化 JSON；Unicode、CSV 公式前缀和不完整费用均安全处理 |
-| 🔒 | 本机安全边界 | 数据端点仅接受回环 GET；OrcaRouter preset 仅由带防跨站请求头的显式回环 POST 写入；凭据只在服务端解析 |
+| 🔒 | 本机安全边界 | 数据端点仅接受回环 GET；OrcaRouter preset 和千问授权仅由带防跨站请求头的显式回环 POST 操作；凭据只在服务端解析 |
 
-界面支持中文和英文。浏览器只请求当前选择的 provider；账户自动刷新由服务端统一调度。手动刷新会更新用量、供应商列表，并强制刷新当前账户，不会批量强制请求其他供应商。
+界面支持中文和英文。Token 数量默认使用 K/M/B 单位，可在用量面板的“数字单位”中选择中文单位；该偏好保存在本机浏览器中，与界面语言无关。浏览器只请求当前选择的 provider；账户自动刷新由服务端统一调度。手动刷新会更新用量、供应商列表，并强制刷新当前账户，不会批量强制请求其他供应商。
 
 ## 快速安装 / Quick start
 
-本版本为 `@ychris12138/dsh-usage-stats@0.3.7`。npm 与市场安装要求该精确版本已经发布；发布前验收使用从冻结提交构建并核对哈希的本地 `.tgz`。
+本版本为 `@ychris12138/dsh-usage-stats@0.3.8`。npm 与市场安装要求该精确版本已经发布；发布前验收使用从冻结提交构建并核对哈希的本地 `.tgz`。
 
 基础功能支持 `@deepseek-ai/dsh >= 0.1.0-rc.6`。安装时选择实际使用的 profile：命令行网页通常是 `web`，Desktop 使用 `desktop`；不要把插件装到另一个 profile 后只刷新当前窗口。DSH Desktop 的 **DeepSeek Account 登录余额**接入依赖 DSH `0.2.0-rc.2+` 提供的 Host account service；旧版 Harness 仍继续使用 API Key 余额路径。
 
 确认 npm 上存在本版本后，优先安装精确版本；DSH Desktop Market 使用同一个包：
 
 ```bash
-dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.7"
+dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.8"
 ```
 
 Desktop 安装时将上面的 `--profile web` 改为 `--profile desktop`，并使用 Desktop 对应的 DSH CLI。只有明确测试未发布 source/RC 时才使用 GitHub 来源；验收指定候选版本时优先安装从该提交打出的本地 `.tgz`，以免跟随分支变化。GitHub `main` 可能领先 npm stable。
@@ -55,10 +55,10 @@ Desktop 安装时将上面的 `--profile web` 改为 `--profile desktop`，并�
 - `catalog/catalog-source.json` — 来源 manifest（`catalog-source.schema.json` v1.0.0）
 - `catalog/v1/plugins.json` — 标准 provider page（`catalog-provider-page.schema.json` v1.0.0）
 
-**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`。本版本 package 与 catalog 元数据均为 `0.3.6`；目录中的版本号不代表 npm 发布已完成。每个新版本都按以下顺序发布：
+**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`。本版本 package 与 catalog 元数据均为 `0.3.8`；目录中的版本号不代表 npm 发布已完成。每个新版本都按以下顺序发布：
 
 1. 在 release 分支运行 `npm run release:sync -- <version>` 同步 package、lockfile、README 与 catalog，检查候选包。npm 发布前不要把新 catalog 合入 `main`，因为 Pages 会自动部署。
-2. 从冻结的 `.tgz` 发布 scoped 公共包：`npm publish /absolute/path/to/ychris12138-dsh-usage-stats-0.3.6.tgz --access public --registry=https://registry.npmjs.org/`，再核对 registry tarball 与冻结包的哈希。
+2. 从冻结的 `.tgz` 发布 scoped 公共包：`npm publish /absolute/path/to/ychris12138-dsh-usage-stats-0.3.8.tgz --access public --registry=https://registry.npmjs.org/`，再核对 registry tarball 与冻结包的哈希。
 3. npm 包核验通过后，将 `main` 快进到冻结的发布提交，触发 Pages 部署；核验 `https://ychris12138.github.io/dsh-usage-stats/v1/plugins` 的精确版本（manifest 与 endpoint 必须同源、HTTPS 443、无凭据）。
 4. 在 DSH 插件市场 → 来源管理 → 添加来源，粘贴 manifest URL：`https://ychris12138.github.io/dsh-usage-stats/catalog-source.json`，选择后即可走「可恢复安装边界」GUI 安装。
 
@@ -101,7 +101,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 
 ## 支持的账户类型 / Providers
 
-插件自动发现官方 DeepSeek API Key 路由、DSH 0.2 的 `deepseek-account` 路由，以及 `llm-pi-ai` 中的 provider profile。只有存在公开账户接口、Host-owned account service 或显式 monitor 的供应商才会查询账户；Token 用量统计不需要额外凭据。
+插件自动发现官方 DeepSeek API Key 路由、DSH 0.2 的 `deepseek-account` 路由，以及 `llm-pi-ai` 中的 provider profile。只有存在账户适配器、Host-owned account service 或显式 monitor 的供应商才会查询账户；部分适配器使用官方客户端的非公开接口，详见下表。Token 用量统计不需要额外凭据。
 
 > **DSH 0.2 Desktop**：`0.3.5` 已支持 Host-owned `deepseek-account` 登录余额；该路径依赖 DSH `0.2.0-rc.2+` 的 account service，不读取原始 token、Cookie 或 PKCE。旧版 Harness 与 API Key DeepSeek 仍继续使用 `/user/balance` 路径。
 
@@ -116,6 +116,7 @@ npx --yes github:Ychris12138/dsh-usage-stats --no-enable
 | Z.ai / 智谱 | 订阅 | 全球区 `ZAI_API_KEY`；中国区 `ZAI_CODING_CN_API_KEY` | Coding Plan quota/subscription |
 | Kimi For Coding | 订阅 | `KIMI_API_KEY` | `/coding/v1/usages` |
 | MiniMax Coding Plan | 订阅 | 全球区 `MINIMAX_API_KEY`；中国区 `MINIMAX_CN_API_KEY` | `/v1/token_plan/remains` |
+| 千问 Token Plan 个人版（实验性） | 订阅 | 千问官方授权，DSH 本机凭据服务保存 | 千问官方 CLI 所用的个人版订阅与用量接口 |
 | Ollama 云 | 订阅 | `OLLAMA_API_KEY` | `/api/usage`（5小时 + 周窗口） |
 | Command Code（Go / GOAT / Pro / Max） | 订阅 + 余额 | `COMMANDCODE_API_KEY` | `/alpha/billing/credits` 等 `/alpha/*`（**实验性**：未公开端点） |
 | 火山方舟个人 Coding Plan（可选 CLI，实验性） | 订阅 | 明确指定的官方 Ark CLI profile，独立于模型 API Key | `arkcli usage plan --product coding-plan` |
@@ -130,6 +131,16 @@ DSH 注册表仅返回路由 ID、未提供连接字段时，`minimax` 默认读
 MiniMax 区域优先级为 `monitors.<id>.region` > `MINIMAX_API_REGION` > route/baseURL/credential ref 推断。中国区与全球区凭据请匹配相应区域；明确区域的请求不会因 1004/2049 拒绝而切到另一区域，显式 `usageBaseURL` 仍只访问指定地址。
 
 没有公开账户接口的供应商仍会正常统计 Token；账户卡片会明确显示“不支持”，不会猜测余额。
+
+### 千问 Token Plan 个人版（实验性）
+
+> **待下一个版本发布**：此功能目前仅在开发分支中，npm `0.3.8` 尚不包含。发布并升级到包含此功能的版本后再按以下步骤操作。
+
+在供应商下拉框选择「千问 Token Plan」或已有的 `qwen-token-plan-cn` 模型路由，点击「连接千问账户」，阅读授权说明并打开千问官方页面。完成授权后回到插件，点击「已授权，检查连接」。授权令牌由 DSH 凭据服务保存，授权到期后可重新连接；卡片中的「移除本机授权」只删除 DSH 本地凭据，不代表撤销千问服务端的授权。默认本机凭据提供者使用仅所有者可访问的文件，其他宿主的存储方式可能不同。请在千问授权页面核对账户管理权限。
+
+授权失效时，可重新连接或直接移除本机授权。移除不需要重新完成授权。
+
+目前仅支持千问 AI 平台中国区个人版。显示订阅窗口已用百分比、重置时间和接口提供的基础 Credits 额度；基础额度不含加油包，百分比也不是现金余额或剩余 Token 数量。该路径依赖官方 CLI 使用的接口，接口变动可能导致失效；团队版和国际版暂不支持。
 
 ### 火山方舟个人 Coding Plan（实验性）
 
@@ -449,7 +460,7 @@ Passion（provider id 为 `passion` 或域名为 `*.passionapi.com`）会自动�
 
 </details>
 
-支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`orcarouter-balance`、`opencode-go`、`commandcode-goat`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`ollama`、`ark-coding-plan-cli`、`codearts-credits`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`declarative`。
+支持的 adapter：`deepseek-balance`、`deepseek-account`、`openrouter-balance`、`moonshot-balance`、`zai-balance`、`orcarouter-balance`、`opencode-go`、`commandcode-goat`、`zai-token-plan`、`kimi-token-plan`、`minimax-token-plan`、`qianwen-token-plan`、`ollama`、`ark-coding-plan-cli`、`codearts-credits`、`new-api`、`sub2api`、`sub2api-auth`、`general`、`declarative`。
 
 `warning.warnBelow` 与 `warning.criticalBelow` 是余额绝对值阈值。具有总额度的余额和 Token Plan 会自动产生 `normal / warning / critical` 剩余比例状态（默认 30% / 10%）。
 
@@ -490,7 +501,7 @@ Constraints:
 
 Procedure:
 1. Confirm node, npx, and dsh are available.
-2. Resolve the actual profile first (Desktop: desktop; CLI web: web). Verify the exact version exists in npm, then install the version used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.7"` (or update the existing scoped package).
+2. Resolve the actual profile first (Desktop: desktop; CLI web: web). Verify the exact version exists in npm, then install the version used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.8"` (or update the existing scoped package).
 3. Use a local tarball built from the specified candidate commit when I ask to test an RC; use `github:Ychris12138/dsh-usage-stats` only for an explicitly requested source test.
 4. If dsh plugin is unavailable, use the compatible source installer only with my approval: `npx --yes github:Ychris12138/dsh-usage-stats`.
 5. Do not combine bundle installation with an existing manual dsh-usage-stats Cordis entry.
@@ -528,9 +539,9 @@ npx --yes github:Ychris12138/dsh-usage-stats --check
 - API Key、OpenCode `auth.json`、Cookie 与管理 PAT 不会进入浏览器响应、插件缓存或日志。
 - Sub2API `sub2api-auth` 复用 provider 自己的推理 API Key（模型页已配置的那个），不会再引入或落盘额外的面板凭据。
 - 自定义 monitor 默认要求 HTTPS、同源相对路径、手动 redirect 和 JSON 响应，body 上限为 1 MiB。
-- 发凭据前会筛选域名的 IPv4/IPv6 解析结果并固定一个允许的连接地址，优先使用公网地址；HTTPS 域名解析到 `198.18.0.0/15` 时可作为 Clash/Mihomo 等代理的 synthetic fake-IP 使用。字面量 `198.18/15`、其他私网/特殊地址仍默认拒绝，防止 DNS rebinding 绕过私网限制。
+- 账户查询发凭据前会筛选域名的 IPv4/IPv6 解析结果并固定一个允许的连接地址，优先使用公网地址；HTTPS 域名解析到 `198.18.0.0/15` 时可作为 Clash/Mihomo 等代理的 synthetic fake-IP 使用。字面量 `198.18/15`、其他私网/特殊地址仍默认拒绝。千问设备授权使用固定的官方 HTTPS 地址和禁止重定向策略，不经过账户查询的地址固定逻辑。
 - `usageBaseURL` 禁止内嵌 username/password；`Authorization`、`X-API-Key`、`API-Key` 等 header 必须由 credential ref 注入。
-- 九个数据端点仅接受 GET；OrcaRouter 集成路由的 GET 只返回布尔状态，POST 仅在用户点击后执行局部 settings mutation，并要求非简单自定义 action header。所有路由同时校验 peer socket 与 Host，支持 IPv4、IPv4-mapped IPv6 和 `[::1]:port`。
+- 九个数据端点仅接受 GET；OrcaRouter 集成路由的 GET 只返回布尔状态，POST 仅在用户点击后执行局部 settings mutation。千问授权路由只允许显式的 start/poll/disconnect 操作，不向浏览器返回访问令牌。集成 POST 均要求非简单自定义 action header；所有路由同时校验 peer socket 与 Host，支持 IPv4、IPv4-mapped IPv6 和 `[::1]:port`。
 - 用量缓存 `~/.dsh/storages/usage-stats-cache.json` 只保存聚合 Token、会话 id、不透明 revision 与折叠游标，不保存提示词、回复或文件路径。
 
 本机反向代理会让插件看到代理自身的回环地址。请勿把端点经反向代理暴露到局域网或公网；确需代理时必须在代理层增加可靠认证与访问控制。安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
@@ -569,8 +580,9 @@ Token 统计值来自 `assistant/chunk`、`assistant/message` 或 `compaction/su
 | `GET` | `/api/usage-stats/export.json` | versioned usage、budget、pricing provenance 与 account-safe JSON |
 | `GET` | `/api/usage-stats/integrations/orcarouter` | 仅返回 OrcaRouter preset 是否可写/已存在的 secret-free 布尔状态 |
 | `POST` | `/api/usage-stats/integrations/orcarouter` | 用户明确请求后，以 revision-guarded path mutation 幂等加入 preset；要求 `application/json` 与 `X-DSH-Usage-Stats-Action: add-orcarouter` |
+| `POST` | `/api/usage-stats/integrations/qianwen?action=<start\|poll\|disconnect>` | 显式启动、检查或移除千问本机授权；要求 `application/json` 与对应的 `X-DSH-Usage-Stats-Action: qianwen-<action>` |
 
-除上述 OrcaRouter POST 外，非 GET 返回 `405`；非回环请求返回 `403`。API JSON 使用 `Cache-Control: no-cache`；下载响应使用 `Cache-Control: no-store` 与固定文件名。
+除上述集成操作外，非 GET 返回 `405`；非回环请求返回 `403`。千问授权与下载响应使用 `Cache-Control: no-store`；其他 API JSON 使用 `Cache-Control: no-cache`。
 
 ## 开发与验证 / Development
 
@@ -592,9 +604,9 @@ node scripts/check-balance.mjs
 
 ## 兼容性与致谢 / Compatibility & credits
 
-本版本 `0.3.6` 的范围与验收记录见 [`release plan`](docs/release-plan-v0.3.6.md)、[`release notes`](docs/release-notes-v0.3.6.md) 和 [`release checklist`](docs/release-checklist.md)。2026-10-17 已在 DSH Desktop `0.2.0-rc.2` 完成真实 `0.3.6` 升级：MiniMax CN 订阅额度与 DeepSeek Account 余额均显示“实时”，原有 Token 总量、provider 选择及配置/凭据元数据保持不变。当前账户退出与服务移除场景通过自动化回归覆盖；没有修改真实账号登录状态来重复验收。旧版 Harness 的 API Key 路径继续保持兼容。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
+历史版本 `0.3.6` 的范围与验收记录见 [`release plan`](docs/release-plan-v0.3.6.md) 和 [`release notes`](docs/release-notes-v0.3.6.md)。2026-10-17 已在 DSH Desktop `0.2.0-rc.2` 完成真实 `0.3.6` 升级：MiniMax CN 订阅额度与 DeepSeek Account 余额均显示“实时”，原有 Token 总量、provider 选择及配置/凭据元数据保持不变。当前账户退出与服务移除场景通过自动化回归覆盖；没有修改真实账号登录状态来重复验收。旧版 Harness 的 API Key 路径继续保持兼容。插件依赖 Harness 客户端模块加载器、Cordis 服务与 session persistence；Harness 预发布接口变化时可能需要同步适配。
 
-持久化与活跃会话的读取按**能力探测**分支，不按版本号判断，因此 `>= 0.1.0-rc.6` 的支持范围未变：`0.1.3-alpha.1`–`0.1.5-rc.2` 用 `list()` 快照 + `open(id, "read")` 读句柄，`0.1.0-rc.7`–`0.1.2-rc.1` 用 `listSnapshots()` + `readFrom()`；活跃会话同时支持 `seq`/`snapshotEvents()` 与旧版 `events` 数组。`session/disposed` 在该范围内均存在（缺少它时已结束会话改由后台全量扫描补读）。缓存格式仍为 `version: 5`，旧缓存直接复用并原地重折叠。
+持久化与活跃会话的读取按**能力探测**分支，不按版本号判断，因此 `>= 0.1.0-rc.6` 的支持范围未变：`0.1.3-alpha.1`–`0.1.5-rc.2` 用 `list()` 快照 + `open(id, "read")` 读句柄，`0.1.0-rc.7`–`0.1.2-rc.1` 用 `listSnapshots()` + `readFrom()`；活跃会话同时支持 `seq`/`snapshotEvents()` 与旧版 `events` 数组。`session/disposed` 在该范围内均存在（缺少它时已结束会话改由后台全量扫描补读）。当前缓存格式为 `version: 12`；旧缓存保留已有汇总，并在来源可读取时重新折叠。升级前请备份缓存；无法读取的历史无法保证纠正重复计数。
 
 `display.currentSessionPill` 作为 v0.3.0 legacy boolean 配置键继续被接受，避免旧配置导致启动失败；当前客户端不再注册任何 composer UI，因此该键不再产生可见效果。`session-context` 服务端 API 暂时保留原有响应语义，供 v0.3.0 API compatibility 与后续集成使用。
 

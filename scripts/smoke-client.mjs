@@ -76,7 +76,7 @@ if (!source.includes("ref: panelRef")) throw new Error("portaled panel must expo
 if (!source.includes('translate("panel.badge")')) throw new Error("badge must keep the label text");
 if (!source.includes("badgeAmountText !== null &&")) throw new Error("badge amount must be a separate middle element");
 if (!source.includes("S.badgeAmount")) throw new Error("badge amount element is missing its class");
-if (!source.includes("badgeCount !== null && react_jsx_runtime.jsx(\"span\", { className: S.badgeCount")) throw new Error("badge must keep the today token count on the right");
+if (!source.includes("badgeCount !== null && react_jsx_runtime.jsx(TokenCount, { className: S.badgeCount")) throw new Error("badge must keep the today token count on the right");
 if (source.includes("data-orcarouter-integration") || source.includes("OrcaRouterIntegrationCard")) throw new Error("OrcaRouter must stay a compact provider choice, not a standalone panel card");
 for (const forbidden of [
 	"conversation.input",
@@ -410,6 +410,50 @@ assert.deepEqual(rankingRenderer.root.findAllByType("details").map(n=>n.props["d
 act(()=>rankingRenderer.unmount());
 console.log("provider/model ranking totals, routes, sorting and range changes ok");
 
+// Compact labels are display-only; hover/focus and accessible names retain
+// the original numeric value. Changing UI locale must change units in-place.
+const { fmtTokens, fullTokenCount, TokenCount } = exports_;
+const numberZh = key => key === "usage.numberLocale" ? "zh-CN" : key;
+const numberEn = key => key === "usage.numberLocale" ? "en-US" : key;
+for (const [value, zhValue, enValue] of [
+ [0,"0","0"], [999,"999","999"], [1000,"1,000","1K"], [9999,"9,999","10K"], [10000,"1万","10K"],
+ [123456,"12.35万","123.46K"], [999999,"1百万","1M"],
+ [1000000,"1百万","1M"], [10000000,"1千万","10M"],
+ [99999999,"1亿","100M"], [123456789,"1.23亿","123.46M"],
+ [999999999,"10亿","1B"], [1000000000000,"1万亿","1T"]
+]) {
+ assert.equal(fmtTokens(value,"chinese"),zhValue);
+ assert.equal(fmtTokens(value,"international"),enValue);
+}
+for (const value of [NaN,Infinity,-1,undefined,null,"1000000"]) {
+ assert.equal(fmtTokens(value,"chinese"),"—");
+ assert.equal(fullTokenCount(value),"—");
+}
+assert.equal(fullTokenCount(Number.MAX_SAFE_INTEGER),"9,007,199,254,740,991");
+const compactMarkup = renderToStaticMarkup(react.createElement(TokenCount,{value:123456789,unit:"chinese"}));
+assert.match(compactMarkup,/>1.23亿</);
+assert.match(compactMarkup,/title="123,456,789 Token"/);
+assert.match(compactMarkup,/aria-label="123,456,789 Token"/);
+assert.match(compactMarkup,/tabindex="0"/);
+const badgeMarkup = renderToStaticMarkup(react.createElement(TokenCount,{value:123456789,unit:"international",focusable:false}));
+assert.doesNotMatch(badgeMarkup,/tabindex/,"a count inside the badge button must not add a nested tab stop");
+const largeRanking = renderToStaticMarkup(react.createElement(ProviderUsageBreakdown, {
+ days: [{ date: "2026-08-01", models: [{ model: "provider/model", tokens: 123456789 }] }],
+ month: "2026-08", translate: numberEn
+}));
+const summaryMarkup = largeRanking.match(/<summary\b[^>]*>[\s\S]*?<\/summary>/)?.[0];
+assert.ok(summaryMarkup, "large provider counts remain visible in the summary");
+assert.match(summaryMarkup, /123,456,789 Token/, "summary retains the full accessible value");
+assert.doesNotMatch(summaryMarkup, /tabindex=/i, "a summary must not contain an extra keyboard stop");
+let numberRenderer;
+act(()=>{numberRenderer=TestRenderer.create(react.createElement(TokenCount,{value:123456789,unit:"chinese"}));});
+act(()=>numberRenderer.update(react.createElement(TokenCount,{value:123456789,unit:"international"})));
+assert.equal(numberRenderer.root.findByType("span").props.children,"123.46M");
+assert.equal(numberRenderer.root.findByType("span").props.title,"123,456,789 Token");
+act(()=>numberRenderer.unmount());
+assert.match(dayDetail,/title="[^"]*34,333,358/,"day totals must retain full hover values");
+console.log("localized token units, rounding promotion, full tooltips and locale switching ok");
+
 // Balance and subscription providers share one account-card frame. Only the
 // selected provider is rendered; the inner payload varies by account mode.
 const { ProviderAccountCard, buildProviderChoices, buildProviderPickerChoices, providerChoiceLabel } = exports_;
@@ -452,6 +496,71 @@ const translateAccount = (key, params) => {
 	if (params?.ref !== void 0) return `${key}:${params.ref}`;
 	return key;
 };
+const qianwenMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "qwen-token-plan-cn", displayName: "Qwen", adapter: "qianwen-token-plan", qianwenAuthManaged: true, accountMode: "subscription" },
+	account: { status: "ok", mode: "subscription", plan: "Qianwen Token Plan essential", quota: { total: 45000, unit: "credits" }, windows: [{ kind: "monthly", usedPercent: 1, remainingPercent: 99 }] },
+	accountLoading: false, accountError: null, translate: translateAccount, onRetry: () => {}
+}));
+assert.match(qianwenMarkup, /qianwen\.quotaTotal:45,000/);
+assert.match(qianwenMarkup, /qianwen\.disconnect/);
+assert.doesNotMatch(qianwenMarkup, /qianwen\.reconnect|qianwen\.connect<\/button>/);
+assert.match(qianwenMarkup, /title="qianwen\.privacy"/);
+assert.doesNotMatch(qianwenMarkup, />qianwen\.privacy</);
+assert.match(qianwenMarkup, /subscription\.used:1/);
+const qianwenExpiredMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "qwen-token-plan-cn", displayName: "Qwen", adapter: "qianwen-token-plan", qianwenAuthManaged: true, accountMode: "subscription" },
+	account: { status: "unauthorized", mode: "subscription", windows: [] },
+	accountLoading: false, accountError: null, translate: translateAccount, onRetry: () => {}
+}));
+assert.match(qianwenExpiredMarkup, /qianwen\.connect/);
+assert.match(qianwenExpiredMarkup, /qianwen\.disconnect/, "an expired local grant must remain removable without reconnecting");
+{
+	const previousFetch = globalThis.fetch;
+	let refreshes = 0;
+	const actions = [];
+	globalThis.fetch = async (path, init) => {
+		const action = new URL(String(path), "http://localhost").searchParams.get("action");
+		actions.push(action);
+		assert.equal(init.headers["x-dsh-usage-stats-action"], `qianwen-${action}`);
+		return { ok: true, json: async () => action === "start" ? { ok: true, status: "pending", verificationUrl: "https://account.qianwenai.com/verify?code=example" } : { ok: true, status: action === "disconnect" ? "disconnected" : "connected" } };
+	};
+	let card;
+	await act(async () => { card = TestRenderer.create(react.createElement(ProviderAccountCard, {
+		provider: { id: "qianwen-token-plan", displayName: "Qianwen", adapter: "qianwen-token-plan", qianwenAuthManaged: true, accountMode: "subscription" },
+		account: { status: "not-configured", mode: "subscription", windows: [] }, accountLoading: false, accountError: null,
+		translate: translateAccount, onRetry: () => { refreshes++; }
+	})); });
+	const button = (text) => card.root.findAllByType("button").find((entry) => entry.props.children === text);
+	await act(async () => { await button("qianwen.connect").props.onClick(); });
+	assert.equal(card.root.findByType("a").props.href, "https://account.qianwenai.com/verify?code=example");
+	await act(async () => { await button("qianwen.check").props.onClick(); });
+	assert.deepEqual(actions, ["start", "poll"]);
+	assert.equal(refreshes, 1);
+	assert.equal(card.root.findAllByType("a").length, 0);
+	assert.equal(card.root.findAllByProps({ role: "status" }).some((node) => node.props.children === "qianwen.status.connected"), false);
+	await act(async () => { card.update(react.createElement(ProviderAccountCard, {
+		provider: { id: "qianwen-token-plan", displayName: "Qianwen", adapter: "qianwen-token-plan", qianwenAuthManaged: true, accountMode: "subscription" },
+		account: { status: "ok", mode: "subscription", windows: [{ kind: "monthly", usedPercent: 1, remainingPercent: 99 }] }, accountLoading: false, accountError: null,
+		translate: translateAccount, onRetry: () => { refreshes++; }
+	})); });
+	assert.equal(button("qianwen.connect"), undefined);
+	assert.equal(button("qianwen.disconnect").props.title, "qianwen.privacy");
+	await act(async () => { await button("qianwen.disconnect").props.onClick(); });
+	assert.deepEqual(actions, ["start", "poll", "disconnect"]);
+	assert.equal(refreshes, 2);
+	assert.equal(card.root.findAllByProps({ role: "status" }).some((node) => node.props.children === "qianwen.status.disconnected"), false);
+	await act(async () => { card.update(react.createElement(ProviderAccountCard, {
+		provider: { id: "qianwen-token-plan", displayName: "Qianwen", adapter: "qianwen-token-plan", qianwenAuthManaged: true, accountMode: "subscription" },
+		account: { status: "unauthorized", mode: "subscription", windows: [] }, accountLoading: false, accountError: null,
+		translate: translateAccount, onRetry: () => { refreshes++; }
+	})); });
+	assert.ok(button("qianwen.connect"), "expired grants can still be replaced");
+	await act(async () => { await button("qianwen.disconnect").props.onClick(); });
+	assert.deepEqual(actions, ["start", "poll", "disconnect", "disconnect"]);
+	assert.equal(refreshes, 3);
+	await act(async () => { card.unmount(); });
+	globalThis.fetch = previousFetch;
+}
 const deepseekAccount = {
 	id: "deepseek-official",
 	displayName: "DeepSeek",
@@ -490,6 +599,12 @@ if (!deepseekMarkup.includes("usg_accountCard") || !goMarkup.includes("usg_accou
 if (!deepseekMarkup.includes("data-account-mode=\"balance\"") || !deepseekMarkup.includes("DeepSeek") || deepseekMarkup.includes("progressbar")) throw new Error("DeepSeek must render only monetary balance data");
 if (!goMarkup.includes("data-account-mode=\"subscription\"") || !goMarkup.includes("OpenCode Go")) throw new Error("OpenCode Go must render the subscription account mode");
 if ((goMarkup.match(/role="progressbar"/g) ?? []).length !== 3 || !goMarkup.includes("width:12%")) throw new Error("OpenCode Go must render three quota meters");
+const limitedMarkup = renderToStaticMarkup(react.createElement(ProviderAccountCard, {
+	provider: { id: "opencode-go", displayName: "OpenCode Go", accountMode: "subscription" },
+	account: { ...goSubscription, mode: "subscription", windows: [{ kind: "session", usedPercent: 20, remainingPercent: 80, limited: true }] },
+	accountLoading: false, accountError: null, translate: translateAccount, onRetry: () => {}
+}));
+assert.match(limitedMarkup, /subscription\.windowLimited/, "a limited allowance must be visible in the card");
 for (const [window, expected] of [
 	[{ kind: "quota", label: "ZCode credit", amount: 75 }, "75"],
 	[{ kind: "quota", label: "Zero credit", amount: 0 }, "0"],
@@ -675,7 +790,7 @@ const sessionTranslate = (key, params) => {
 	return key;
 };
 const meta = sessionCostMeta(sessionRows[0], sessionTranslate);
-if (!meta.includes("3,000") || !meta.includes("deepseek-v4-pro")) throw new Error(`unexpected session cost metadata: ${meta}`);
+if (!meta.includes("3K") || !meta.includes("deepseek-v4-pro")) throw new Error(`unexpected session cost metadata: ${meta}`);
 console.log("session cost filtering, ordering, zero-cost handling, and metadata ok");
 const budgetTranslate = (key, params) => {
 	if (key === "budget.period.daily") return "Today";
@@ -704,6 +819,7 @@ const subLow = badgeAccountValue({ mode: "subscription", status: "ok", windows: 
 if (subLow === null || subLow.kind !== "percent" || subLow.value !== 4 || subLow.display !== "4%") throw new Error(`subscription must warn on the lowest window, got ${JSON.stringify(subLow)}`);
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 4 }] }) !== true) throw new Error("subscription with a 4% window must warn");
 if (badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 40 }, { remainingPercent: 55 }] }) !== false) throw new Error("subscription all above 5% must NOT warn");
+assert.equal(badgeWarnOf({ mode: "subscription", status: "ok", windows: [{ remainingPercent: 80, limited: true }] }), true, "explicit limit status warns independently of percentage");
 // #148: the OpenCode Go summary is monthly quota, while every live window
 // still participates in the exhaustion warning. Never substitute a short cap.
 const goAccount = {
@@ -834,7 +950,7 @@ const usageFixture = {
 const accountFixtureFor = (path) => {
 	const providerId = new URL(String(path), "http://local.test").searchParams.get("provider") ?? "deepseek-official";
 	return providerId === "opencode-go"
-		? { ...goAccount, displayName: "OpenCode Go", alert: { level: "normal" } }
+		? { ...goAccount, displayName: "OpenCode Go", windows: goAccount.windows.map((window) => window.kind === "session" ? { ...window, limited: true } : window) }
 		: { id: providerId, displayName: providerId === "orcarouter" ? "OrcaRouter" : "DeepSeek", mode: "balance", status: providerId === "orcarouter" ? "unsupported" : "ok", balance: providerId === "orcarouter" ? null : { remaining: 5, currency: "USD" } };
 };
 const responseFixture = (payload, { ok = true, status = 200 } = {}) => ({ ok, status, json: async () => payload });
@@ -864,6 +980,7 @@ await act(async () => {
 if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).length !== 1) throw new Error("sidebar badge click must open the existing account panel");
 const goBadge = integrationRenderer.root.findByProps({ "data-usage-stats-badge": true });
 assert.match(goBadge.props["aria-label"], /Month left 98%/, "the mounted sidebar must identify the monthly percentage");
+assert.equal(goBadge.props.title, "panel.quotaWindowLimited", "an explicit limit with every window above 5% must not claim a low percentage");
 assert.ok(integrationRenderer.root.findAll((node) => typeof node.props.className === "string" && node.props.className.includes("usg_badgeAmount")).some((node) => node.props.children === "Month left 98%"), "the visible badge must match the monthly window");
 assert.equal(integrationRequests.filter((request) => request.path.includes("/integrations/orcarouter") && request.method === "GET").length, 1, "opening the panel must read the secret-free OrcaRouter integration status once");
 assert.equal(integrationRequests.some((request) => request.path.includes("/integrations/orcarouter") && request.method === "POST"), false, "opening the panel must never mutate OrcaRouter settings");

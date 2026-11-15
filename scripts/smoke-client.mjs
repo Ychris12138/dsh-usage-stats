@@ -950,7 +950,7 @@ const usageFixture = {
 const accountFixtureFor = (path) => {
 	const providerId = new URL(String(path), "http://local.test").searchParams.get("provider") ?? "deepseek-official";
 	return providerId === "opencode-go"
-		? { ...goAccount, displayName: "OpenCode Go", alert: { level: "normal" } }
+		? { ...goAccount, displayName: "OpenCode Go", windows: goAccount.windows.map((window) => window.kind === "session" ? { ...window, limited: true } : window) }
 		: { id: providerId, displayName: providerId === "orcarouter" ? "OrcaRouter" : "DeepSeek", mode: "balance", status: providerId === "orcarouter" ? "unsupported" : "ok", balance: providerId === "orcarouter" ? null : { remaining: 5, currency: "USD" } };
 };
 const responseFixture = (payload, { ok = true, status = 200 } = {}) => ({ ok, status, json: async () => payload });
@@ -980,6 +980,7 @@ await act(async () => {
 if (integrationRenderer.root.findAllByProps({ "data-usage-stats-panel": true }).length !== 1) throw new Error("sidebar badge click must open the existing account panel");
 const goBadge = integrationRenderer.root.findByProps({ "data-usage-stats-badge": true });
 assert.match(goBadge.props["aria-label"], /Month left 98%/, "the mounted sidebar must identify the monthly percentage");
+assert.equal(goBadge.props.title, "panel.quotaWindowLimited", "an explicit limit with every window above 5% must not claim a low percentage");
 assert.ok(integrationRenderer.root.findAll((node) => typeof node.props.className === "string" && node.props.className.includes("usg_badgeAmount")).some((node) => node.props.children === "Month left 98%"), "the visible badge must match the monthly window");
 assert.equal(integrationRequests.filter((request) => request.path.includes("/integrations/orcarouter") && request.method === "GET").length, 1, "opening the panel must read the secret-free OrcaRouter integration status once");
 assert.equal(integrationRequests.some((request) => request.path.includes("/integrations/orcarouter") && request.method === "POST"), false, "opening the panel must never mutate OrcaRouter settings");

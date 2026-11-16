@@ -258,6 +258,88 @@ async function testDeepSeekDesktopAccountRoute(root) {
 	}
 }
 
+// A `dsh web` Host has no DSH_CLIENT_VERSION in its environment (only the
+// Desktop native launcher injects it). Without a fallback the version gate in
+// accountClientMetadataOf() rejects every UI read, deepseekAccount.getBalance()
+// is never called and the panel reports "unavailable" for a signed-in user.
+async function testDeepSeekWebAccountRouteWithoutClientVersion(root, fixture) {
+	const label = `deepseek-account-web-${fixture.label}`;
+	const home = join(root, label);
+	const saved = {
+		DSH_CLIENT_VERSION: process.env.DSH_CLIENT_VERSION,
+		DSH_VERSION: process.env.DSH_VERSION,
+		DSH_APP_VERSION: process.env.DSH_APP_VERSION,
+		DSH_INSTALL_DIR: process.env.DSH_INSTALL_DIR
+	};
+	for (const key of Object.keys(saved)) delete process.env[key];
+	try {
+		const installDir = join(home, "install");
+		for (const [key, value] of Object.entries(fixture.env ?? {})) process.env[key] = value;
+		if (fixture.packageJson !== undefined) {
+			await mkdir(installDir, { recursive: true });
+			await writeFile(join(installDir, "package.json"), fixture.packageJson);
+			process.env.DSH_INSTALL_DIR = installDir;
+		}
+		const plugin = await freshModule(label, home);
+		const routes = new Map();
+		let receivedClient = null;
+		let balanceCalls = 0;
+		const deepseekAccount = {
+			getState: async () => ({ status: "credential-stored", links: {}, attempt: null }),
+			getBalance: async (client) => {
+				balanceCalls += 1;
+				receivedClient = client;
+				return { status: "ready", value: [{ currency: "CNY", balance: "7.5" }], bonusWallets: [] };
+			}
+		};
+		const context = makeContext({
+			sessions: { list: () => [] },
+			persistence: { list: async () => [] },
+			routes,
+			settings: { get: () => void 0 },
+			llm: { listProviders: () => [{ id: "deepseek-account", name: "DeepSeek Account" }] },
+			deepseekAccount
+		});
+		await plugin.apply(context, {}, { disableBackgroundRefresh: true });
+
+		const request = {
+			method: "GET",
+			url: `${plugin.ACCOUNT_PATH}?provider=deepseek-account&refresh=1`,
+			headers: {
+				host: "localhost:3080",
+				"x-dsh-usage-stats-client-locale": "zh-CN",
+				"x-dsh-usage-stats-timezone-offset": "28800"
+			},
+			socket: { remoteAddress: "127.0.0.1" }
+		};
+		if (fixture.label === "no-version") {
+			const invalid = makeResponse();
+			await routes.get(plugin.ACCOUNT_PATH)({
+				...request,
+				headers: { ...request.headers, "x-dsh-usage-stats-timezone-offset": "invalid" }
+			}, invalid);
+			assert.equal(JSON.parse(invalid.body).account.status, "unavailable");
+			assert.equal(balanceCalls, 0, "invalid timezone must stop the balance call");
+		}
+		const response = makeResponse();
+		await routes.get(plugin.ACCOUNT_PATH)(request, response);
+		assert.equal(response.status, 200);
+		const account = JSON.parse(response.body).account;
+		assert.equal(account.status, "ok", "a web Host without DSH_CLIENT_VERSION must still query the Host-account balance");
+		assert.equal(balanceCalls, 1, "getBalance() must be called once for the forced UI read");
+		assert.equal(receivedClient?.version, fixture.expectedVersion, fixture.label);
+		assert.equal(receivedClient.locale, "zh-CN");
+		assert.equal(receivedClient.timezoneOffsetSeconds, 28800);
+		assert.deepEqual(account.balance.wallets, [{ currency: "CNY", remaining: 7.5, breakdown: { toppedUp: 7.5, granted: 0 } }]);
+		assert.doesNotMatch(response.body, /token|authorization|cookie/i, "the account wire must remain credential-free");
+	} finally {
+		for (const [key, value] of Object.entries(saved)) {
+			if (value === void 0) delete process.env[key];
+			else process.env[key] = value;
+		}
+	}
+}
+
 async function testDeepSeekDesktopAccountServiceLifecycle(root) {
 	const previousVersion = process.env.DSH_CLIENT_VERSION;
 	process.env.DSH_CLIENT_VERSION = "0.2.0-rc.2";
@@ -2252,6 +2334,14 @@ try {
 	await testRouteFence(root);
 	await testDeclarativeEndpointDiagnostics(root);
 	await testDeepSeekDesktopAccountRoute(root);
+	for (const fixture of [
+		{ label: "no-version", expectedVersion: "web" },
+		{ label: "manifest", packageJson: '{"name":"@deepseek-ai/dsh","version":"0.2.2-rc.3"}', expectedVersion: "0.2.2-rc.3" },
+		{ label: "unrelated-manifest", packageJson: '{"name":"unrelated","version":"9.9.9"}', expectedVersion: "web" },
+		{ label: "malformed-manifest", packageJson: "{", expectedVersion: "web" },
+		{ label: "env-priority", env: { DSH_CLIENT_VERSION: "0.2.1", DSH_VERSION: "0.2.2" }, expectedVersion: "0.2.1" },
+		{ label: "invalid-env", env: { DSH_VERSION: "9".repeat(129), DSH_APP_VERSION: "0.2.2" }, expectedVersion: "0.2.2" }
+	]) await testDeepSeekWebAccountRouteWithoutClientVersion(root, fixture);
 	await testDeepSeekDesktopAccountServiceLifecycle(root);
 	await testOrcaRouterIntegrationRoute(root);
 	await testSessionContext(root);

@@ -1,5 +1,7 @@
 > Historical investigation: #163 was merged on 2026-11-06. The original 0.3.5/0.3.7 observations below describe the pre-fix state; real-host acceptance remains open.
 
+> 2026-11-16 follow-up: newer DSH settings use `describe()` and the LLM configurable-provider directory to identify effective settings; the earlier `settings.get()` lookup alone can miss a configured endpoint. With DSH Web 0.2.2-rc.3 and an isolated profile using a synthetic loopback quota server, unchanged main returned `monitor-base-url-missing` without making a request, while the candidate discovered the route's configured base URL and returned the fixture's subscription window. This does not establish the reporter's 0.2.1-rc.5 environment or account outcome. The host API is documented in [DSH settings](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/docs/subsystems/settings.md) and [LLM provider directory](https://github.com/deepseek-ai/deepseek-harness/blob/39163dd30f703a79079e2d2446545cff3c453738/packages/llm/llm/src/types.ts). Existing `usageBaseURL` configuration and network restrictions remain supported.
+
 # Declarative monitor endpoint diagnostics — #162
 
 Prepared on 2026-11-05 against main `fb2bf64a3e619b6a3bfe11088e968901ca23f787`.

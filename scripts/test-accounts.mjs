@@ -42,6 +42,55 @@ function statusErrorFromTest(status, message) {
 
 const now = Date.parse("2026-08-15T00:00:00Z");
 
+// Newer real DSH settings services expose effective values through describe(),
+// including profiles whose loader entry has a non-default namespace.
+for (const mode of ["balance", "subscription"]) {
+	const secret = "synthetic-host-settings-secret";
+	let calls = 0;
+	const settings = { describe: (options) => {
+		assert.equal(options.redactSecrets, true);
+		return [{ ns: "llm-custom", value: { providers: { "custom-quota": {
+			baseURL: "https://quota.example.com/v1", apiKeyEnv: "SYNTHETIC_QUOTA_KEY", headers: { authorization: secret }
+		} } } }];
+	} };
+	const llm = {
+		listProviders: () => [{ id: "custom-quota", name: "Custom" }],
+		listConfigurableProviders: () => [{ provider: "custom-quota", settingsNs: "llm-custom", settingsPath: ["providers", "custom-quota"] }]
+	};
+	const ctx = { get: (name) => name === "settings" ? settings : name === "llm" ? llm : undefined };
+	const config = validateAccountConfig({ monitors: { "custom-quota": {
+		adapter: "declarative", mode,
+		request: { path: "/quota/windows", auth: { type: "bearer", credentialRef: "SYNTHETIC_QUOTA_KEY" } },
+		extract: mode === "subscription" ? { root: "", items: "/windows", kind: "/kind", remainingPercent: "/remainingPercent" }
+			: { root: "", remaining: "/remaining", currency: "/currency" }
+	} } });
+	const service = createAccountService({ credentials: credentials({ SYNTHETIC_QUOTA_KEY: secret }),
+		getProviders: () => configuredProviders(ctx), config,
+		deps: { includeLegacyProviders: false, now: () => now, fetch: async (url, init) => {
+			calls++;
+			assert.equal(String(url), "https://quota.example.com/quota/windows");
+			assert.equal(init.headers.authorization, `Bearer ${secret}`);
+			return jsonResponse(mode === "subscription" ? { windows: [{ kind: "5h", remainingPercent: 80 }] } : { remaining: 12, currency: "USD" });
+		} } });
+	const account = await service.get("custom-quota", { force: true });
+	assert.equal(account.status, "ok", `${mode}: effective host settings provide the configured endpoint`);
+	assert.equal(calls, 1);
+	assert.ok(!JSON.stringify(account).includes(secret));
+	assert.ok(!JSON.stringify(await configuredProviders(ctx)).includes(secret));
+	// A directory row that refers to a different path must not supply an endpoint.
+	llm.listConfigurableProviders = () => [{ provider: "custom-quota", settingsNs: "llm-custom", settingsPath: ["providers", "other"] }];
+	const registryOnly = (await configuredProviders(ctx)).find((provider) => provider.id === "custom-quota");
+	assert.equal(registryOnly.baseURL, undefined);
+	llm.listConfigurableProviders = () => [
+		{ provider: "custom-quota", settingsNs: "llm-custom", settingsPath: ["providers", "custom-quota"] },
+		{ provider: "custom-quota", settingsNs: "untrusted", settingsPath: ["providers", "custom-quota"] }
+	];
+	assert.equal((await configuredProviders(ctx)).find((provider) => provider.id === "custom-quota").baseURL, undefined,
+		"ambiguous directory ownership must not select a credential destination");
+	llm.listConfigurableProviders = () => [{ provider: "inactive", settingsNs: "llm-custom", settingsPath: ["providers", "inactive"] }];
+	assert.equal((await configuredProviders(ctx)).some((provider) => provider.id === "inactive"), false);
+}
+
 {
 	const spec = resolveAccountSpec({ id: "opencode-go" }, validateAccountConfig());
 	const account = await queryAccount(spec, credentials({ OPENCODE_API_KEY: "synthetic-key" }), {

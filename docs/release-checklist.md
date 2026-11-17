@@ -1,20 +1,14 @@
-# v0.3.8 release checklist
+# v0.3.9 发布检查
 
-## Preparation
+## 候选
 
-- [x] Include #159, #163 and the #161 display work with independent unit preference.
-- [x] Preserve #133 as a separate draft, and describe #74 / #140 / #162 acceptance limits.
-- [ ] Validate final source with static checks and all 16 test suites.
-- [ ] Freeze clean source and compare every packed file to the commit.
-- [ ] Verify installation in an isolated DSH profile and save the results.
-- [ ] Prepare draft GitHub Release and assets without a public tag.
+- [x] 候选基于 `ab154e27efa8bb9ac72062d271239d7b82126bea`，包含 #166（含 #167）、#169、#170 / #171 及 #172；不包含 #133。
+- [ ] 核对候选提交的 GitHub Actions，确认版本、说明、打包文件和隔离安装均对应冻结的提交。
+- [ ] 核对 #171 的真实 Web 账户结果：插件 SHA、DSH 版本和 Web profile、版本来源、脱敏状态；无需余额金额或凭据。
+- [ ] 继续跟踪 #162 原环境的脱敏复核、千问其他套餐和到期状态；当前可确认的范围见发布说明。
 
-## npm and closeout
+## 发布顺序（维护者操作）
 
-- [ ] Maintainer publishes the exact frozen tarball.
-- [ ] Verify official npm identity, latest, integrity and downloaded bytes.
-- [ ] Fast-forward main to the frozen source and verify the public market catalog.
-- [ ] Tag the exact source and publish the prepared GitHub Release.
-- [ ] Verify real provider accounts separately; retain open issues until their acceptance criteria are met.
-
-The package checklist is frozen with the source. Record subsequent results in the external release manifest.
+1. 保留线上市场和主线安装指引在当前稳定版本。候选分支中的 catalog 是待审的元数据，不能先进入 `main`。
+2. 验收通过后，由维护者从冻结候选准备并发布 npm tarball；从公开 registry 验证精确 `@ychris12138/dsh-usage-stats@0.3.9` 可下载，核对 `dist.integrity`、实际 tarball 和包内版本。
+3. 只有 npm 确认可用且主线没有需要重新冻结的变化时，才推进主线和市场目录。验证市场返回同一精确版本，再由维护者完成 tag 和 GitHub Release。

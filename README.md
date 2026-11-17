@@ -1,6 +1,6 @@
 # dsh-usage-stats
 
-<!-- stable-version: 0.3.8 -->
+<!-- stable-version: 0.3.9 -->
 
 [![GitHub Release](https://img.shields.io/github/v/release/Ychris12138/dsh-usage-stats?display_name=tag&sort=semver&color=1f6feb)](https://github.com/Ychris12138/dsh-usage-stats/releases/latest)
 [![CI](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml/badge.svg)](https://github.com/Ychris12138/dsh-usage-stats/actions/workflows/ci.yml)
@@ -34,14 +34,14 @@ Provider balances, subscription quotas, and token-usage analytics for the DeepSe
 
 ## 快速安装 / Quick start
 
-本版本为 `@ychris12138/dsh-usage-stats@0.3.8`。npm 与市场安装要求该精确版本已经发布；发布前验收使用从冻结提交构建并核对哈希的本地 `.tgz`。
+本版本为 `@ychris12138/dsh-usage-stats@0.3.9`。npm 与市场安装要求该精确版本已经发布；发布前验收使用从冻结提交构建并核对哈希的本地 `.tgz`。
 
 基础功能支持 `@deepseek-ai/dsh >= 0.1.0-rc.6`。安装时选择实际使用的 profile：命令行网页通常是 `web`，Desktop 使用 `desktop`；不要把插件装到另一个 profile 后只刷新当前窗口。DSH Desktop 的 **DeepSeek Account 登录余额**接入依赖 DSH `0.2.0-rc.2+` 提供的 Host account service；旧版 Harness 仍继续使用 API Key 余额路径。
 
 确认 npm 上存在本版本后，优先安装精确版本；DSH Desktop Market 使用同一个包：
 
 ```bash
-dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.8"
+dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.9"
 ```
 
 Desktop 安装时将上面的 `--profile web` 改为 `--profile desktop`，并使用 Desktop 对应的 DSH CLI。只有明确测试未发布 source/RC 时才使用 GitHub 来源；验收指定候选版本时优先安装从该提交打出的本地 `.tgz`，以免跟随分支变化。GitHub `main` 可能领先 npm stable。
@@ -55,10 +55,10 @@ Desktop 安装时将上面的 `--profile web` 改为 `--profile desktop`，并�
 - `catalog/catalog-source.json` — 来源 manifest（`catalog-source.schema.json` v1.0.0）
 - `catalog/v1/plugins.json` — 标准 provider page（`catalog-provider-page.schema.json` v1.0.0）
 
-**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`。本版本 package 与 catalog 元数据均为 `0.3.8`；目录中的版本号不代表 npm 发布已完成。每个新版本都按以下顺序发布：
+**使用前提（重要）**：市场托管安装只接受 npm registry 的精确稳定版本，git 条目仅可浏览。`dsh-usage-stats` 这个 npm 名已被其他项目占用，因此目录条目身份使用 `@ychris12138/dsh-usage-stats`。本版本 package 与 catalog 元数据均为 `0.3.9`；目录中的版本号不代表 npm 发布已完成。每个新版本都按以下顺序发布：
 
 1. 在 release 分支运行 `npm run release:sync -- <version>` 同步 package、lockfile、README 与 catalog，检查候选包。npm 发布前不要把新 catalog 合入 `main`，因为 Pages 会自动部署。
-2. 从冻结的 `.tgz` 发布 scoped 公共包：`npm publish /absolute/path/to/ychris12138-dsh-usage-stats-0.3.8.tgz --access public --registry=https://registry.npmjs.org/`，再核对 registry tarball 与冻结包的哈希。
+2. 从冻结的 `.tgz` 发布 scoped 公共包：`npm publish /absolute/path/to/ychris12138-dsh-usage-stats-0.3.9.tgz --access public --registry=https://registry.npmjs.org/`，再核对 registry tarball 与冻结包的哈希。
 3. npm 包核验通过后，将 `main` 快进到冻结的发布提交，触发 Pages 部署；核验 `https://ychris12138.github.io/dsh-usage-stats/v1/plugins` 的精确版本（manifest 与 endpoint 必须同源、HTTPS 443、无凭据）。
 4. 在 DSH 插件市场 → 来源管理 → 添加来源，粘贴 manifest URL：`https://ychris12138.github.io/dsh-usage-stats/catalog-source.json`，选择后即可走「可恢复安装边界」GUI 安装。
 
@@ -501,7 +501,7 @@ Constraints:
 
 Procedure:
 1. Confirm node, npx, and dsh are available.
-2. Resolve the actual profile first (Desktop: desktop; CLI web: web). Verify the exact version exists in npm, then install the version used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.8"` (or update the existing scoped package).
+2. Resolve the actual profile first (Desktop: desktop; CLI web: web). Verify the exact version exists in npm, then install the version used by Desktop Market: `dsh plugin --profile web add "@ychris12138/dsh-usage-stats@0.3.9"` (or update the existing scoped package).
 3. Use a local tarball built from the specified candidate commit when I ask to test an RC; use `github:Ychris12138/dsh-usage-stats` only for an explicitly requested source test.
 4. If dsh plugin is unavailable, use the compatible source installer only with my approval: `npx --yes github:Ychris12138/dsh-usage-stats`.
 5. Do not combine bundle installation with an existing manual dsh-usage-stats Cordis entry.

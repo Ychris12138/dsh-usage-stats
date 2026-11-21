@@ -300,6 +300,14 @@ async function testDeepSeekWebAccountRouteWithoutClientVersion(root, fixture) {
 			llm: { listProviders: () => [{ id: "deepseek-account", name: "DeepSeek Account" }] },
 			deepseekAccount
 		});
+		const originalGet = context.get;
+		let hostVersion = fixture.hostVersion;
+		context.get = (name) => name === "clientModules" ? {
+			graph: () => {
+				if (fixture.graphThrows) throw new Error("synthetic graph unavailable");
+				return { release: { version: hostVersion } };
+			}
+		} : originalGet(name);
 		await plugin.apply(context, {}, { disableBackgroundRefresh: true });
 
 		const request = {
@@ -328,6 +336,12 @@ async function testDeepSeekWebAccountRouteWithoutClientVersion(root, fixture) {
 		assert.equal(account.status, "ok", "a web Host without DSH_CLIENT_VERSION must still query the Host-account balance");
 		assert.equal(balanceCalls, 1, "getBalance() must be called once for the forced UI read");
 		assert.equal(receivedClient?.version, fixture.expectedVersion, fixture.label);
+		if (fixture.label === "host-release") {
+			hostVersion = "0.2.2-rc.5";
+			const refreshed = makeResponse();
+			await routes.get(plugin.ACCOUNT_PATH)(request, refreshed);
+			assert.equal(receivedClient.version, hostVersion, "host release must not be frozen in the fallback cache");
+		}
 		assert.equal(receivedClient.locale, "zh-CN");
 		assert.equal(receivedClient.timezoneOffsetSeconds, 28800);
 		assert.deepEqual(account.balance.wallets, [{ currency: "CNY", remaining: 7.5, breakdown: { toppedUp: 7.5, granted: 0 } }]);
@@ -2340,6 +2354,10 @@ try {
 		{ label: "unrelated-manifest", packageJson: '{"name":"unrelated","version":"9.9.9"}', expectedVersion: "web" },
 		{ label: "malformed-manifest", packageJson: "{", expectedVersion: "web" },
 		{ label: "env-priority", env: { DSH_CLIENT_VERSION: "0.2.1", DSH_VERSION: "0.2.2" }, expectedVersion: "0.2.1" },
+		{ label: "host-release", hostVersion: "0.2.2-rc.1", env: { DSH_VERSION: "0.2.0" }, expectedVersion: "0.2.2-rc.1" },
+		{ label: "desktop-before-host", hostVersion: "0.2.2-rc.1", env: { DSH_CLIENT_VERSION: "0.2.2-rc.3" }, expectedVersion: "0.2.2-rc.3" },
+		{ label: "invalid-host", hostVersion: "x".repeat(129), expectedVersion: "web" },
+		{ label: "throwing-host", graphThrows: true, expectedVersion: "web" },
 		{ label: "invalid-env", env: { DSH_VERSION: "9".repeat(129), DSH_APP_VERSION: "0.2.2" }, expectedVersion: "0.2.2" }
 	]) await testDeepSeekWebAccountRouteWithoutClientVersion(root, fixture);
 	await testDeepSeekDesktopAccountServiceLifecycle(root);

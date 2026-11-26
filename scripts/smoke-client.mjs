@@ -101,17 +101,16 @@ if (!dayTokensRule.includes("flex:none") || !dayTokensRule.includes("font-varian
 if (/(?:^|;)width:84px(?:;|$)/.test(dayTokensRule)) throw new Error("Last 14 days token column must use min-width rather than a fixed width in narrow layouts");
 const dayDateRule = /\.usg_dayDate\{([^}]*)\}/.exec(source)?.[1] ?? "";
 if (!dayDateRule.includes("flex:0 1 104px") || !dayDateRule.includes("min-width:0") || !dayDateRule.includes("overflow:hidden")) throw new Error("the date column must shrink before the aligned token column can overflow a narrow panel");
-// The sidebar action sits directly above the shell's Settings key and keeps that
-// key's geometry: a 42px row with 10/8px side padding and the same `4px -2px`
-// row margin, so the two buttons line up on both axes (#108). The collapsed
-// action keeps the 36px rail circle.
+// The expanded action preserves the existing Settings row box (#108) while
+// using the community guidance for its inner gap and inset. The collapsed
+// action stays 36px with a rounded-square shape. Layout is verified separately.
 const badgeRule = /\.usg_badge\{([^}]*)\}/.exec(source)?.[1] ?? "";
 const layerRule = /\.usg_layer\{([^}]*)\}/.exec(source)?.[1] ?? "";
 const railBadgeRule = /\.usg_layer\.usg_rail \.usg_badge\{([^}]*)\}/.exec(source)?.[1] ?? "";
-if (!badgeRule.includes("height:42px") || !badgeRule.includes("padding:0 10px 0 8px")) throw new Error("the expanded sidebar action must match the Settings key geometry (42px, 10/8px padding)");
+if (!badgeRule.includes("height:42px") || !badgeRule.includes("padding:0 calc(var(--dsh-sidebar-row-padding,12px) - var(--dsh-sidebar-paint-inset,3px))") || !badgeRule.includes("border-inline:var(--dsh-sidebar-paint-inset,3px) solid transparent") || !badgeRule.includes("background-clip:padding-box") || !badgeRule.includes("gap:var(--dsh-sidebar-label-gap,6px)")) throw new Error("the expanded action must keep its 42px height and use the community inset and gap");
 if (!layerRule.includes("width:calc(100% + 4px)") || !layerRule.includes("margin:4px -2px")) throw new Error("the sidebar action row must mirror the Settings row box (width calc(100% + 4px) with margin 4px -2px), never a one-sided top margin");
 if (!badgeRule.includes("box-sizing:border-box")) throw new Error("the sidebar action must size its padding inside the row box, like the Settings key");
-if (!railBadgeRule.includes("height:36px")) throw new Error("the collapsed sidebar action must match the Settings rail key (36px)");
+if (!railBadgeRule.includes("height:36px") || !railBadgeRule.includes("border-radius:var(--dsw-radius-md,12px)") || !railBadgeRule.includes("border-inline:0")) throw new Error("the collapsed sidebar action must remain 36px with rounded-square geometry");
 // Keyboard focus must be visible on the action and on the panel's controls.
 const focusRule = new RegExp("\\.usg_badge:focus-visible[^{]*\\{([^}]*)\\}").exec(source)?.[1] ?? "";
 if (!focusRule.includes("2px solid var(--dsw-alias-brand-primary)")) throw new Error("the sidebar action needs the host brand focus outline");

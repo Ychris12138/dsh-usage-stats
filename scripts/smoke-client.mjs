@@ -66,7 +66,7 @@ const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", 
 if (!source.includes("/api/usage-stats/account")) throw new Error("client must use the unified account endpoint");
 if (source.includes('fetchJson("/api/usage-stats/subscriptions")')) throw new Error("client must not bulk-fetch every subscription provider");
 if (/host\.style\.flexDirection\s*=\s*["']column["']/.test(source)) throw new Error("client must not change the shared footer host flex direction (#82)");
-if (!/host\.style\.flexWrap\s*=\s*["']wrap["']/.test(source)) throw new Error("client must wrap row-oriented footer actions (#21/#82)");
+if (/host\.style\.flexWrap\s*=/.test(source)) throw new Error("client must not change shared footer host wrapping (#176)");
 if (!source.includes('document.addEventListener("pointerdown"')) throw new Error("open panel must listen for outside pointerdown");
 if (!source.includes('event.key === "Escape"')) throw new Error("open panel must dismiss on Escape");
 if (!source.includes("ref: panelRef")) throw new Error("portaled panel must expose a ref for outside-click detection");
@@ -162,70 +162,40 @@ const exports_ = captured.factory((spec) => {
 
 if (typeof exports_.apply !== "function") throw new Error("missing apply export");
 
-const { enableFooterActionWrapping } = exports_;
-if (typeof enableFooterActionWrapping !== "function") throw new Error("footer action wrapping policy must be testable");
+const { measureFooterLane } = exports_;
+assert.equal(typeof measureFooterLane, "function");
 const originalGetComputedStyle = window.getComputedStyle;
 window.getComputedStyle = (node) => node.computedStyle;
-const fullWidthSibling = () => ({ style: { flex: "0 0 100%" } });
-const rowHost = {
-	style: { flexDirection: "", flexWrap: "" },
-	computedStyle: { display: "flex", flexDirection: "row", flexWrap: "nowrap" },
-	children: [fullWidthSibling(), fullWidthSibling()]
-};
-const restoreRowHost = enableFooterActionWrapping(rowHost);
-assert.equal(rowHost.style.flexWrap, "wrap", "row + nowrap must wrap full-width footer actions onto separate lines");
-assert.equal(rowHost.style.flexDirection, "", "the shared host row direction must remain untouched");
-assert.deepEqual(rowHost.children.map((node) => node.style.flex), ["0 0 100%", "0 0 100%"], "sibling full-width flex semantics must remain untouched");
-assert.equal(typeof restoreRowHost, "function");
-restoreRowHost();
-assert.equal(rowHost.style.flexWrap, "", "unmount cleanup must restore the previous inline flexWrap");
-restoreRowHost();
-assert.equal(rowHost.style.flexWrap, "", "cleanup must be idempotent");
-
-const overlappingHost = {
-	style: { flexWrap: "" },
-	get computedStyle() {
-		return { display: "flex", flexDirection: "row", flexWrap: this.style.flexWrap || "nowrap" };
-	}
-};
-const releaseFirst = enableFooterActionWrapping(overlappingHost);
-const releaseSecond = enableFooterActionWrapping(overlappingHost);
-assert.equal(typeof releaseSecond, "function", "a second local panel must share the existing lease");
-releaseFirst();
-releaseFirst();
-assert.equal(overlappingHost.style.flexWrap, "wrap", "disposing one panel must leave the other panel's wrap active");
-releaseSecond();
-assert.equal(overlappingHost.style.flexWrap, "", "the last panel releases the initial declaration");
-
-const foreignWriterHost = {
-	style: { flexWrap: "" },
-	computedStyle: { display: "flex", flexDirection: "row", flexWrap: "nowrap" }
-};
-const releaseForeignWriterHost = enableFooterActionWrapping(foreignWriterHost);
-foreignWriterHost.style.flexWrap = "wrap-reverse";
-releaseForeignWriterHost();
-assert.equal(foreignWriterHost.style.flexWrap, "wrap-reverse", "cleanup must preserve another participant's later declaration");
-foreignWriterHost.style.flexWrap = "";
-const releaseRemountedHost = enableFooterActionWrapping(foreignWriterHost);
-releaseRemountedHost();
-assert.equal(foreignWriterHost.style.flexWrap, "", "a released host must support a fresh mount");
-
-const wrappedHost = {
-	style: { flexDirection: "", flexWrap: "wrap" },
-	computedStyle: { display: "flex", flexDirection: "row", flexWrap: "wrap" }
-};
-assert.equal(enableFooterActionWrapping(wrappedHost), undefined, "an already wrapped host must not be modified");
-assert.equal(wrappedHost.style.flexWrap, "wrap");
-
-const columnHost = {
-	style: { flexDirection: "column", flexWrap: "nowrap" },
-	computedStyle: { display: "flex", flexDirection: "column", flexWrap: "nowrap" }
-};
-assert.equal(enableFooterActionWrapping(columnHost), undefined, "a column host must be left untouched");
-assert.equal(columnHost.style.flexDirection, "column");
-assert.equal(columnHost.style.flexWrap, "nowrap");
+function node(style, children = [], visible = true) {
+  const result = { computedStyle: { display: "block", visibility: "visible", position: "static", ...style }, children,
+    getClientRects: () => visible ? [{}] : [], contains(target) { return this === target || this.children.some((child) => child.contains(target)); } };
+  for (const child of children) child.parentElement = result;
+  return result;
+}
+const own = node({});
+const sibling = node({});
+const slotA = node({ display: "contents" }, [own]);
+const slotB = node({ display: "contents" }, [sibling]);
+const rowHost = node({ display: "flex", flexDirection: "row", flexWrap: "nowrap" }, [slotA, slotB]);
+rowHost.clientWidth = 244;
+assert.deepEqual(measureFooterLane(own), { row: rowHost, form: "label", shared: true });
+rowHost.clientWidth = 243;
+assert.equal(measureFooterLane(own).form, "icon", "two labels need 244px");
+const third = node({});
+third.parentElement = rowHost;
+rowHost.children.push(third);
+rowHost.clientWidth = 900;
+assert.equal(measureFooterLane(own).form, "icon", "three entries use icon form even on a wide lane");
+third.computedStyle.display = "none";
+assert.equal(measureFooterLane(own).form, "label", "hidden entries do not consume capacity");
+rowHost.computedStyle.flexWrap = "wrap";
+assert.equal(measureFooterLane(own).shared, false, "an already wrapped lane keeps full-width entries");
+rowHost.computedStyle.flexWrap = "nowrap";
+rowHost.computedStyle.flexDirection = "column";
+assert.equal(measureFooterLane(own).form, "label", "vertical lanes retain labels");
+assert.equal(rowHost.style, undefined, "measurement must never mutate host styles");
 window.getComputedStyle = originalGetComputedStyle;
-console.log("shared footer action row/wrap policy ok");
+console.log("shared footer lane capacity policy ok");
 
 const {
 	ORCAROUTER_ADD_SENTINEL,
@@ -324,16 +294,16 @@ const ctx = {
 };
 exports_.apply(ctx);
 assert.deepEqual(optionalFollowDependencies, [["sessions", "modelDirectories"]], "only optional follow dependencies may be requested");
-if (registrations.length !== 1) throw new Error(`expected only the sidebar slot injection, got ${registrations.length}`);
+if (registrations.length !== 2) throw new Error(`expected sidebar and optional overlay slot injections, got ${registrations.length}`);
 const registrationBySlot = new Map(registrations);
-if (!registrationBySlot.has("sidebar.footer.action")) throw new Error("sidebar footer slot registration missing");
+if (!registrationBySlot.has("sidebar.footer.action") || !registrationBySlot.has("shell.overlay")) throw new Error("sidebar or overlay slot registration missing");
 for (const registerFn of registrationBySlot.values()) {
 	const disposer = registerFn();
 	if (typeof disposer !== "function") throw new Error("slot registration must return a disposer");
 }
 const sidebarEntry = registeredEntries.find((entry) => entry.options.name === "sidebar.footer.action");
-if (sidebarEntry?.options.id !== "usage-stats" || typeof sidebarEntry.component !== "function") throw new Error("sidebar action must remain the sole client entry");
-console.log("apply ok, sidebar-only slot:", [...registrationBySlot.keys()].join(", "));
+if (sidebarEntry?.options.id !== "usage-stats" || typeof sidebarEntry.component !== "function") throw new Error("sidebar action registration missing");
+console.log("apply ok, sidebar and overlay slots:", [...registrationBySlot.keys()].join(", "));
 
 // Render the month heatmap with synthetic per-day data (calendar grid + colors).
 const { MonthHeatmap, DayDetail, buildMonthHeatmap } = exports_;

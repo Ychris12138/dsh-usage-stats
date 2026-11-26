@@ -48,6 +48,8 @@ Desktop 安装时将上面的 `--profile web` 改为 `--profile desktop`，并�
 
 安装后重启对应 profile 的 DSH Host；Desktop 需要退出并重新打开应用，然后刷新客户端。只刷新窗口不会加载新的服务端插件。侧边栏底部会出现“用量/余额”（Usage/Balance）入口。
 
+若 DS Bot 等宿主隐藏了原生侧边栏底部，可按 **Alt（macOS 为 Option）+ Shift + U** 切换备用悬浮入口；也可在用量面板底部勾选该入口。快捷键在文本输入框中不触发。偏好保存在当前客户端的本地存储中，可再次按快捷键或取消勾选还原。此功能依赖宿主提供并挂载 `shell.overlay` 槽位；不同宿主的遮挡与布局需实际验证。
+
 ### 插件市场 GUI 安装（DSH Community Market，Path A 标准来源）
 
 本仓库按 [DSH Community Market 目录 adapter 指南](https://github.com/anywhere-labs/deepseek-harness-desktop/blob/master/dsh-community-market/docs/catalog-adapter-guide.zh.md) 的**标准来源（Path A）** 接入，无需修改 Market 代码。内置两份目录数据：
@@ -290,7 +292,7 @@ OLLAMA_API_KEY: sk-ollama-your-key
 COMMANDCODE_API_KEY: user-your-command-code-key
 ```
 
-OpenCode Go 原生路由先读取当前 DSH 使用的 `OPENCODE_API_KEY`，缺少时才兼容旧 `OPENCODE_GO_API_KEY`，然后尝试旧版 OpenCode 的 `~/.local/share/opencode/auth.json`，最后才使用显式 `OPENCODE_GO_AUTH_COOKIE + OPENCODE_GO_WORKSPACE_ID` 兼容回退。显式 monitor/provider credential ref 始终优先，缺失时不借用本地文件或其他账户的凭据。先访问官方迁移后的 `/inference/go/v1/usage`，仅在 404/405 时用同一密钥尝试旧路径；401/403/429 不重试或更换密钥。Bearer usage endpoint 仍不是稳定的公开 API。
+OpenCode Go 原生路由先读取当前 DSH 使用的 `OPENCODE_API_KEY`，缺少时才兼容旧 `OPENCODE_GO_API_KEY`，然后尝试旧版 OpenCode 的 `~/.local/share/opencode/auth.json`，最后才使用显式 `OPENCODE_GO_AUTH_COOKIE + OPENCODE_GO_WORKSPACE_ID` 兼容回退。显式 monitor/provider credential ref 始终优先，缺失时不借用本地文件或其他账户的凭据。先访问[官方文档所列](https://opencode.ai/docs/console/go/)的 `/inference/go/v1/usage`，仅在 404/405 时用同一密钥尝试旧路径；401/403/429 不重试或更换密钥。403 提示检查订阅及访问权限，不显示上游原始错误信息。
 
 若账户卡片显示「未配置」，说明未找到凭据，还未发起额度查询。OpenCode V2 的凭据存储不再等同于旧 `auth.json`；已登录 OpenCode 不代表 DSH 已配置密钥。请在 DSH 的 OpenCode Go 模型设置中配置自己的 Console API Key，或在 DSH credentials 中配置上述引用。不要导出 OpenCode 的凭据数据库或把密钥、Cookie 贴到 issue；本插件不会扫描或解密 V2 凭据数据库。
 

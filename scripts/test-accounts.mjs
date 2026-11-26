@@ -176,6 +176,20 @@ for (const mode of ["balance", "subscription"]) {
 }
 
 {
+	const secret = "synthetic-opencode-key";
+	const service = createAccountService({
+		credentials: credentials({ OPENCODE_API_KEY: secret }),
+		getProviders: async () => [{ id: "opencode-go" }],
+		deps: { includeLegacyProviders: false, now: () => now,
+			fetch: async () => jsonResponse({ error: { message: `do not expose ${secret}` } }, 403) }
+	});
+	const account = await service.get("opencode-go", { force: true });
+	assert.equal(account.status, "unavailable");
+	assert.equal(account.reason, "opencode-go-access-denied");
+	assert.doesNotMatch(JSON.stringify(account), /synthetic-opencode-key/);
+}
+
+{
 	const secret = "opencode-go-native-test-key";
 	const service = createAccountService({
 		credentials: credentials({ OPENCODE_API_KEY: secret, OPENCODE_GO_API_KEY: "other-legacy-account" }),
@@ -2618,6 +2632,30 @@ console.log("snapshot -> " + snapshot.status);
 	assert.equal(account.displayName, "My Ollama");
 	assert.equal(account.windows.length, 2);
 	console.log("Configured Ollama provider appears with user id ok");
+}
+
+{
+	let currentTime = now;
+	let balanceCalls = 0;
+	const host = {
+		getState: async () => ({ status: "credential-stored" }),
+		getBalance: async () => { balanceCalls += 1; return { status: "failed" }; }
+	};
+	const service = createAccountService({
+		credentials: credentials({}),
+		getProviders: async () => [{ id: "deepseek-account", displayName: "DeepSeek Account" }],
+		config: validateAccountConfig(),
+		deps: { includeLegacyProviders: false, now: () => currentTime, deepseekAccount: () => host }
+	});
+	const skipped = await service.get("deepseek-account", { force: true });
+	assert.equal(skipped.reason, "host-client-metadata-missing");
+	assert.equal(skipped.lastAttemptAt, null, "missing metadata is not an upstream balance attempt");
+	assert.equal(balanceCalls, 0);
+	currentTime += 1000;
+	const failed = await service.get("deepseek-account", { force: true, clientMetadata: { version: "0.2.0", locale: "zh-CN", timezoneOffsetSeconds: 28800 } });
+	assert.equal(failed.status, "unavailable");
+	assert.equal(failed.lastAttemptAt, currentTime, "a failed host balance call records its actual attempt");
+	assert.equal(balanceCalls, 1);
 }
 
 {

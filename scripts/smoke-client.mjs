@@ -178,6 +178,36 @@ assert.deepEqual(rowHost.children.map((node) => node.style.flex), ["0 0 100%", "
 assert.equal(typeof restoreRowHost, "function");
 restoreRowHost();
 assert.equal(rowHost.style.flexWrap, "", "unmount cleanup must restore the previous inline flexWrap");
+restoreRowHost();
+assert.equal(rowHost.style.flexWrap, "", "cleanup must be idempotent");
+
+const overlappingHost = {
+	style: { flexWrap: "" },
+	get computedStyle() {
+		return { display: "flex", flexDirection: "row", flexWrap: this.style.flexWrap || "nowrap" };
+	}
+};
+const releaseFirst = enableFooterActionWrapping(overlappingHost);
+const releaseSecond = enableFooterActionWrapping(overlappingHost);
+assert.equal(typeof releaseSecond, "function", "a second local panel must share the existing lease");
+releaseFirst();
+releaseFirst();
+assert.equal(overlappingHost.style.flexWrap, "wrap", "disposing one panel must leave the other panel's wrap active");
+releaseSecond();
+assert.equal(overlappingHost.style.flexWrap, "", "the last panel releases the initial declaration");
+
+const foreignWriterHost = {
+	style: { flexWrap: "" },
+	computedStyle: { display: "flex", flexDirection: "row", flexWrap: "nowrap" }
+};
+const releaseForeignWriterHost = enableFooterActionWrapping(foreignWriterHost);
+foreignWriterHost.style.flexWrap = "wrap-reverse";
+releaseForeignWriterHost();
+assert.equal(foreignWriterHost.style.flexWrap, "wrap-reverse", "cleanup must preserve another participant's later declaration");
+foreignWriterHost.style.flexWrap = "";
+const releaseRemountedHost = enableFooterActionWrapping(foreignWriterHost);
+releaseRemountedHost();
+assert.equal(foreignWriterHost.style.flexWrap, "", "a released host must support a fresh mount");
 
 const wrappedHost = {
 	style: { flexDirection: "", flexWrap: "wrap" },

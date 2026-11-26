@@ -117,7 +117,9 @@ if (!focusRule.includes("2px solid var(--dsw-alias-brand-primary)")) throw new E
 // Hover uses the same translucent token as the Settings key; the opaque
 // `-hover-solid` fill is the shell's surface variant, not a row hover.
 const badgeHoverRule = /\.usg_badge:hover\{([^}]*)\}/.exec(source)?.[1] ?? "";
-if (!badgeHoverRule.includes("background:var(--dsw-alias-interactive-bg-hover)")) throw new Error("the sidebar action hover must match the Settings key hover token");
+if (!badgeHoverRule.includes("background:var(--dsw-alias-interactive-bg-hover)") || !badgeHoverRule.includes("background-clip:padding-box")) throw new Error("the sidebar action hover must retain the host token and inset");
+const badgeActiveRule = /\.usg_badge\[data-active\]\{([^}]*)\}/.exec(source)?.[1] ?? "";
+if (!badgeActiveRule.includes("background-clip:padding-box")) throw new Error("the active sidebar action must retain the inset");
 // Panel surface: the official elevated-menu recipe. The blur token is absent
 // before 0.1.7, where the declaration drops out and the opaque menu colour
 // remains — that fallback is why no version check is needed.

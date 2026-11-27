@@ -66,7 +66,7 @@ const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", 
 if (!source.includes("/api/usage-stats/account")) throw new Error("client must use the unified account endpoint");
 if (source.includes('fetchJson("/api/usage-stats/subscriptions")')) throw new Error("client must not bulk-fetch every subscription provider");
 if (/host\.style\.flexDirection\s*=\s*["']column["']/.test(source)) throw new Error("client must not change the shared footer host flex direction (#82)");
-if (!/host\.style\.flexWrap\s*=\s*["']wrap["']/.test(source)) throw new Error("client must wrap row-oriented footer actions (#21/#82)");
+if (/host\.style\.flexWrap\s*=/.test(source)) throw new Error("client must not change shared footer host wrapping (#176)");
 if (!source.includes('document.addEventListener("pointerdown"')) throw new Error("open panel must listen for outside pointerdown");
 if (!source.includes('event.key === "Escape"')) throw new Error("open panel must dismiss on Escape");
 if (!source.includes("ref: panelRef")) throw new Error("portaled panel must expose a ref for outside-click detection");
@@ -101,24 +101,25 @@ if (!dayTokensRule.includes("flex:none") || !dayTokensRule.includes("font-varian
 if (/(?:^|;)width:84px(?:;|$)/.test(dayTokensRule)) throw new Error("Last 14 days token column must use min-width rather than a fixed width in narrow layouts");
 const dayDateRule = /\.usg_dayDate\{([^}]*)\}/.exec(source)?.[1] ?? "";
 if (!dayDateRule.includes("flex:0 1 104px") || !dayDateRule.includes("min-width:0") || !dayDateRule.includes("overflow:hidden")) throw new Error("the date column must shrink before the aligned token column can overflow a narrow panel");
-// The sidebar action sits directly above the shell's Settings key and keeps that
-// key's geometry: a 42px row with 10/8px side padding and the same `4px -2px`
-// row margin, so the two buttons line up on both axes (#108). The collapsed
-// action keeps the 36px rail circle.
+// The expanded action preserves the existing Settings row box (#108) while
+// using the community guidance for its inner gap and inset. The collapsed
+// action stays 36px with a rounded-square shape. Layout is verified separately.
 const badgeRule = /\.usg_badge\{([^}]*)\}/.exec(source)?.[1] ?? "";
 const layerRule = /\.usg_layer\{([^}]*)\}/.exec(source)?.[1] ?? "";
 const railBadgeRule = /\.usg_layer\.usg_rail \.usg_badge\{([^}]*)\}/.exec(source)?.[1] ?? "";
-if (!badgeRule.includes("height:42px") || !badgeRule.includes("padding:0 10px 0 8px")) throw new Error("the expanded sidebar action must match the Settings key geometry (42px, 10/8px padding)");
+if (!badgeRule.includes("height:42px") || !badgeRule.includes("padding:0 calc(var(--dsh-sidebar-row-padding,12px) - var(--dsh-sidebar-paint-inset,3px))") || !badgeRule.includes("border-inline:var(--dsh-sidebar-paint-inset,3px) solid transparent") || !badgeRule.includes("background-clip:padding-box") || !badgeRule.includes("gap:var(--dsh-sidebar-label-gap,6px)")) throw new Error("the expanded action must keep its 42px height and use the community inset and gap");
 if (!layerRule.includes("width:calc(100% + 4px)") || !layerRule.includes("margin:4px -2px")) throw new Error("the sidebar action row must mirror the Settings row box (width calc(100% + 4px) with margin 4px -2px), never a one-sided top margin");
 if (!badgeRule.includes("box-sizing:border-box")) throw new Error("the sidebar action must size its padding inside the row box, like the Settings key");
-if (!railBadgeRule.includes("height:36px")) throw new Error("the collapsed sidebar action must match the Settings rail key (36px)");
+if (!railBadgeRule.includes("height:36px") || !railBadgeRule.includes("border-radius:var(--dsw-radius-md,12px)") || !railBadgeRule.includes("border-inline:0")) throw new Error("the collapsed sidebar action must remain 36px with rounded-square geometry");
 // Keyboard focus must be visible on the action and on the panel's controls.
 const focusRule = new RegExp("\\.usg_badge:focus-visible[^{]*\\{([^}]*)\\}").exec(source)?.[1] ?? "";
 if (!focusRule.includes("2px solid var(--dsw-alias-brand-primary)")) throw new Error("the sidebar action needs the host brand focus outline");
 // Hover uses the same translucent token as the Settings key; the opaque
 // `-hover-solid` fill is the shell's surface variant, not a row hover.
 const badgeHoverRule = /\.usg_badge:hover\{([^}]*)\}/.exec(source)?.[1] ?? "";
-if (!badgeHoverRule.includes("background:var(--dsw-alias-interactive-bg-hover)")) throw new Error("the sidebar action hover must match the Settings key hover token");
+if (!badgeHoverRule.includes("background:var(--dsw-alias-interactive-bg-hover)") || !badgeHoverRule.includes("background-clip:padding-box")) throw new Error("the sidebar action hover must retain the host token and inset");
+const badgeActiveRule = /\.usg_badge\[data-active\]\{([^}]*)\}/.exec(source)?.[1] ?? "";
+if (!badgeActiveRule.includes("background-clip:padding-box")) throw new Error("the active sidebar action must retain the inset");
 // Panel surface: the official elevated-menu recipe. The blur token is absent
 // before 0.1.7, where the declaration drops out and the opaque menu colour
 // remains — that fallback is why no version check is needed.
@@ -161,70 +162,40 @@ const exports_ = captured.factory((spec) => {
 
 if (typeof exports_.apply !== "function") throw new Error("missing apply export");
 
-const { enableFooterActionWrapping } = exports_;
-if (typeof enableFooterActionWrapping !== "function") throw new Error("footer action wrapping policy must be testable");
+const { measureFooterLane } = exports_;
+assert.equal(typeof measureFooterLane, "function");
 const originalGetComputedStyle = window.getComputedStyle;
 window.getComputedStyle = (node) => node.computedStyle;
-const fullWidthSibling = () => ({ style: { flex: "0 0 100%" } });
-const rowHost = {
-	style: { flexDirection: "", flexWrap: "" },
-	computedStyle: { display: "flex", flexDirection: "row", flexWrap: "nowrap" },
-	children: [fullWidthSibling(), fullWidthSibling()]
-};
-const restoreRowHost = enableFooterActionWrapping(rowHost);
-assert.equal(rowHost.style.flexWrap, "wrap", "row + nowrap must wrap full-width footer actions onto separate lines");
-assert.equal(rowHost.style.flexDirection, "", "the shared host row direction must remain untouched");
-assert.deepEqual(rowHost.children.map((node) => node.style.flex), ["0 0 100%", "0 0 100%"], "sibling full-width flex semantics must remain untouched");
-assert.equal(typeof restoreRowHost, "function");
-restoreRowHost();
-assert.equal(rowHost.style.flexWrap, "", "unmount cleanup must restore the previous inline flexWrap");
-restoreRowHost();
-assert.equal(rowHost.style.flexWrap, "", "cleanup must be idempotent");
-
-const overlappingHost = {
-	style: { flexWrap: "" },
-	get computedStyle() {
-		return { display: "flex", flexDirection: "row", flexWrap: this.style.flexWrap || "nowrap" };
-	}
-};
-const releaseFirst = enableFooterActionWrapping(overlappingHost);
-const releaseSecond = enableFooterActionWrapping(overlappingHost);
-assert.equal(typeof releaseSecond, "function", "a second local panel must share the existing lease");
-releaseFirst();
-releaseFirst();
-assert.equal(overlappingHost.style.flexWrap, "wrap", "disposing one panel must leave the other panel's wrap active");
-releaseSecond();
-assert.equal(overlappingHost.style.flexWrap, "", "the last panel releases the initial declaration");
-
-const foreignWriterHost = {
-	style: { flexWrap: "" },
-	computedStyle: { display: "flex", flexDirection: "row", flexWrap: "nowrap" }
-};
-const releaseForeignWriterHost = enableFooterActionWrapping(foreignWriterHost);
-foreignWriterHost.style.flexWrap = "wrap-reverse";
-releaseForeignWriterHost();
-assert.equal(foreignWriterHost.style.flexWrap, "wrap-reverse", "cleanup must preserve another participant's later declaration");
-foreignWriterHost.style.flexWrap = "";
-const releaseRemountedHost = enableFooterActionWrapping(foreignWriterHost);
-releaseRemountedHost();
-assert.equal(foreignWriterHost.style.flexWrap, "", "a released host must support a fresh mount");
-
-const wrappedHost = {
-	style: { flexDirection: "", flexWrap: "wrap" },
-	computedStyle: { display: "flex", flexDirection: "row", flexWrap: "wrap" }
-};
-assert.equal(enableFooterActionWrapping(wrappedHost), undefined, "an already wrapped host must not be modified");
-assert.equal(wrappedHost.style.flexWrap, "wrap");
-
-const columnHost = {
-	style: { flexDirection: "column", flexWrap: "nowrap" },
-	computedStyle: { display: "flex", flexDirection: "column", flexWrap: "nowrap" }
-};
-assert.equal(enableFooterActionWrapping(columnHost), undefined, "a column host must be left untouched");
-assert.equal(columnHost.style.flexDirection, "column");
-assert.equal(columnHost.style.flexWrap, "nowrap");
+function node(style, children = [], visible = true) {
+  const result = { computedStyle: { display: "block", visibility: "visible", position: "static", ...style }, children,
+    getClientRects: () => visible ? [{}] : [], contains(target) { return this === target || this.children.some((child) => child.contains(target)); } };
+  for (const child of children) child.parentElement = result;
+  return result;
+}
+const own = node({});
+const sibling = node({});
+const slotA = node({ display: "contents" }, [own]);
+const slotB = node({ display: "contents" }, [sibling]);
+const rowHost = node({ display: "flex", flexDirection: "row", flexWrap: "nowrap" }, [slotA, slotB]);
+rowHost.clientWidth = 244;
+assert.deepEqual(measureFooterLane(own), { row: rowHost, form: "label", shared: true });
+rowHost.clientWidth = 243;
+assert.equal(measureFooterLane(own).form, "icon", "two labels need 244px");
+const third = node({});
+third.parentElement = rowHost;
+rowHost.children.push(third);
+rowHost.clientWidth = 900;
+assert.equal(measureFooterLane(own).form, "icon", "three entries use icon form even on a wide lane");
+third.computedStyle.display = "none";
+assert.equal(measureFooterLane(own).form, "label", "hidden entries do not consume capacity");
+rowHost.computedStyle.flexWrap = "wrap";
+assert.equal(measureFooterLane(own).shared, false, "an already wrapped lane keeps full-width entries");
+rowHost.computedStyle.flexWrap = "nowrap";
+rowHost.computedStyle.flexDirection = "column";
+assert.equal(measureFooterLane(own).form, "label", "vertical lanes retain labels");
+assert.equal(rowHost.style, undefined, "measurement must never mutate host styles");
 window.getComputedStyle = originalGetComputedStyle;
-console.log("shared footer action row/wrap policy ok");
+console.log("shared footer lane capacity policy ok");
 
 const {
 	ORCAROUTER_ADD_SENTINEL,
@@ -323,16 +294,16 @@ const ctx = {
 };
 exports_.apply(ctx);
 assert.deepEqual(optionalFollowDependencies, [["sessions", "modelDirectories"]], "only optional follow dependencies may be requested");
-if (registrations.length !== 1) throw new Error(`expected only the sidebar slot injection, got ${registrations.length}`);
+if (registrations.length !== 2) throw new Error(`expected sidebar and optional overlay slot injections, got ${registrations.length}`);
 const registrationBySlot = new Map(registrations);
-if (!registrationBySlot.has("sidebar.footer.action")) throw new Error("sidebar footer slot registration missing");
+if (!registrationBySlot.has("sidebar.footer.action") || !registrationBySlot.has("shell.overlay")) throw new Error("sidebar or overlay slot registration missing");
 for (const registerFn of registrationBySlot.values()) {
 	const disposer = registerFn();
 	if (typeof disposer !== "function") throw new Error("slot registration must return a disposer");
 }
 const sidebarEntry = registeredEntries.find((entry) => entry.options.name === "sidebar.footer.action");
-if (sidebarEntry?.options.id !== "usage-stats" || typeof sidebarEntry.component !== "function") throw new Error("sidebar action must remain the sole client entry");
-console.log("apply ok, sidebar-only slot:", [...registrationBySlot.keys()].join(", "));
+if (sidebarEntry?.options.id !== "usage-stats" || typeof sidebarEntry.component !== "function") throw new Error("sidebar action registration missing");
+console.log("apply ok, sidebar and overlay slots:", [...registrationBySlot.keys()].join(", "));
 
 // Render the month heatmap with synthetic per-day data (calendar grid + colors).
 const { MonthHeatmap, DayDetail, buildMonthHeatmap } = exports_;
@@ -1142,4 +1113,103 @@ await act(async () => { failedRenderer.unmount(); });
 globalThis.fetch = originalFetch;
 
 console.log("sidebar-only panel, persistence, and OrcaRouter setup policy ok");
+// Exercise the registered entries together rather than checking slot names
+// alone. This models lifecycle and input events, not actual host layout/auth.
+const entryStorageKey = "@ychris12138/dsh-usage-stats:floating-entry:v1";
+const previousAddListener = window.addEventListener;
+const previousRemoveListener = window.removeEventListener;
+const previousEntryPreference = storedValues.get(entryStorageKey);
+const entryKeyListeners = new Set();
+window.addEventListener = (type, listener) => { if (type === "keydown") entryKeyListeners.add(listener); };
+window.removeEventListener = (type, listener) => { if (type === "keydown") entryKeyListeners.delete(listener); };
+globalThis.fetch = async (path) => responseFixture(String(path).includes("/providers")
+	? { ok: true, providers: providerFixture() }
+	: String(path).includes("/account") ? { ok: true, account: accountFixtureFor(path) }
+	: String(path).includes("/integrations/") ? { ok: true, integration: { available: false } }
+	: usageFixture);
+const badgeCountOf = (renderer) => renderer.root.findAllByProps({ "data-usage-stats-badge": true }).length;
+function entryHarness(hasOverlay) {
+	const module = captured.factory((spec) => {
+		if (spec === "react") return react;
+		if (spec === "react/jsx-runtime") return jsxRuntime;
+		if (spec === "react-dom") return { createPortal: (node) => node };
+		if (spec === "@deepseek-ai/dsh-client-ui-primitives") return primitives;
+		throw new Error(`unexpected require: ${spec}`);
+	});
+	const entries = new Map();
+	const cleanups = [];
+	module.apply({
+		effect(fn) { const cleanup = fn(); if (typeof cleanup === "function") cleanups.push(cleanup); },
+		locale: { register: () => () => {} },
+		inject: () => {},
+		slots: {
+			inject(name, register) { if (name !== "shell.overlay" || hasOverlay) register(); },
+			register(options, component) { entries.set(options.name, component); return () => {}; }
+		}
+	});
+	return {
+		view(overlay = hasOverlay) { return react.createElement(react.Fragment, null,
+			react.createElement(entries.get("sidebar.footer.action"), { key: "sidebar", wide: false, t: panelTranslate }),
+			overlay && hasOverlay && react.createElement(entries.get("shell.overlay"), { key: "overlay", t: panelTranslate })); },
+		dispose() { for (const cleanup of cleanups.reverse()) cleanup(); }
+	};
+}
+function entryKey(overrides = {}) {
+	const event = { code: "KeyU", key: "u", altKey: true, shiftKey: true, target: { tagName: "BODY" },
+		defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...overrides };
+	act(() => { for (const listener of entryKeyListeners) listener(event); });
+	return event;
+}
+let entryRenderer;
+let harness;
+try {
+	storedValues.delete(entryStorageKey);
+	harness = entryHarness(true);
+	await act(async () => { entryRenderer = TestRenderer.create(harness.view()); await flushPanelEffects(); });
+	assert.equal(badgeCountOf(entryRenderer), 1, "default-off overlay must not duplicate the sidebar badge");
+	assert.equal(entryRenderer.root.findAllByProps({ className: "usg_layer usg_rail usg_floating" }).length, 0);
+	for (const event of [{ repeat: true }, { defaultPrevented: true }, { ctrlKey: true }, { metaKey: true }, { altKey: false }, { code: "KeyA", key: "a" },
+		{ target: { tagName: "INPUT" } }, { target: { tagName: "TEXTAREA" } }, { target: { tagName: "SELECT" } }, { target: { isContentEditable: true } }]) {
+		entryKey(event);
+		assert.equal(storedValues.has(entryStorageKey), false, "typing, modifiers, repeats and handled keys must not change the entry preference");
+	}
+	await act(async () => { entryRenderer.root.findByProps({ "data-usage-stats-badge": true }).props.onClick(); await flushPanelEffects(); });
+	const preference = entryRenderer.root.findAllByType("input").find((input) => input.props.type === "checkbox" && input.parent.props.className === "usg_footerNote");
+	assert.ok(preference, "an overlay-capable host must expose the explicit panel preference");
+	await act(async () => { preference.props.onChange({ target: { checked: true } }); await flushPanelEffects(); });
+	assert.equal(storedValues.get(entryStorageKey), "1");
+	assert.equal(badgeCountOf(entryRenderer), 1, "enabling the preference must replace, not duplicate, the entry");
+	assert.equal(entryRenderer.root.findAllByProps({ className: "usg_layer usg_rail usg_floating" }).length, 1);
+	assert.equal(entryKey().defaultPrevented, true);
+	assert.equal(storedValues.get(entryStorageKey), "0", "shortcut must return to the sidebar");
+	entryKey();
+	await act(async () => { entryRenderer.update(harness.view(false)); await flushPanelEffects(); });
+	assert.equal(badgeCountOf(entryRenderer), 1, "removing the overlay slot must restore the sidebar even with a saved floating preference");
+	assert.equal(entryKey().defaultPrevented, false, "an absent overlay must not consume the shortcut");
+	await act(async () => { entryRenderer.update(harness.view()); await flushPanelEffects(); });
+	assert.equal(entryRenderer.root.findAllByProps({ className: "usg_layer usg_rail usg_floating" }).length, 1, "remount must recover the saved floating preference");
+	await act(async () => entryRenderer.unmount()); entryRenderer = null;
+	harness.dispose(); harness = null;
+	assert.equal(entryKeyListeners.size, 0, "plugin disposal must release the shortcut");
+	// A fresh module reads storage; a host without the optional slot must still
+	// offer its sidebar entry and must not consume the shortcut.
+	harness = entryHarness(false);
+	await act(async () => { entryRenderer = TestRenderer.create(harness.view()); await flushPanelEffects(); });
+	assert.equal(badgeCountOf(entryRenderer), 1);
+	assert.equal(entryKey().defaultPrevented, false);
+	await act(async () => entryRenderer.unmount()); entryRenderer = null;
+	harness.dispose(); harness = entryHarness(true);
+	await act(async () => { entryRenderer = TestRenderer.create(harness.view()); await flushPanelEffects(); });
+	assert.equal(entryRenderer.root.findAllByProps({ className: "usg_layer usg_rail usg_floating" }).length, 1, "fresh module must restore the persisted preference");
+} finally {
+	if (entryRenderer) await act(async () => entryRenderer.unmount());
+	harness?.dispose();
+	window.addEventListener = previousAddListener;
+	window.removeEventListener = previousRemoveListener;
+	globalThis.fetch = originalFetch;
+	if (previousEntryPreference === undefined) storedValues.delete(entryStorageKey);
+	else storedValues.set(entryStorageKey, previousEntryPreference);
+}
+console.log("floating entry lifecycle, preference, shortcut and missing-slot fallback ok (simulated host)");
+
 console.log("SMOKE TEST PASSED");

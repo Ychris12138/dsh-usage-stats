@@ -1,7 +1,7 @@
 {
   "name": "@ychris12138/dsh-usage-stats",
   "description": "Token usage, provider accounts, session cost estimates, budgets, and exports for the dsh web GUI",
-  "version": "0.3.8",
+  "version": "0.3.9",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/Ychris12138/dsh-usage-stats.git"
@@ -45,7 +45,8 @@
     "docs/nested-seed-marker-fix.md",
     "docs/declarative-endpoint-diagnostics.md",
     "docs/qianwen-token-plan-integration.md",
-    "docs/token-count-display.md"
+    "docs/token-count-display.md",
+    "docs/release-notes-v0.3.9.md"
   ],
   "type": "module",
   "main": "lib/index.js",

@@ -6,7 +6,7 @@
 
 Usage Stats 优先使用当前 DSH 配置的 `OPENCODE_API_KEY`，读取 `https://opencode.ai/inference/go/v1/usage`。只有 404/405 才用同一密钥尝试旧 `/zen/go/v1/usage`；凭据被拒绝或限流时不轮换账户、不切换 Cookie。
 
-官方当前源码保留了旧 usage 路径的[迁移代理](https://github.com/anomalyco/opencode/blob/133b1ebfafc3ae040b9b23ff3fcad49e273c9cf9/packages/console/app/src/lib/inference-proxy.ts)，但并未承诺它是稳定的公开 API。没有真实 Go 账户时，只能确认代码路径和模拟响应，不能声称余额已经对账通过。
+[官方 Go 文档](https://opencode.ai/docs/console/go/)已公开 usage 接口、三个窗口及其响应格式。官方区分密钥无效（401）与密钥无 Go 权限（403）；插件对 403 提示检查订阅和访问权限，不回显原始错误。官方当前源码保留了旧 usage 路径的[迁移代理](https://github.com/anomalyco/opencode/blob/133b1ebfafc3ae040b9b23ff3fcad49e273c9cf9/packages/console/app/src/lib/inference-proxy.ts)。没有真实 Go 账户时，不能声称额度已对账通过。
 
 如果显示“未配置”，应先在 DSH 配置自己的 Console API Key。仅在 OpenCode 客户端登录并不等于 DSH 有这把 Key；不要导出凭据数据库或在 issue 贴出 Key/Cookie。
 

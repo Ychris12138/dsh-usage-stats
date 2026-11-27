@@ -135,7 +135,10 @@ const noLocalAuth = {
 			assert.equal(calls[1], "https://opencode.ai/zen/go/v1/usage");
 			assert.equal(account.status, "ok");
 			assert.equal(account.windows[0].usedPercent, 0.5, "API percentages below 1 are not ratios");
-		} else assert.equal(account.status, status === 429 ? "rate-limited" : status === 500 ? "unavailable" : "unauthorized");
+		} else {
+			assert.equal(account.status, status === 429 ? "rate-limited" : status === 500 || status === 403 ? "unavailable" : "unauthorized");
+			if (status === 403) assert.equal(account.reason, "opencode-go-access-denied");
+		}
 	}
 	console.log("OpenCode migrated endpoint compatibility, current key precedence and no authentication retry ok");
 }

@@ -1,20 +1,18 @@
-# v0.3.8 release checklist
+# v0.3.9 发布检查
 
-## Preparation
+## 候选与范围
 
-- [x] Include #159, #163 and the #161 display work with independent unit preference.
-- [x] Preserve #133 as a separate draft, and describe #74 / #140 / #162 acceptance limits.
-- [ ] Validate final source with static checks and all 16 test suites.
-- [ ] Freeze clean source and compare every packed file to the commit.
-- [ ] Verify installation in an isolated DSH profile and save the results.
-- [ ] Prepare draft GitHub Release and assets without a public tag.
+- [x] 候选整合 #166（含 #167）、#169、#170 / #171、#172、#175 和 #177。
+- [ ] 在最终提交上重新运行完整检查与测试，核对 GitHub Actions。
+- [ ] 在最终提交上重新打包，逐文件核对并冻结安装包及哈希；此前提交 `06808d9` 的包和 CI 不再代表当前候选。
+- [ ] 在隔离 profile 中验证安装和升级；在用户允许使用电脑后检查 Desktop 实际界面、授权和账户状态。
+- [ ] 核对 #171 的真实 Web 账户结果，并验证 #175 的 DS Bot 版本来源与账号状态；只记录版本、profile、版本来源和状态，不记录凭据或余额金额。
+- [ ] 核查 DS Bot 的备用入口、快捷键、偏好保存及 DeepSeek Account 失败重试（#174）；验证一个、两个、三个插件入口在宽/窄侧栏中的行为、动态增删及卸载顺序（#176）。
+- [ ] 跟踪 #162 原环境复核、OpenCode Go 和方舟真实订阅对账（#140 / #74）、千问其他套餐和到期状态。
+- [ ] #168 的通知对象仍待澄清；#133 仍依赖上游响应级事件，二者未作为完成的功能纳入本版。
 
-## npm and closeout
+## 发布顺序
 
-- [ ] Maintainer publishes the exact frozen tarball.
-- [ ] Verify official npm identity, latest, integrity and downloaded bytes.
-- [ ] Fast-forward main to the frozen source and verify the public market catalog.
-- [ ] Tag the exact source and publish the prepared GitHub Release.
-- [ ] Verify real provider accounts separately; retain open issues until their acceptance criteria are met.
-
-The package checklist is frozen with the source. Record subsequent results in the external release manifest.
+1. 保留线上市场和主线安装指引在当前稳定版本。候选分支的 catalog 不得在对应 npm 包可下载前进入 `main`。
+2. 全部必要验证完成后，由维护者发布最终冻结的 npm tarball；从公开 registry 核验精确版本、完整性及下载包。
+3. 只有 npm 确认可用且主线没有需要重新冻结的变化时，才推进主线和市场目录；验证市场返回同一精确版本，再完成 tag 和 GitHub Release。

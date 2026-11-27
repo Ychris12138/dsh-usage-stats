@@ -1113,4 +1113,103 @@ await act(async () => { failedRenderer.unmount(); });
 globalThis.fetch = originalFetch;
 
 console.log("sidebar-only panel, persistence, and OrcaRouter setup policy ok");
+// Exercise the registered entries together rather than checking slot names
+// alone. This models lifecycle and input events, not actual host layout/auth.
+const entryStorageKey = "@ychris12138/dsh-usage-stats:floating-entry:v1";
+const previousAddListener = window.addEventListener;
+const previousRemoveListener = window.removeEventListener;
+const previousEntryPreference = storedValues.get(entryStorageKey);
+const entryKeyListeners = new Set();
+window.addEventListener = (type, listener) => { if (type === "keydown") entryKeyListeners.add(listener); };
+window.removeEventListener = (type, listener) => { if (type === "keydown") entryKeyListeners.delete(listener); };
+globalThis.fetch = async (path) => responseFixture(String(path).includes("/providers")
+	? { ok: true, providers: providerFixture() }
+	: String(path).includes("/account") ? { ok: true, account: accountFixtureFor(path) }
+	: String(path).includes("/integrations/") ? { ok: true, integration: { available: false } }
+	: usageFixture);
+const badgeCountOf = (renderer) => renderer.root.findAllByProps({ "data-usage-stats-badge": true }).length;
+function entryHarness(hasOverlay) {
+	const module = captured.factory((spec) => {
+		if (spec === "react") return react;
+		if (spec === "react/jsx-runtime") return jsxRuntime;
+		if (spec === "react-dom") return { createPortal: (node) => node };
+		if (spec === "@deepseek-ai/dsh-client-ui-primitives") return primitives;
+		throw new Error(`unexpected require: ${spec}`);
+	});
+	const entries = new Map();
+	const cleanups = [];
+	module.apply({
+		effect(fn) { const cleanup = fn(); if (typeof cleanup === "function") cleanups.push(cleanup); },
+		locale: { register: () => () => {} },
+		inject: () => {},
+		slots: {
+			inject(name, register) { if (name !== "shell.overlay" || hasOverlay) register(); },
+			register(options, component) { entries.set(options.name, component); return () => {}; }
+		}
+	});
+	return {
+		view(overlay = hasOverlay) { return react.createElement(react.Fragment, null,
+			react.createElement(entries.get("sidebar.footer.action"), { key: "sidebar", wide: false, t: panelTranslate }),
+			overlay && hasOverlay && react.createElement(entries.get("shell.overlay"), { key: "overlay", t: panelTranslate })); },
+		dispose() { for (const cleanup of cleanups.reverse()) cleanup(); }
+	};
+}
+function entryKey(overrides = {}) {
+	const event = { code: "KeyU", key: "u", altKey: true, shiftKey: true, target: { tagName: "BODY" },
+		defaultPrevented: false, preventDefault() { this.defaultPrevented = true; }, ...overrides };
+	act(() => { for (const listener of entryKeyListeners) listener(event); });
+	return event;
+}
+let entryRenderer;
+let harness;
+try {
+	storedValues.delete(entryStorageKey);
+	harness = entryHarness(true);
+	await act(async () => { entryRenderer = TestRenderer.create(harness.view()); await flushPanelEffects(); });
+	assert.equal(badgeCountOf(entryRenderer), 1, "default-off overlay must not duplicate the sidebar badge");
+	assert.equal(entryRenderer.root.findAllByProps({ className: "usg_layer usg_rail usg_floating" }).length, 0);
+	for (const event of [{ repeat: true }, { defaultPrevented: true }, { ctrlKey: true }, { metaKey: true }, { altKey: false }, { code: "KeyA", key: "a" },
+		{ target: { tagName: "INPUT" } }, { target: { tagName: "TEXTAREA" } }, { target: { tagName: "SELECT" } }, { target: { isContentEditable: true } }]) {
+		entryKey(event);
+		assert.equal(storedValues.has(entryStorageKey), false, "typing, modifiers, repeats and handled keys must not change the entry preference");
+	}
+	await act(async () => { entryRenderer.root.findByProps({ "data-usage-stats-badge": true }).props.onClick(); await flushPanelEffects(); });
+	const preference = entryRenderer.root.findAllByType("input").find((input) => input.props.type === "checkbox" && input.parent.props.className === "usg_footerNote");
+	assert.ok(preference, "an overlay-capable host must expose the explicit panel preference");
+	await act(async () => { preference.props.onChange({ target: { checked: true } }); await flushPanelEffects(); });
+	assert.equal(storedValues.get(entryStorageKey), "1");
+	assert.equal(badgeCountOf(entryRenderer), 1, "enabling the preference must replace, not duplicate, the entry");
+	assert.equal(entryRenderer.root.findAllByProps({ className: "usg_layer usg_rail usg_floating" }).length, 1);
+	assert.equal(entryKey().defaultPrevented, true);
+	assert.equal(storedValues.get(entryStorageKey), "0", "shortcut must return to the sidebar");
+	entryKey();
+	await act(async () => { entryRenderer.update(harness.view(false)); await flushPanelEffects(); });
+	assert.equal(badgeCountOf(entryRenderer), 1, "removing the overlay slot must restore the sidebar even with a saved floating preference");
+	assert.equal(entryKey().defaultPrevented, false, "an absent overlay must not consume the shortcut");
+	await act(async () => { entryRenderer.update(harness.view()); await flushPanelEffects(); });
+	assert.equal(entryRenderer.root.findAllByProps({ className: "usg_layer usg_rail usg_floating" }).length, 1, "remount must recover the saved floating preference");
+	await act(async () => entryRenderer.unmount()); entryRenderer = null;
+	harness.dispose(); harness = null;
+	assert.equal(entryKeyListeners.size, 0, "plugin disposal must release the shortcut");
+	// A fresh module reads storage; a host without the optional slot must still
+	// offer its sidebar entry and must not consume the shortcut.
+	harness = entryHarness(false);
+	await act(async () => { entryRenderer = TestRenderer.create(harness.view()); await flushPanelEffects(); });
+	assert.equal(badgeCountOf(entryRenderer), 1);
+	assert.equal(entryKey().defaultPrevented, false);
+	await act(async () => entryRenderer.unmount()); entryRenderer = null;
+	harness.dispose(); harness = entryHarness(true);
+	await act(async () => { entryRenderer = TestRenderer.create(harness.view()); await flushPanelEffects(); });
+	assert.equal(entryRenderer.root.findAllByProps({ className: "usg_layer usg_rail usg_floating" }).length, 1, "fresh module must restore the persisted preference");
+} finally {
+	if (entryRenderer) await act(async () => entryRenderer.unmount());
+	harness?.dispose();
+	window.addEventListener = previousAddListener;
+	window.removeEventListener = previousRemoveListener;
+	globalThis.fetch = originalFetch;
+	if (previousEntryPreference === undefined) storedValues.delete(entryStorageKey);
+	else storedValues.set(entryStorageKey, previousEntryPreference);
+}
+console.log("floating entry lifecycle, preference, shortcut and missing-slot fallback ok (simulated host)");
+
 console.log("SMOKE TEST PASSED");
